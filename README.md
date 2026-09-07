@@ -48,7 +48,7 @@ One tarball:
 
 | path under `usr/share/spin-stack/` | |
 |---|---|
-| `bin/qemu-system-x86_64` | KVM only — it refuses to emulate, on purpose |
+| `bin/qemu-system-x86_64` | static; KVM only — it refuses to emulate, on purpose |
 | `bin/qemu-system-x86_64-tcg` | for CI, which has no `/dev/kvm` |
 | `bin/qemu-img` | |
 | `qemu/{bios.bin,bios-256k.bin,pvh.bin,kvmvapic.bin,efi-virtio.rom}` | |
@@ -145,9 +145,23 @@ visible from outside:
 
 ### QEMU
 
-One build. Both the KVM binary and a TCG one for runners with no `/dev/kvm`: a host serving
-tenants must fail at start-up rather than run a tenant's VM at a tenth of the speed, and the
-build asserts both halves, since neither is visible in a file listing.
+One build, **statically linked**, against musl on Alpine.
+
+A dynamically linked QEMU is not one artefact — it is an artefact plus the libraries it was
+compiled against. Extracted onto a host with different ones it dies at start-up
+(`liburing.so.2: cannot open shared object file`), so a release had to ship either a
+container to run it in or the loader and the libraries beside it, and a consumer had to know
+which. Static ends the question: the binary runs wherever the kernel does. musl rather than
+glibc because glibc links statically but does it badly — anything resolving a user or host
+name still wants to `dlopen` an NSS module, and a static binary cannot.
+
+Measured before adopting it, same host and machine line: process start to a QMP `quit`,
+**44 ms glibc against 43 ms musl** over five runs. Not measured: a long-running guest under
+load, where musl's allocator and its smaller default thread stack differ from glibc's.
+
+Both the KVM binary and a TCG one for runners with no `/dev/kvm`: a host serving tenants
+must fail at start-up rather than run a tenant's VM at a tenth of the speed, and the build
+asserts both halves, since neither is visible in a file listing.
 
 `--enable-tools` ships `qemu-img`, which is not a convenience: a container's writable layer
 is a qcow2 overlay created by running it, so a release with the emulator and without it
@@ -250,9 +264,11 @@ three checksums in the release notes.
 
 Built and verified on 2026-09-07:
 
-- **QEMU 11.1.1** builds, both binaries, and the build's own assertions pass: virtio-blk,
-  virtio-net, vhost-vsock and virtconsole present, no e1000/rtl8139/vmxnet3, q35 and no
-  pc-i440fx, `qemu-img` present, and the accelerator split.
+- **QEMU 11.1.1** builds, all three binaries static (`NEEDED=0`, no `INTERP`), and the
+  build's own assertions pass: virtio-blk, virtio-net, vhost-vsock and virtconsole present,
+  no e1000/rtl8139/vmxnet3, q35 and no pc-i440fx, `qemu-img` opening qcow2/vmdk/raw, io_uring
+  and native aio attaching, and the accelerator split. The extracted binaries run on this
+  host, which is a glibc system that shares nothing with the one they were built on.
 - **The kernel** builds, the PVH notes survive the strip, and its config comes out
   unchanged after `olddefconfig`.
 - **base.qcow2** builds (~860 MB). `SOURCE_DATE_EPOCH` normalizes timestamps, but the

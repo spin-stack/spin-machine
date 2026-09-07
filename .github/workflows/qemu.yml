@@ -80,9 +80,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The runtime image, which is how a consumer on a bare runner gets a QEMU that runs:
-      # the extracted binaries link against the build image's libraries and die with
-      # `liburing.so.2: cannot open shared object file` anywhere else.
+      # The runtime image: a distribution channel for consumers that pull images rather
+      # than tarballs. The binaries are static, so the image around them carries nothing
+      # they need — which is the difference from when this was the only way to run them.
       #
       # Two tags: the QEMU version, which is what everything pins, and the commit, which is
       # what makes a specific build reachable when the version tag has moved because a flag

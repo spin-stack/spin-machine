@@ -91,6 +91,13 @@ Comments here are longer than usual, on purpose. The rule is what makes them wor
   re-check.
 - **Do not name the projects that consume this.** See above.
 
+## Artefacts leave this machine
+
+QEMU is linked statically, and anything added beside it should be too. An artefact that
+needs the host to have the right libraries is not one artefact, and the failure it produces
+arrives on somebody else's machine, at start-up, naming a library rather than a decision
+made here.
+
 ## Verifying
 
 - **Assert what came out, not what went in.** A build that produced an empty filesystem

@@ -31,10 +31,11 @@ tasks:
   verify:
     desc: Assert the extracted QEMU tree carries what every consumer needs.
     cmds:
-      # Files only. The extracted binaries link against the build image's libraries and do
-      # not run on a bare runner (`liburing.so.2: cannot open shared object file`), which is
-      # what `task qemu:image` exists for; the behavioural assertions are inside the build
-      # itself, in qemu/Dockerfile, where the binary is guaranteed runnable.
+      # Files, and then the binaries themselves — which is worth doing here and was not
+      # possible before they were static: an extracted dynamic binary linked against the
+      # build image's libraries died on a bare host, so this task could only stat files and
+      # leave the behaviour to assertions inside the build. Now the tree that is extracted
+      # is the tree that runs.
       - |
         set -euo pipefail
         for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
@@ -51,13 +52,29 @@ tasks:
           test -f {{.OUTPUT_ABS}}/share/spin-stack/qemu/$f || {
             echo "missing firmware $f — run: task qemu:build" >&2; exit 1; }
         done
-        echo "OK: both qemu-system binaries, qemu-img and five firmware files"
+        # Run, not just present. A binary that cannot start on the host that extracted it
+        # is the failure static linking exists to remove, and it costs one exec to notice.
+        for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
+          {{.OUTPUT_ABS}}/bin/$b --version > /dev/null || {
+            echo "{{.OUTPUT_ABS}}/bin/$b does not run on this host" >&2; exit 1; }
+        done
+        # And the split, which is not visible in a file listing: the binary a tenant's host
+        # runs must refuse to emulate, and the CI one must be able to. Backwards, this is a
+        # fleet running at a tenth of the speed or a lane that cannot boot at all.
+        ! {{.OUTPUT_ABS}}/bin/qemu-system-x86_64 -accel help | grep -qx tcg || {
+          echo "qemu-system-x86_64 has TCG compiled in: a host with no /dev/kvm would emulate" >&2
+          exit 1; }
+        {{.OUTPUT_ABS}}/bin/qemu-system-x86_64-tcg -accel help | grep -qx tcg || {
+          echo "qemu-system-x86_64-tcg cannot emulate, so a runner without /dev/kvm has nothing to boot with" >&2
+          exit 1; }
+        echo "OK: both qemu-system binaries run here, qemu-img runs, five firmware files,"
+        echo "    and only the CI binary can emulate"
 
   image:
     desc: >-
-      Build the QEMU runtime image locally (--load, not pushed). It is how a consumer on a
-      bare runner gets a QEMU that runs: the extracted binaries carry the build image's
-      library dependencies and this image carries the libraries.
+      Build the QEMU runtime image locally (--load, not pushed). A convenience for
+      consumers that would rather pull an image than a tarball — the binaries in it are the
+      same static ones, and need nothing from the image around them.
     cmds:
       - |
         docker buildx build \

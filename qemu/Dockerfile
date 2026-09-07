@@ -1,4 +1,4 @@
-# The QEMU this machine runs on. One build, for every consumer.
+# The QEMU this machine runs on. One build, for every consumer, and statically linked.
 #
 # One and not several, and the reason is not disk. `machine.Spec.Fingerprint` hashes this
 # binary's *contents* into the identity that decides whether a VM may restore from a
@@ -6,8 +6,32 @@
 # the other. A second build of "the same" QEMU with one flag moved is a second machine that
 # looks identical in a file listing.
 #
-# The flags, and the ones worth explaining:
+# ## Static, and why that is worth a different distribution
 #
+# A dynamically linked QEMU is not one artefact, it is an artefact plus the set of
+# libraries it was compiled against. Extracted onto a machine that has different ones it
+# dies at start-up — `liburing.so.2: cannot open shared object file` — so a release has to
+# ship either a container to run it in or the loader and the libraries beside it, and a
+# consumer has to know which. Static ends the question: the binary runs wherever the kernel
+# does.
+#
+# That is why the builder is Alpine and musl rather than Ubuntu and glibc. glibc can be
+# linked statically but does it badly — anything that resolves a user or a host name still
+# wants to dlopen an NSS module at run time, and a static binary cannot. musl links
+# statically as its normal mode.
+#
+# Measured before adopting it, on the same host, same kernel, same machine line: process
+# start to a QMP `quit`, 44 ms glibc against 43 ms musl over five runs — no difference. A
+# VM boots, `lspci` inside it shows the slot map this repository declares, io_uring, native
+# aio and thread-pool aio all attach, and the accelerator split holds. What has *not* been
+# measured is a long-running guest under load: musl's allocator and its 128 KiB default
+# thread stack differ from glibc's, and if something surfaces it will surface there.
+#
+# ## The flags worth explaining
+#
+#   --static         see above. It requires every dependency as a .a, which is why the
+#                    package list below asks for -static packages by name; a missing one
+#                    fails at link time, twenty minutes in.
 #   --enable-tools   ships qemu-img, which is not a convenience: a copy-on-write overlay
 #                    over the base image is created by running it, so a caller with the
 #                    emulator and no qemu-img cannot give a container somewhere to write.
@@ -23,6 +47,11 @@
 #                    .vmdk gets `Unknown driver 'vmdk'` at start-up without it. Dropping it
 #                    is a one-line change here, and it invalidates every template in
 #                    existence — as any change to this binary does.
+#   git              not a build dependency of QEMU. meson wants to fetch dtc as a
+#                    subproject when no libfdt is installed, and Alpine ships no static
+#                    libfdt, so the subproject is how fdt gets built — and MICROVM depends
+#                    on fdt (hw/i386/Kconfig). Without git: `Git program not found, cannot
+#                    download dtc.wrap via git`, at configure.
 #
 # Two flags that look like obvious wins and are not:
 #   --enable-vhost-user-blk-server   a device nothing asks for; a guest here gets an
@@ -30,63 +59,36 @@
 #   --without-default-features       then every device q35 needs is ours to enumerate, and
 #                                    a missing one is a link error or an unusable machine.
 
-FROM ubuntu:26.04 AS builder
+ARG ALPINE_VERSION=3.22
+
+FROM alpine:${ALPINE_VERSION} AS builder
 
 ARG QEMU_VERSION=11.1.1
 ARG JOBS=8
-# Bump when the configure flags or qemu/devices.mak change: the build directories live in
-# cache mounts and configure only runs when one holds no config.status, so without this a
-# flag change would silently reuse the previous configuration.
-ARG QEMU_CONFIG_REV=1
-ARG DEBIAN_FRONTEND=noninteractive
+# Bump when the configure flags, the base image, or qemu/devices.mak change: the build
+# directories live in cache mounts and configure only runs when one holds no config.status,
+# so without this a change is silently applied to the previous configuration.
+#
+# "The base image" is in that list because it was left out once. Moving this build from
+# Ubuntu to Alpine and adding --static without bumping the rev re-entered a build directory
+# configured under the old base, skipped configure, relinked, and produced a dynamically
+# linked binary from a Dockerfile that says --static on every other line. The assertion
+# below is what caught it.
+ARG QEMU_CONFIG_REV=2
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 
-# Keep .debs so the cache mounts below are useful.
-RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
-    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
-
-RUN --mount=type=cache,sharing=locked,id=qemu-aptlib,target=/var/lib/apt \
-    --mount=type=cache,sharing=locked,id=qemu-aptcache,target=/var/cache/apt \
-    apt-get update && apt-get upgrade -y && \
-    apt-get --no-install-recommends install -y \
-        build-essential \
-        meson \
-        ninja-build \
-        pkg-config \
-        python3 \
-        python3-venv \
-        python3-tomli \
-        bash \
-        coreutils \
-        curl \
-        ca-certificates \
-        xz-utils \
-        libglib2.0-dev \
-        libglib2.0-0 \
-        zlib1g-dev \
-        libpixman-1-dev \
-        linux-libc-dev \
-        libcap-ng-dev \
-        libseccomp-dev \
-        libseccomp2 \
-        librdmacm-dev \
-        acpica-tools \
-        libbpf-dev \
-        libpmem-dev \
-        libaio-dev \
-        liburing-dev \
-        git \
-        flex \
-        bison \
-        autoconf \
-        automake \
-        libtool \
-        libffi-dev \
-        libelf-dev \
-        libdw-dev \
-        patch && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Every -static package is load-bearing: with --static, a dependency present only as a .so
+# fails at link time after the whole tree has compiled. liburing and libaio ship their .a
+# inside the -dev package rather than a separate one, which is why they look inconsistent.
+RUN --mount=type=cache,sharing=locked,id=qemu-apk,target=/var/cache/apk \
+    apk add --cache-dir /var/cache/apk \
+        build-base meson ninja pkgconf python3 py3-setuptools bash coreutils curl xz \
+        linux-headers bison flex perl git acpica \
+        glib-dev glib-static pcre2-dev pcre2-static libffi-dev \
+        pixman-dev pixman-static zlib-dev zlib-static \
+        libseccomp-dev libseccomp-static libcap-ng-dev libcap-ng-static \
+        liburing-dev libaio-dev gettext-dev gettext-static
 
 WORKDIR /build
 
@@ -107,6 +109,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
 COPY qemu/devices.mak /build/spin-devices.mak
 
 ENV QEMU_FLAGS="\
+    --static \
     --target-list=x86_64-softmmu \
     --with-devices-x86_64=spin \
     --enable-system \
@@ -303,48 +306,47 @@ RUN help=$(/opt/qemu/bin/qemu-img --help 2>&1 | tr '\n' ' ') && \
     done && \
     echo "OK: qemu-img opens qcow2, vmdk and raw" 
 
-RUN file /opt/qemu/bin/qemu-system-x86_64 && \
-    echo "Dynamic library dependencies:" && \
-    ldd /opt/qemu/bin/qemu-system-x86_64
+# Static, asserted rather than assumed. `--static` is a request, and a build that silently
+# fell back to dynamic linking produces a binary that works perfectly here and dies on the
+# first host that has a different liburing — which is the entire failure this build exists
+# to remove, arriving later and somewhere else.
+#
+# The check reads the ELF rather than running `ldd`: musl's ldd is the loader itself and
+# prints its own path even for a static binary, which reads like a dependency and is not
+# one. Two things are asked instead — a NEEDED entry, which names a shared library this
+# binary cannot start without, and an INTERP segment, which names the loader that would
+# have to find it.
+RUN for b in /opt/qemu/bin/qemu-system-x86_64 /opt/qemu/bin/qemu-img \
+             /opt/qemu-tcg/bin/qemu-system-x86_64; do \
+        if readelf -lW "$b" | grep -q INTERP; then \
+            echo "ERROR: $b wants a dynamic loader; --static did not take"; exit 1; \
+        fi; \
+        if readelf -dW "$b" | grep -q NEEDED; then \
+            echo "ERROR: $b has shared library dependencies"; exit 1; \
+        fi; \
+    done && \
+    echo "OK: every binary is statically linked"
 
 # ============================================
 # Runtime image
 # ============================================
 #
-# The binaries are dynamically linked against this build image's libraries, so an extracted
-# tree does not run on a bare runner (`liburing.so.2: cannot open shared object file`).
-# This stage is the answer to that for consumers who can run a container; the extract stage
-# below is for those who cannot.
-FROM ubuntu:26.04 AS runtime
-
-ARG DEBIAN_FRONTEND=noninteractive
-
-RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
-    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
-
-# libaio1t64 and not libaio1: Ubuntu's 64-bit time_t transition renamed the runtime
-# package, so the old name resolves to nothing and `apt-get install` exits 100. The builder
-# stage takes the -dev packages, whose names did not change, which is why a build can
-# succeed while this stage cannot be assembled at all.
-RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt \
-    --mount=type=cache,sharing=locked,id=qemu-runtime-aptcache,target=/var/cache/apt \
-    apt-get update && \
-    apt-get --no-install-recommends install -y \
-        libglib2.0-0 \
-        libpixman-1-0 \
-        libcap-ng0 \
-        libseccomp2 \
-        libaio1t64 \
-        liburing2 \
-        libpmem1 \
-        librdmacm1t64 \
-        zlib1g && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Two binaries and five files on a base that exists only so a human can open a shell in it
+# and look around. There are no libraries to install: that is the whole difference static
+# linking makes here. This stage used to be an Ubuntu with a hand-written apt list that had
+# to be kept in step with what the builder linked against, and the way it was found to be
+# wrong was a CI run.
+FROM alpine:${ALPINE_VERSION} AS runtime
 
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu-tcg/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64-tcg
 COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
 COPY --from=builder /build/pc-bios/ /usr/share/spin-stack/qemu/
+
+# The binaries are static, so this proves rather more than it looks: it is the same check a
+# consumer's host performs when it runs them, on a base that shares nothing with the one
+# they were built on.
+RUN /usr/local/bin/qemu-system-x86_64 --version && /usr/local/bin/qemu-img --version
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
 
