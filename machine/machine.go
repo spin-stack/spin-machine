@@ -26,6 +26,7 @@ package machine
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -171,6 +172,32 @@ type Spec struct {
 	MaxCPUs  int
 	Memory   Memory
 
+	// CPU is the model the guest is shown. Empty means "host", and that is a
+	// decision about whether VMs may move between machines.
+	//
+	// "host" exposes this host's own feature set, which is the fastest thing and
+	// the least portable: a guest resumed on another host has already been told
+	// through CPUID which instructions exist, and it does not ask again. Restore
+	// it somewhere without AVX-512 and it executes an instruction that is not
+	// there. Fingerprint therefore folds the host's CPU model in when this is
+	// "host", so a template built here does not match a machine elsewhere.
+	//
+	// Naming a model instead — "Skylake-Server-v4", "EPYC-Rome-v3", whichever is
+	// the oldest microarchitecture in the fleet — gives every host the same guest
+	// CPU, so templates cross hosts and the host model drops out of the
+	// fingerprint. The cost is that guests never see anything newer than the
+	// model names, on any machine.
+	//
+	// The portable choice is a named microarchitecture, and not an x86-64-v2/v3/v4
+	// baseline: those are psABI levels that compilers target, and QEMU 11.1.1
+	// defines no CPU model by those names — checked in target/i386/cpu.c, which
+	// has zero occurrences of the string. The generic models it does define are
+	// qemu64 and kvm64, both far older than anything worth running. Adding v3 as
+	// a model would mean carrying a QEMU patch, which would cost forward-porting
+	// it forever and buy nothing over naming the oldest microarchitecture in the
+	// fleet — which is what libvirt and every cluster manager do.
+	CPU string
+
 	Disks []Disk
 	NICs  []NIC
 
@@ -239,16 +266,41 @@ func (s Spec) Shape() Shape {
 		slots = 0
 	}
 
+	cpu := s.CPU
+	if cpu == "" {
+		cpu = "host"
+	}
+	// migratable=on drops features QEMU cannot save and reload, which is what a
+	// restore does. It is not what makes a CPU portable between machines — a
+	// common and expensive misreading. It filters by "can this feature be
+	// migrated at all", not by "does the other host have it"; under model "host"
+	// the other host is still required to be this one.
+	//
+	// And it exists only on the models that derive their features from the
+	// silicon underneath, which is host and max. A named model has a fixed
+	// feature set with nothing to filter, and asking anyway is not ignored:
+	//
+	//   can't apply global Skylake-Server-v4-x86_64-cpu.migratable=on:
+	//   Property 'Skylake-Server-v4-x86_64-cpu.migratable' not found
+	//
+	// at start-up, in whichever lane first names a model.
+	if derivedFromHost(cpu) {
+		cpu += ",migratable=on"
+	}
+
 	return Shape{
 		Machine: machine,
-		// migratable=on restricts the CPU to features that survive a migration,
-		// which is what a restore is. Without it QEMU exposes host features it
-		// cannot guarantee on the other side, and the other side here is the
-		// same host at a later time — with a different microcode, perhaps.
-		CPU:    "host,migratable=on",
-		SMP:    smpArg(s.BootCPUs, s.MaxCPUs),
-		Memory: memoryArg(s.Memory.SizeMB, slots, s.Memory.MaxMB),
+		CPU:     cpu,
+		SMP:     smpArg(s.BootCPUs, s.MaxCPUs),
+		Memory:  memoryArg(s.Memory.SizeMB, slots, s.Memory.MaxMB),
 	}
+}
+
+// derivedFromHost reports whether a CPU model takes its feature set from the
+// silicon it runs on, which is what makes a template built with it unusable on
+// another machine — and what migratable=on applies to.
+func derivedFromHost(model string) bool {
+	return model == "host" || model == "max"
 }
 
 // TemplateShape is the shape a template of this machine is taken from, which is
@@ -546,6 +598,28 @@ func (s Spec) Fingerprint() (string, error) {
 		shape.Machine, shape.CPU, shape.SMP, shape.Memory)
 	fmt.Fprintf(h, "devices=%s\n", s.topology())
 
+	// The host's own CPU, but only when the guest is being shown it.
+	//
+	// Under model "host" the guest is told through CPUID exactly which
+	// instructions this silicon has, and it never asks again — so a template
+	// taken here describes a CPU the next machine may not have, and restoring it
+	// there is a guest executing an instruction that does not exist. Nothing
+	// about the QEMU binary, the kernel or the four shape arguments differs
+	// between two hosts, so without this a Zen 4 template and a Skylake template
+	// have the same fingerprint and each machine happily accepts the other's.
+	//
+	// Under a named model it is deliberately left out: every host shows the guest
+	// the same CPU, which is the entire point of naming one, and folding the host
+	// in would partition templates per machine for no reason.
+	if derivedFromHost(strings.SplitN(shape.CPU, ",", 2)[0]) {
+		cpu, err := readHostCPU()
+		if err != nil {
+			return "", fmt.Errorf("fingerprinting the host CPU, which model %q exposes to the guest: %w",
+				strings.SplitN(shape.CPU, ",", 2)[0], err)
+		}
+		fmt.Fprintf(h, "host-cpu=%s\n", cpu)
+	}
+
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
@@ -584,6 +658,34 @@ func (s Spec) topology() string {
 		fmt.Fprintf(&b, ";virtio-net-pci@%#x", SlotNICBase+i)
 	}
 	return b.String()
+}
+
+// readHostCPU is HostCPUModel, indirected so a test can be two different hosts.
+var readHostCPU = HostCPUModel
+
+// HostCPUModel reports the host CPU's model name, which model "host" makes part
+// of what a template describes.
+//
+// The model name and not the feature flags. The flags would be the exact thing —
+// they are what the guest is shown — but they also move with microcode updates
+// and kernel mitigations, so hashing them would invalidate every template on a
+// machine that has not meaningfully changed. The model is the coarse identity
+// that separates one host's silicon from another's, which is what this is for.
+func HostCPUModel() (string, error) {
+	b, err := os.ReadFile("/proc/cpuinfo")
+	if err != nil {
+		return "", fmt.Errorf("reading /proc/cpuinfo: %w", err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		name, ok := strings.CutPrefix(line, "model name")
+		if !ok {
+			continue
+		}
+		if _, value, found := strings.Cut(name, ":"); found {
+			return strings.TrimSpace(value), nil
+		}
+	}
+	return "", errors.New("no model name in /proc/cpuinfo")
 }
 
 func fileSum(path string) (string, error) {

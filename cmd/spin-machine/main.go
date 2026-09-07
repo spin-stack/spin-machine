@@ -104,6 +104,7 @@ type options struct {
 
 	memoryMB int
 	maxMemMB int
+	cpuModel string
 	cpus     int
 	maxCPUs  int
 	memFile  string
@@ -134,6 +135,7 @@ func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
 
 	fs.IntVar(&o.memoryMB, "memory", 2048, "guest memory in MiB")
 	fs.IntVar(&o.maxMemMB, "max-memory", 0, "memory hotplug ceiling in MiB (0: no hotplug)")
+	fs.StringVar(&o.cpuModel, "cpu", "", "CPU model shown to the guest (default: host; name one, e.g. Skylake-Server-v4, to let VMs move between machines)")
 	fs.IntVar(&o.cpus, "cpus", 2, "boot vCPUs")
 	fs.IntVar(&o.maxCPUs, "max-cpus", 0, "vCPU hotplug ceiling (0: no hotplug)")
 	fs.StringVar(&o.memFile, "memory-file", "", "back guest RAM with this file instead of anonymous memory")
@@ -170,6 +172,7 @@ func (o *options) spec() (machine.Spec, error) {
 		Kernel:   or(o.kernel, filepath.Join(rel, "vmlinux")),
 		Initrd:   o.initrd,
 		Firmware: or(o.firmware, filepath.Join(rel, "share", "spin-stack", "qemu")),
+		CPU:      o.cpuModel,
 		BootCPUs: o.cpus,
 		MaxCPUs:  o.maxCPUs,
 		Memory: machine.Memory{

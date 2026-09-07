@@ -276,6 +276,71 @@ func TestFingerprintIgnoresWhatIsBehindTheDevices(t *testing.T) {
 	}
 }
 
+// Moving a VM between hosts, which is what model "host" quietly forbids.
+//
+// Under it the guest is told through CPUID exactly which instructions this
+// silicon has and never asks again, so a template taken on one machine describes
+// a CPU the next may not have. Nothing else in the fingerprint differs between
+// two hosts — same binaries, same shape — so without the host CPU folded in, each
+// machine accepts the other's templates and the guest resumes onto an instruction
+// that is not there.
+func TestFingerprintSeparatesHostsUnderCPUHost(t *testing.T) {
+	base := spec(t)
+
+	old := readHostCPU
+	t.Cleanup(func() { readHostCPU = old })
+
+	readHostCPU = func() (string, error) { return "13th Gen Intel(R) Core(TM) i9-13900HK", nil }
+	intel, err := base.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readHostCPU = func() (string, error) { return "AMD EPYC 9634 84-Core Processor", nil }
+	amd, err := base.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intel == amd {
+		t.Fatal("two different host CPUs produced one fingerprint; each host would accept the other's templates")
+	}
+}
+
+// And the other half: naming a model is how a fleet gets VMs that move. Every
+// host then shows the guest the same CPU, so the host's own silicon must drop out
+// of the fingerprint — otherwise templates are partitioned per machine for
+// exactly the reason that no longer applies.
+func TestFingerprintIgnoresTheHostUnderANamedCPU(t *testing.T) {
+	named := spec(t)
+	named.CPU = "Skylake-Server-v4"
+
+	old := readHostCPU
+	t.Cleanup(func() { readHostCPU = old })
+
+	readHostCPU = func() (string, error) { return "13th Gen Intel(R) Core(TM) i9-13900HK", nil }
+	a, err := named.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readHostCPU = func() (string, error) { return "AMD EPYC 9634 84-Core Processor", nil }
+	b, err := named.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Error("a named CPU model still partitioned templates by host; VMs could not move")
+	}
+
+	// And it is a different machine from the default, because the guest sees a
+	// different CPU.
+	def, err := spec(t).Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def == a {
+		t.Error("a named CPU model fingerprinted the same as model host")
+	}
+}
+
 // A path is not the machine: the same binary under two names is one machine, and
 // two different binaries at one path are two.
 func TestFingerprintIsContentNotPath(t *testing.T) {
