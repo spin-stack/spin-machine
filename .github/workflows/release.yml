@@ -60,12 +60,19 @@ jobs:
       # Three sources, in order: what the caller typed, the tag that triggered this, or a
       # new one for today. The generated form is deliberately not `date +%s` or a commit
       # hash — it has to be readable, sortable, and the same shape as one typed by hand.
+      # The caller's input arrives through the environment and not through ${{ }} in the
+      # script body. Interpolation happens before the shell sees the line, so a version
+      # containing a quote or a semicolon would be pasted into the script rather than
+      # assigned to a variable — and it is validated below, which is after that would have
+      # mattered.
       - name: Decide the version
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            version="$INPUT_VERSION"
             origin="given by the caller"
           elif [ "${{ github.ref_type }}" = "tag" ]; then
             version="${{ github.ref_name }}"

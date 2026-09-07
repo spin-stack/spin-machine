@@ -90,5 +90,10 @@ tasks:
 
   version:
     desc: Print the pinned QEMU version (the single source of truth for CI tags).
+    # A caller capturing this needs `task --output interleaved qemu:version`. The root
+    # Taskfile sets `output: prefixed` so a long build says which task each line came
+    # from, and that decoration is applied here too — so the obvious `$(task qemu:version)`
+    # yields `[qemu:version] 11.1.1`, which looks right in a terminal and is wrong
+    # everywhere it is used.
     cmds:
       - echo "{{.QEMU_VERSION}}"

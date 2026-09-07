@@ -49,9 +49,16 @@ jobs:
 
       # The pinned version comes from the Taskfile, never from a literal here: two places
       # to bump is how CI and production end up on different QEMUs.
+      #
+      # --output interleaved, and it is not optional: the Taskfile sets `output: prefixed`
+      # so that a long build says which task each line came from, and that prefix is
+      # applied to *this* task's output too. Captured, the version becomes
+      # `[qemu:version] 11.1.1`, which reached the artifact name and failed the upload:
+      #
+      #   Error: The artifact name is not valid: qemu-[qemu:version] 11.1.1-linux-amd64.
       - name: Read the pinned QEMU version
         id: qemu
-        run: echo "version=$(task qemu:version)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(task --output interleaved qemu:version)" >> "$GITHUB_OUTPUT"
 
       - name: Build QEMU and verify what came out
         run: |
