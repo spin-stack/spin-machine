@@ -59,7 +59,7 @@
 #   --without-default-features       then every device q35 needs is ours to enumerate, and
 #                                    a missing one is a link error or an unusable machine.
 
-ARG ALPINE_VERSION=3.22
+ARG ALPINE_VERSION=3.24
 
 FROM alpine:${ALPINE_VERSION} AS builder
 
