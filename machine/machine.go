@@ -110,6 +110,20 @@ type Disk struct {
 	// writable disk, and only worth setting when something outside QEMU takes
 	// the same lock to find out whether a VM is running on the image.
 	Locking bool
+	// Cache overrides how the host caches this disk. Empty leaves QEMU's default,
+	// which is what this machine wants and is worth saying why.
+	//
+	// The usual advice for a production VM is cache=none — bypass the host page
+	// cache, because the guest caches the same blocks and holding them twice
+	// wastes RAM. It is the wrong advice here. The read-only base image is one
+	// file that *every* VM on the host maps through a backing chain, so one copy
+	// in the host's page cache is one copy shared by all of them; with O_DIRECT
+	// each VM would fault its own. The overlay is the part that would benefit,
+	// and it shares a -drive with the base.
+	//
+	// cache=none also fails outright on a filesystem with no O_DIRECT — tmpfs,
+	// which is where a scratch overlay usually lands.
+	Cache string
 }
 
 // NIC is one virtio-net device, backed by a TAP file descriptor the caller has
@@ -399,7 +413,21 @@ func (s Spec) Args() ([]string, error) {
 	}
 
 	for i, d := range s.Disks {
-		drive := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s", d.Path, i, d.Format)
+		// aio=io_uring, and QEMU is built with it for this reason. The default is
+		// aio=threads, which hands every request to a worker pool and pays a
+		// context switch each way; io_uring submits and completes in batches
+		// through one ring shared with the kernel. It was compiled in and never
+		// asked for, which is the worst of both — the cost of the dependency
+		// without the benefit.
+		//
+		// discard=unmap lets the guest's TRIM reach the image, so a qcow2 overlay
+		// gives its blocks back when files are deleted inside the VM instead of
+		// growing to the high-water mark of everything ever written.
+		drive := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s,aio=io_uring,discard=unmap",
+			d.Path, i, d.Format)
+		if d.Cache != "" {
+			drive += ",cache=" + d.Cache
+		}
 		if d.Readonly {
 			drive += ",readonly=on"
 		}
@@ -418,8 +446,15 @@ func (s Spec) Args() ([]string, error) {
 		// romfile= loads no option ROM. The card is only ever driven by a guest
 		// that already has the driver compiled in, and it never boots from the
 		// network, so the ROM is firmware nothing reads.
+		// vhost=on, always. Without it every packet is copied into QEMU, out of
+		// it, and back into the kernel; with it the kernel moves frames between
+		// the tap and the guest's virtqueues and QEMU is not on the data path at
+		// all. QEMU does not default it on, and there is no fallback: a host with
+		// no /dev/vhost-net fails at start-up rather than quietly running slowly,
+		// which is the right way round — a machine that cannot do this is a
+		// different machine.
 		args = append(args,
-			"-netdev", fmt.Sprintf("tap,id=net%d,fd=%d", i, n.TapFD),
+			"-netdev", fmt.Sprintf("tap,id=net%d,fd=%d,vhost=on", i, n.TapFD),
 			"-device", fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s,romfile=,%s,addr=0x%x",
 				i, n.MAC, virtioModern, SlotNICBase+i))
 	}

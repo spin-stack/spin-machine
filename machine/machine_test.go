@@ -93,6 +93,11 @@ func TestDevicesSitOnTheirFixedSlots(t *testing.T) {
 		"virtio-blk-pci,drive=blk0,disable-legacy=on,addr=0x5",
 		"virtio-blk-pci,drive=blk1,disable-legacy=on,addr=0x6",
 		"virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01,romfile=,disable-legacy=on,addr=0x10",
+		// The two that are invisible in a guest until something is slow: without
+		// them QEMU hands every block request to a worker pool and copies every
+		// packet through userspace, and nothing reports either.
+		"aio=io_uring",
+		"tap,id=net0,fd=3,vhost=on",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in %s", want, joined)

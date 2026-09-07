@@ -85,7 +85,7 @@ ARG JOBS=8
 # configured under the old base, skipped configure, relinked, and produced a dynamically
 # linked binary from a Dockerfile that says --static on every other line. The assertion
 # below is what caught it.
-ARG QEMU_CONFIG_REV=2
+ARG QEMU_CONFIG_REV=3
 
 SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 
@@ -134,6 +134,10 @@ ENV QEMU_FLAGS="\
     --enable-linux-io-uring \
     --enable-cap-ng \
     --enable-seccomp \
+    --enable-vhost-net \
+    --enable-vhost-kernel \
+    --enable-vhost-user \
+    --disable-qom-cast-debug \
     --enable-lto \
     --enable-strip \
     --disable-containers \
@@ -204,6 +208,18 @@ ENV QEMU_FLAGS="\
     --disable-virtfs \
     --disable-hv-balloon"
 
+# The vhost three are asked for rather than left alone, and that is the point: meson
+# defaults them to `auto`, so they are compiled in when the build image happens to carry
+# linux/vhost.h and silently absent when it does not. Absent, `-netdev tap,vhost=on` fails
+# at start-up and, worse, a machine built without it and run without the flag copies every
+# packet through QEMU — a performance regression with no error anywhere. Named here, a base
+# image that stops providing the headers fails the build instead.
+#
+# qom_cast_debug defaults to *true* in meson_options.txt. It checks the type of every QOM
+# object cast at run time, which is a debugging aid this repository has no use for on a
+# host running tenants' VMs.
+#
+#
 # What is *not* in that list, and why, because the tempting ones fail late:
 #   pixman, glib, gnutls/nettle  — q35's display and qcow2's crypto still want them.
 #   fdt                          — MICROVM depends on it (hw/i386/Kconfig).
