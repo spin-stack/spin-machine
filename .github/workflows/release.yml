@@ -39,14 +39,14 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # The whole history and the tags: the version below counts the tags already
           # taken today, and a shallow clone would count zero and hand out .01 twice.
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -55,7 +55,7 @@ jobs:
         uses: go-task/setup-task@v2
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Three sources, in order: what the caller typed, the tag that triggered this, or a
       # new one for today. The generated form is deliberately not `date +%s` or a commit

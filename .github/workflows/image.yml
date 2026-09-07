@@ -36,13 +36,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Task
         uses: go-task/setup-task@v2
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # image/build.sh asserts what came out on the finished filesystem rather than
       # trusting the build that made it: that there is an /sbin/init and a /bin/sh, that
