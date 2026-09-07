@@ -8,6 +8,12 @@ version: '3'
 # from restoring a template into a machine of another shape — but it means a config change
 # here is a fleet-wide event and should be a deliberate commit with a measurement in it.
 
+# The pinned version, read from the Dockerfile that uses it. See the note in
+# qemu/Taskfile.yml: one copy, and a path filter that can name it.
+vars:
+  KERNEL_VERSION:
+    sh: sed -n 's/^ARG KERNEL_VERSION="\{0,1\}\([^"]*\)"\{0,1\}/\1/p' kernel/Dockerfile
+
 tasks:
 
   build:

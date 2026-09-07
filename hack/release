@@ -16,8 +16,10 @@ cd "${ROOT_DIR}"
 OUTPUT_DIR="${OUTPUT_DIR:-_output}"
 KERNEL_ARCH="${KERNEL_ARCH:-x86_64}"
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
-QEMU_VERSION="${QEMU_VERSION:-unknown}"
-KERNEL_VERSION="${KERNEL_VERSION:-unknown}"
+# Read from the Dockerfiles, which is where each pin lives, exactly like the checksums
+# below. Nothing passes these in, so there is no second copy to disagree.
+QEMU_VERSION="${QEMU_VERSION:-$(sed -n 's/^ARG QEMU_VERSION=//p' qemu/Dockerfile)}"
+KERNEL_VERSION="${KERNEL_VERSION:-$(sed -n 's/^ARG KERNEL_VERSION="\{0,1\}\([^"]*\)"\{0,1\}/\1/p' kernel/Dockerfile)}"
 # The two upstream tarballs this release was compiled from, pinned in the Dockerfiles and
 # repeated here so SOURCES states them without anybody reading a build file. They are
 # checked at build time; if they disagree with the Dockerfiles, one of the two was bumped

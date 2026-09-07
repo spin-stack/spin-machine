@@ -8,16 +8,18 @@ name: QEMU
 # than in a VM that will not start weeks later.
 
 on:
+# qemu/** and nothing else. The version pin is the ARG in qemu/Dockerfile, so a bump is a
+# change under qemu/ and fires this; the root Taskfile holds only how many jobs to compile
+# with and which cache to use, and used to be listed here — which meant every edit to it
+# rebuilt QEMU, the kernel and the base image for nothing.
   push:
     branches: [main]
     paths:
       - qemu/**
-      - Taskfile.yml # the version pin and the cache backends live here
       - .github/workflows/qemu.yml
   pull_request:
     paths:
       - qemu/**
-      - Taskfile.yml
       - .github/workflows/qemu.yml
   workflow_dispatch:
 

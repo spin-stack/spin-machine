@@ -105,6 +105,8 @@ jobs:
           QEMU_CACHE_TO: type=gha,mode=max
           KERNEL_CACHE_FROM: type=gha
           KERNEL_CACHE_TO: type=gha,mode=max
+          IMAGE_CACHE_FROM: type=gha
+          IMAGE_CACHE_TO: type=gha,mode=max
         run: task release QEMU_JOBS=4 KERNEL_NPROC=4
 
       # The machine's identity, in the log and in the release notes. These are the numbers

@@ -30,6 +30,8 @@ tasks:
         docker buildx build \
           --file image/Dockerfile \
           --platform linux/amd64 \
+          --cache-from {{.IMAGE_CACHE_FROM}} \
+          --cache-to {{.IMAGE_CACHE_TO}} \
           --tag {{.IMAGE_BUILDER_TAG}} \
           --load \
           .

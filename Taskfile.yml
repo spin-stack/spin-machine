@@ -62,9 +62,18 @@ vars:
   VERSION:
     sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
 
-  QEMU_VERSION: '{{.QEMU_VERSION | default "11.1.1"}}'
+  # The version pins are NOT here. Each lives once, in the Dockerfile that builds the
+  # thing, and the Taskfile beside it reads that — see qemu/Taskfile.yml.
+  #
+  # They were here as well as there, which is one duplication and one worse thing: this
+  # file had to be in every workflow's path filter, since a version bump in it must rebuild
+  # what it pins. So `task lint` gaining a check, or a comment being fixed, fired QEMU, the
+  # kernel and the base image — three builds, tens of minutes each, for an edit that could
+  # not have changed any of them.
+  #
+  # What is left here is what does not change an artefact: how many jobs to compile with,
+  # where to put the output, which cache backend to use.
   QEMU_JOBS: '{{.QEMU_JOBS | default 8}}'
-  KERNEL_VERSION: '{{.KERNEL_VERSION | default "7.2.1"}}'
   KERNEL_ARCH: '{{.KERNEL_ARCH | default "x86_64"}}'
   KERNEL_NPROC: '{{.KERNEL_NPROC | default 8}}'
 
@@ -76,6 +85,11 @@ vars:
   QEMU_CACHE_TO: '{{.QEMU_CACHE_TO | default (printf "type=local,dest=%s/qemu,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
   KERNEL_CACHE_FROM: '{{.KERNEL_CACHE_FROM | default (printf "type=local,src=%s/kernel" .BUILDKIT_CACHE_DIR)}}'
   KERNEL_CACHE_TO: '{{.KERNEL_CACHE_TO | default (printf "type=local,dest=%s/kernel,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
+  # The container that builds the base image. Small — mkosi, e2fsprogs, qemu-utils — but it
+  # was the one buildx invocation here with no cache at all, so every CI run reinstalled it
+  # from the archive before any image work started.
+  IMAGE_CACHE_FROM: '{{.IMAGE_CACHE_FROM | default (printf "type=local,src=%s/image" .BUILDKIT_CACHE_DIR)}}'
+  IMAGE_CACHE_TO: '{{.IMAGE_CACHE_TO | default (printf "type=local,dest=%s/image,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
 
   # mkosi's package cache, which is not a BuildKit cache because mkosi does not run under
   # BuildKit (see image/Dockerfile). A rebuild of the base image is ~1.5 GB of apt.
@@ -196,7 +210,10 @@ tasks:
     desc: Build everything and pack one versioned tarball.
     cmds:
       - task: build
-      - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_ABS}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" QEMU_VERSION="{{.QEMU_VERSION}}" KERNEL_VERSION="{{.KERNEL_VERSION}}" hack/release
+      # No QEMU_VERSION or KERNEL_VERSION: hack/release reads both from the Dockerfiles,
+      # the same way it already reads the tarball checksums. Passing them from here would
+      # put the pin back in this file, where a workflow would have to watch it.
+      - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_ABS}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" hack/release
 
   verify:consumer:
     desc: >-

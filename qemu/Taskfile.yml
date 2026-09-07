@@ -4,6 +4,13 @@ version: '3'
 # vars these tasks read (QEMU_VERSION, the cache backends, OUTPUT_DIR) are in the root
 # Taskfile.yml, which is where the version pin lives.
 
+# The pinned version, read from the Dockerfile that uses it so there is one copy. An
+# override still works — `task qemu:build QEMU_VERSION=11.2.0` — but the committed pin is
+# the ARG, which is also what the cache-mount ids and the source URL are built from.
+vars:
+  QEMU_VERSION:
+    sh: sed -n 's/^ARG QEMU_VERSION=//p' qemu/Dockerfile
+
 tasks:
 
   build:

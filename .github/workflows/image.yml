@@ -10,16 +10,15 @@ name: Base image
 # created.
 
 on:
+# image/** and nothing else; see the note in qemu.yml.
   push:
     branches: [main]
     paths:
       - image/**
-      - Taskfile.yml
       - .github/workflows/image.yml
   pull_request:
     paths:
       - image/**
-      - Taskfile.yml
       - .github/workflows/image.yml
   workflow_dispatch:
 
@@ -49,8 +48,15 @@ jobs:
       # the directories the guest mounts over exist, that no identity is baked in, and
       # that the units masked for measured reasons are still masked. A package upgrade
       # that undoes one of those fails here.
+      # mkosi's own package cache is deliberately not restored between runs. It is ~1.5 GB
+      # of .debs, and saving and restoring that costs about what downloading it costs — so
+      # it would buy minutes of cache traffic in exchange for minutes of archive traffic,
+      # and a cache entry large enough to push others out of the repository's 10 GB.
       - name: Build the base image
-        run: task image:build
+        run: |
+          task image:build \
+            IMAGE_CACHE_FROM=type=gha \
+            IMAGE_CACHE_TO=type=gha,mode=max
 
       - name: What this image is
         run: |

@@ -10,16 +10,15 @@ name: Kernel
 # noticed.
 
 on:
+# kernel/** and nothing else; see the note in qemu.yml.
   push:
     branches: [main]
     paths:
       - kernel/**
-      - Taskfile.yml
       - .github/workflows/kernel.yml
   pull_request:
     paths:
       - kernel/**
-      - Taskfile.yml
       - .github/workflows/kernel.yml
   workflow_dispatch:
 
