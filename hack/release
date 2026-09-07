@@ -3,14 +3,11 @@
 # One tarball, one version: qemu-system-x86_64, qemu-img, the five firmware files, vmlinux
 # and base.qcow2.
 #
-# Not because it is tidy. spinbox fingerprints the QEMU binary, the kernel and the initrd
-# by content to decide whether a VM may be restored from a template
-# (internal/host/vm/qemu/template.go), so a release in which any of them moved is a
-# different machine and every template built against the previous one stops matching.
-# Shipping them separately would let two of the three drift and leave the third to notice.
-#
-# The layout under usr/share/spin-stack/ is spinbox's, so a host installs this the way it
-# installs a spinbox release and nothing has to learn a new path.
+# Not because it is tidy. `machine.Spec.Fingerprint` hashes the QEMU binary, the kernel and
+# the initrd by content to decide whether a VM may restore from a template, so a release in
+# which any of them moved is a different machine and every template taken against the
+# previous one stops matching. Shipping them separately would let two of the three drift
+# and leave the third to notice.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,9 +28,7 @@ mkdir -p "${SHARE}/bin" "${SHARE}/qemu" "${SHARE}/kernel" "${SHARE}/image"
 
 # Every artefact, and every one required. A release missing a piece is worse than no
 # release: it installs, and the thing it left out fails somewhere else — a VM that will not
-# start for want of an option ROM, a `spinbox run` that cannot create an overlay for want of
-# qemu-img. The warn-and-continue that spinbox's release script has for QEMU is the reason
-# this one does not.
+# start for want of an option ROM, a container with nowhere to write for want of qemu-img.
 require() {
   local src="$1" dest="$2" what="$3"
   if [ ! -f "${src}" ]; then
@@ -63,19 +58,27 @@ done
 echo "Kernel:"
 require "${OUTPUT_DIR}/vmlinux" "${SHARE}/kernel/vmlinux" "the guest kernel" 0644
 require "${OUTPUT_DIR}/kernel-config" "${SHARE}/kernel/kernel-config" "the kernel config"
-# spinbox resolves its kernel at usr/share/spin-stack/kernel/spinbox-kernel-<arch>
-# (internal/paths/paths.go). A symlink, so that a spinbox that has not been changed to
-# look for `vmlinux` installs this release and works, and one that has still finds it.
-ln -sfn vmlinux "${SHARE}/kernel/spinbox-kernel-${KERNEL_ARCH}"
-echo "  ok: spinbox-kernel-${KERNEL_ARCH} -> vmlinux"
+# An optional second name for the kernel, off by default.
+#
+# The kernel is `vmlinux`, which is what the ELF is. A consumer that resolves it under some
+# other name can be given a symlink here rather than being changed — but this repository
+# does not know that any such consumer exists, and hardcoding one repository's filename
+# into another's release is exactly how two projects end up knowing about each other.
+#
+#   COMPAT_KERNEL_NAME=spinbox-kernel-x86_64 task release
+if [ -n "${COMPAT_KERNEL_NAME:-}" ]; then
+  ln -sfn vmlinux "${SHARE}/kernel/${COMPAT_KERNEL_NAME}"
+  echo "  ok: ${COMPAT_KERNEL_NAME} -> vmlinux"
+fi
 
 echo "Base image:"
 require "${OUTPUT_DIR}/base.qcow2" "${SHARE}/image/base.qcow2" "the base image" 0444
 
 # What this release is, in a form something other than a human can read. The three
-# checksums are the machine's identity: spinbox recomputes the first two (and the initrd's,
-# which is not in this tarball) to decide whether a template may be restored, so a host that
-# wants to know why its templates stopped matching can diff this file against the last one.
+# checksums are the machine's identity — the same numbers `machine.Spec.Fingerprint` hashes
+# (with the initrd's, which is not in this tarball) to decide whether a template may be
+# restored. A host wondering why its templates stopped matching diffs this against the
+# previous release's.
 {
   echo "version=${VERSION}"
   echo "qemu_version=${QEMU_VERSION}"

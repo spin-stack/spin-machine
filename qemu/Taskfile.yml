@@ -41,9 +41,9 @@ tasks:
           test -x {{.OUTPUT_DIR}}/bin/$b || {
             echo "missing {{.OUTPUT_DIR}}/bin/$b — run: task qemu:build" >&2; exit 1; }
         done
-        # qemu-img is the flag this repository exists to remove: `spinbox run` had to be
-        # given --qemu-img pointing at storage's build because spinbox's own release, built
-        # --disable-tools, does not contain one.
+        # qemu-img is not a convenience: a container's writable layer is a qcow2 overlay
+        # created by running it, so a release with the emulator and without it cannot give
+        # a container anywhere to write.
         # pvh.bin is how -kernel enters a PVH ELF kernel, which is the only boot path here.
         # efi-virtio.rom is the option ROM of the one NIC this build keeps; a VM given a
         # virtio-net-pci without it does not start.

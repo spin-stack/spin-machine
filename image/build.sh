@@ -12,7 +12,7 @@
 #
 #     qemu-img create -f qcow2 -F qcow2 -b base.qcow2 overlay.qcow2
 #
-# which is what `spinbox run` already does, and the shape storage's chain is made of.
+# which is the shape a chain of images is made of: one base, many overlays.
 #
 # ext4 and not something denser: the guest kernel has EXT4_FS, EROFS_FS and OVERLAY_FS and
 # explicitly not XFS_FS, BTRFS_FS or SQUASHFS (kernel/config-7.2.1-x86_64). Any other
@@ -21,13 +21,10 @@ set -euo pipefail
 
 OUT="${OUT:-/out/base.qcow2}"
 # Normalizes timestamps in the tree, so the build's wall clock is not baked into every
-# file. It does NOT make the image bit-reproducible, and it should not be read as if it
-# did: two builds of this tree on 2026-09-07 produced base.qcow2 files with different
-# checksums and different sizes (1,258,999,808 and 1,204,006,912 bytes of ext4), because
-# the userland is assembled from a live archive and the filesystem is sized from what came
-# out of it. That matters, because "did the machine change?" is the question this whole
-# repository is organised around: today the honest answer for the image is the checksum in
-# machine.env, recorded per build, and not a claim that the inputs determine it.
+# file. It is not on its own a claim that the image is bit-reproducible: the userland is
+# assembled from a live archive, and the filesystem is sized from what came out of it, so
+# two builds days apart differ for reasons this variable does not touch. What a given
+# release actually contains is the checksum in machine.env.
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 
 mkdir -p "$(dirname "$OUT")" /work/out /cache
@@ -147,15 +144,24 @@ done
 #
 # No compression: the base is read by every VM on every boot and a compressed cluster is
 # decompressed on each read. The file is written once and read forever.
+# Written beside the target and renamed over it, never into it.
+#
+# The obvious version — `qemu-img convert -O qcow2 … "$OUT"` — opens the existing base for
+# writing, and a VM running against that base holds an image lock on it, so the build dies
+# with `Failed to get "write" lock. Is another process using the image?`. Which is the
+# right refusal for the wrong reason: the problem is not the lock, it is that a base image
+# is never edited. Every VM maps it read-only through a backing chain and many share one,
+# so anything that writes into that file invalidates every overlay in existence — silently,
+# because the overlays keep working until they read a cluster that moved.
+#
+# A rename replaces the directory entry and leaves the old inode alone, so a VM that is
+# running right now keeps the image it booted from, and the next one gets the new file.
 echo "==> qemu-img: wrapping it"
-qemu-img convert -f raw -O qcow2 /work/base.raw "$OUT"
-qemu-img info --output=json "$OUT"
-
-# 0444, and this is the trap the whole design has: every VM maps this file read-only
-# through a qcow2 backing chain and many VMs share one. A step that opens it read-write
-# invalidates every overlay in existence — silently, because the overlays keep working
-# until they read a cluster that moved.
-chmod 0444 "$OUT"
+rm -f "$OUT.new"
+qemu-img convert -f raw -O qcow2 /work/base.raw "$OUT.new"
+qemu-img info --output=json "$OUT.new"
+chmod 0444 "$OUT.new"
+mv -f "$OUT.new" "$OUT"
 echo "==> $OUT"
 echo "    sha256 $(sha256sum "$OUT" | cut -d' ' -f1)"
 echo "    size   $(du -h "$OUT" | cut -f1)"

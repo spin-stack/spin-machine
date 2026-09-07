@@ -1,25 +1,23 @@
-# The guest kernel, moved here from spinbox's Dockerfile (targets kernel-build-base,
-# kernel-build, kernel) unchanged in what it produces.
+# The guest kernel.
 #
-# Why it is here and not there: storage consumes this kernel and cannot build one, so it
-# grew Dockerfile.guest-kernel — a file that builds nothing and exists only to move an
-# artefact through a registry and back out, "so the lane's kernel can be named by digest
-# instead of by a relative path into someone's home directory" (ADR-0021, ADR-0022). That
-# whole mechanism is plumbing across a repository boundary that should not be there. And
-# the kernel and QEMU are already one release unit: both go into spinbox's template
-# fingerprint *by content*, so changing either invalidates every template on every host.
-# They were coupled by necessity and stored apart by accident.
+# It is here, next to the QEMU binary and the base image, because a kernel and the machine
+# that boots it are one release: `machine.Spec.Fingerprint` hashes this image by content
+# alongside the emulator, so changing either invalidates every template taken against the
+# previous pair. They are coupled by what they are, and storing them apart only hides it.
 #
-# The build does not depend on spinbox's source. It is a version and a config file.
+# The build depends on no source but its own: a version and a config file.
 #
-# What stays in spinbox: the initrd. It carries vminitd, built from spinbox's source, and
-# it is the one guest artefact that belongs to the runtime rather than to the machine.
+# What is NOT here: an initrd. What runs inside a guest belongs to whoever runs guests —
+# this repository builds the machine and boots it far enough to prove it works.
 #
-# Base image: debian bookworm, and deliberately not something newer. spinbox built this
-# kernel with bookworm's gcc (its stages descended from golang:1.27.1-bookworm), and a
-# different compiler is a different vmlinux, which is a different machine fingerprint,
-# which is every template in the fleet invalidated. That may be a change worth making; it
-# is not one to make by accident while moving a file.
+# The config is not stable furniture. Symbols get added and removed for measured reasons —
+# a device a restored VM needs to reseed from, a crypto driver worth milliseconds of boot —
+# and every one of those changes invalidates every template in the fleet. That is the
+# design, and it makes a change here a fleet-wide event rather than a tidy-up.
+#
+# Base image: debian bookworm, and deliberately not something newer. A different compiler
+# is a different vmlinux, which is a different machine fingerprint, which is every template
+# invalidated. That may be a change worth making; it is not one to make by accident.
 
 FROM debian:bookworm AS kernel-build-base
 
@@ -36,8 +34,7 @@ RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
         # check-docker-config.sh below shells out to. Without apparmor_parser it reports
         # "apparmor: enabled, but apparmor_parser missing" and exits non-zero, failing a
         # configuration that is correct; without sysctl it prints three "sysctl: not found"
-        # lines while inspecting the bridge driver. spinbox's build had both by accident,
-        # from the golang base image its kernel stages descended from.
+        # lines while inspecting the bridge driver.
         apparmor procps
 
 ARG KERNEL_VERSION="7.2.1"
@@ -77,14 +74,15 @@ RUN <<EOT
 
     # Memory hotplug. Without these three the host can add a DIMM, QEMU will accept it,
     # query-memory-devices will show it, and /sys/devices/system/memory/memory<N>/online —
-    # the file spinbox's internal/guest/services/system.go writes to — will not exist, so
-    # the guest never sees the memory.
+    # the file something in the guest has to write to bring it online — will not exist,
+    # so the guest never sees the memory.
     grep -q "CONFIG_MEMORY_HOTPLUG=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTPLUG not enabled (memory hotplug cannot reach the guest)!" ; exit 1)
     grep -q "CONFIG_MEMORY_HOTREMOVE=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTREMOVE not enabled (unplug cannot work)!" ; exit 1)
     grep -q "CONFIG_ACPI_HOTPLUG_MEMORY=y" .config || (echo "ERROR: CONFIG_ACPI_HOTPLUG_MEMORY not enabled (a pc-dimm is never noticed)!" ; exit 1)
 
-    # spinbox's initrd is lz4. Without this the kernel does not recognise the archive at
-    # all and the VM does not boot.
+    # An lz4 initramfs. lz4 is among the fastest formats to decompress and unpacking the
+    # archive is one of the largest single items in kernel boot; without this the kernel
+    # does not recognise such an archive at all and the VM does not boot.
     grep -q "CONFIG_RD_LZ4=y" .config || (echo "ERROR: CONFIG_RD_LZ4 not enabled (the lz4 initramfs cannot be unpacked)!" ; exit 1)
 
     # The filesystems the base image and the guest's overlay are made of. ext4 is what
@@ -160,9 +158,8 @@ EOT
 # Output stage
 # ============================================
 #
-# Named vmlinux, which is what storage's lane already calls it and what the ELF is.
-# spinbox looks for spinbox-kernel-x86_64 (internal/paths/paths.go); hack/release installs
-# a symlink under that name so spinbox needs no change to consume this release.
+# Named vmlinux, which is what the ELF is. hack/release can add a second name beside it
+# for a consumer that resolves the kernel differently; see COMPAT_KERNEL_NAME there.
 FROM scratch AS kernel
 COPY --from=kernel-build /build/vmlinux /vmlinux
 COPY --from=kernel-build /build/kernel-config /kernel-config

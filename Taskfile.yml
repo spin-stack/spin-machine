@@ -1,24 +1,27 @@
-# spin-machine — QEMU, the guest kernel and the base image, built and released together.
+# spin-machine — a virtual machine: QEMU, the guest kernel, the base image, and the
+# definition of the machine they make.
 #
-# The three things in this repository are what a VM is made of before any workload, and
-# they are exactly the set spinbox hashes to decide whether a VM may be restored from a
-# template (internal/host/vm/qemu/template.go). It hashes the QEMU binary, the kernel and
-# the initrd *by content*, so a release in which any of them moved is a different machine
-# and every template built against the previous one stops matching. That is correct and it
-# is why they ship as one tarball with one version: shipping them separately would let two
-# of the three drift and leave the third to notice.
+# The four are one thing. A VM restored from a template loads device and CPU state into a
+# machine that has to be the same shape as the one the template was frozen from, and
+# nothing checks that at run time. So `machine.Spec.Fingerprint` hashes the QEMU binary,
+# the kernel and the initrd by content together with the machine's shape, and a release in
+# which any of them moved has a different fingerprint by construction. That is why they
+# ship as one tarball with one version: shipped separately, two could drift and leave the
+# third to notice.
 #
 #   task build            everything, into _output/
 #   task shell            boot the machine and look around inside it
+#   task test             the machine definition
 #   task release          one tarball, one version
 #
-# What is in this file is the vars every part reads and the targets that cross all three.
+# What is in this file is the vars every part reads and the targets that cross all of them.
 # Each part's own targets live beside the thing they build — qemu/Taskfile.yml,
 # kernel/Taskfile.yml, image/Taskfile.yml — namespaced, so `task qemu:build` is next to
-# qemu/Dockerfile and nobody has to read three hundred lines to change one flag.
+# qemu/Dockerfile and nobody reads three hundred lines to change one flag.
 #
-# The initrd is not here. It carries vminitd, built from spinbox's source, and it is the
-# one guest artefact that belongs to the runtime rather than to the machine.
+# What is deliberately NOT here: the software that runs inside a guest. This repository
+# builds a machine and knows nothing about what boots on it. `cmd/spin-machine-init` is the
+# one exception and is a debugging tool, not a release artefact.
 
 version: '3'
 
@@ -72,9 +75,14 @@ vars:
   # `task qemu:image` needs no registry.
   QEMU_IMAGE: '{{.QEMU_IMAGE | default "spin-stack/spin-machine-qemu"}}'
 
-  # A sibling spinbox checkout, for the two things this repository cannot produce: the
-  # initrd, and the `spinbox run` that drives a VM.
-  SPINBOX_DIR: '{{.SPINBOX_DIR | default "../spinbox"}}'
+  # An external runtime to check a release against, and the guest init it boots. Both
+  # empty by default: nothing here needs them, and `task verify:consumer` says so and
+  # skips rather than pointing at a path that may not exist.
+  #
+  # CONSUMER_RUNTIME is a command that takes `--image <qcow2>` and a `--` command to run
+  # in the guest, and CONSUMER_INITRD the initrd it expects to boot.
+  CONSUMER_RUNTIME: '{{.CONSUMER_RUNTIME | default ""}}'
+  CONSUMER_INITRD: '{{.CONSUMER_INITRD | default ""}}'
   SUDO: '{{.SUDO | default "sudo"}}'
 
 tasks:
@@ -84,12 +92,53 @@ tasks:
       - task --list
 
   build:
-    desc: Build QEMU, the guest kernel and the base image into _output/
+    desc: Build QEMU, the guest kernel, the base image and the tools into _output/
     cmds:
       - task: qemu:build
       - task: kernel:build
       - task: image:build
+      - task: tools
       - cmd: echo "✓ build complete — {{.OUTPUT_DIR}}/"
+
+  tools:
+    desc: >-
+      Build spin-machine (starts a VM of this machine, prints its fingerprint) and the
+      debug initramfs `task shell` boots.
+    sources:
+      - machine/**/*.go
+      - cmd/**/*.go
+      - go.mod
+    generates:
+      - '{{.OUTPUT_DIR}}/bin/spin-machine'
+      - '{{.OUTPUT_DIR}}/debug-initramfs.cpio.gz'
+    cmds:
+      - mkdir -p {{.OUTPUT_DIR}}/bin
+      - CGO_ENABLED=0 go build -ldflags '-s -w' -o {{.OUTPUT_DIR}}/bin/spin-machine ./cmd/spin-machine
+      # The initramfs is one static binary called /init and nothing else. It mounts the
+      # four filesystems a userland cannot run without and hands the machine over — see
+      # cmd/spin-machine-init. It is a debugging artefact and is deliberately not in the
+      # release: what runs inside a guest is not this repository's business.
+      - |
+        set -euo pipefail
+        staging=$(mktemp -d); trap 'rm -rf "$staging"' EXIT
+        CGO_ENABLED=0 go build -ldflags '-s -w' -o "$staging/init" ./cmd/spin-machine-init
+        (cd "$staging" && find . -print0 | cpio --null -H newc -o --quiet) \
+          | gzip -1 > {{.OUTPUT_DIR}}/debug-initramfs.cpio.gz
+        echo "✓ {{.OUTPUT_DIR}}/debug-initramfs.cpio.gz"
+
+  test:
+    desc: Test the machine definition.
+    cmds:
+      - go test ./...
+
+  fingerprint:
+    desc: >-
+      Print this machine's identity: the hash of the QEMU binary, the kernel and the initrd
+      by content, together with the four arguments that decide the machine's shape. Two
+      machines with the same fingerprint can exchange templates.
+    deps: [tools]
+    cmds:
+      - '{{.OUTPUT_DIR}}/bin/spin-machine fingerprint --release {{.OUTPUT_DIR}} {{.CLI_ARGS}}'
 
   shell:
     desc: >-
@@ -112,60 +161,55 @@ tasks:
       - task: build
       - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_DIR}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" QEMU_VERSION="{{.QEMU_VERSION}}" KERNEL_VERSION="{{.KERNEL_VERSION}}" hack/release
 
-  verify:machine:
+  verify:consumer:
     desc: >-
-      Boot the whole release — this QEMU, this kernel, this base image, plus spinbox's
-      initrd — and run a command in the guest. The end-to-end assertion that a release is
-      one machine.
+      Check a release against an external runtime, if one is configured. Pass
+      CONSUMER_RUNTIME=<command> and CONSUMER_INITRD=<path>; with neither, this says so and
+      skips. Nothing in this repository needs it — it is the assertion that a release is
+      usable by something that boots guests.
     cmds:
       - task: release
       - |
         set -euo pipefail
+        if [ -z "{{.CONSUMER_RUNTIME}}" ]; then
+          echo "no CONSUMER_RUNTIME set — skipping. This repository builds a machine and"
+          echo "does not ship the software that boots on it; point this at a runtime to"
+          echo "check a release end to end:"
+          echo "  task verify:consumer CONSUMER_RUNTIME=<cmd> CONSUMER_INITRD=<path>"
+          exit 0
+        fi
+
         rel={{.OUTPUT_DIR}}/release/spin-machine-{{.VERSION}}-linux-{{.KERNEL_ARCH}}
         test -f "$rel.tar.gz" || { echo "no release tarball at $rel.tar.gz" >&2; exit 1; }
 
         # Removed with sudo: the VM below runs as root and leaves its state and log
         # directories owned by root inside $stage, so a plain rm -rf leaves them and the
-        # trap prints two permission errors after a run that succeeded.
+        # trap prints permission errors after a run that succeeded.
         stage=$(mktemp -d); trap '{{.SUDO}} rm -rf "$stage"' EXIT
         tar -xzf "$rel.tar.gz" -C "$stage"
         share="$stage/$(basename "$rel")/usr/share/spin-stack"
 
-        # The initrd is the one guest artefact this repository does not build: it carries
-        # vminitd, from spinbox's source, and belongs to the runtime rather than to the
-        # machine. So a release is not bootable on its own, by design, and this is where
-        # the two halves are put together.
-        initrd={{.SPINBOX_DIR}}/{{.OUTPUT_DIR}}/spinbox-initrd
-        test -f "$initrd" || {
-          echo "no initrd at $initrd — run \`task build:initrd\` in {{.SPINBOX_DIR}}" >&2; exit 1; }
-        cp "$initrd" "$share/kernel/"
+        # A release is not bootable on its own, by design: the guest's init belongs to
+        # whoever runs guests. This is where the two halves are put together.
+        if [ -n "{{.CONSUMER_INITRD}}" ]; then
+          test -f "{{.CONSUMER_INITRD}}" || {
+            echo "no initrd at {{.CONSUMER_INITRD}}" >&2; exit 1; }
+          cp "{{.CONSUMER_INITRD}}" "$share/kernel/"
+        fi
 
-        # SPINBOX_CONFIG points spinbox at the unpacked release instead of at whatever is
-        # installed on this host, so this proves the tarball and not the machine.
-        mkdir -p "$stage/state" "$stage/log"
-        cat > "$stage/config.json" <<CFG
-        {"paths":{"share_dir":"$share","state_dir":"$stage/state","log_dir":"$stage/log",
-                  "qemu_path":"$share/bin/qemu-system-x86_64","qemu_share_path":"$share/qemu"}}
-        CFG
-        sed -i 's/^        //' "$stage/config.json"
-
-        bin=$(mktemp -d)/spinbox
-        (cd {{.SPINBOX_DIR}} && CGO_ENABLED=0 GOOS=linux \
-            go build -tags 'osusergo netgo static_build no_grpc' -o "$bin" ./cmd/spinbox)
-
-        # No --qemu-img. That is the assertion: the release ships one beside the QEMU
-        # binary, so spinbox finds it without being told, and the flag it had to grow
-        # because spinbox's own build was --disable-tools can go.
+        # The base must come back byte-identical: every VM maps it read-only through a
+        # backing chain and many share one, so a runtime that opens it read-write
+        # invalidates every overlay in existence.
         img={{.ROOT_DIR}}/{{.OUTPUT_DIR}}/base.qcow2
         before=$(sha256sum "$img" | cut -d' ' -f1)
-        out=$({{.SUDO}} SPINBOX_CONFIG="$stage/config.json" "$bin" run \
-                --image "$img" --memory 1024 -- /bin/sh -c "echo it works" 2>/dev/null)
+        out=$({{.SUDO}} SPIN_MACHINE_SHARE="$share" {{.CONSUMER_RUNTIME}} \
+                --image "$img" -- /bin/sh -c "echo it works" 2>/dev/null)
         after=$(sha256sum "$img" | cut -d' ' -f1)
 
         [ "$out" = "it works" ] || { echo "the guest printed: $out" >&2; exit 1; }
         [ "$before" = "$after" ] || {
           echo "the base image changed during a boot: $before -> $after" >&2; exit 1; }
-        echo "OK: the release boots as one machine, finds its own qemu-img, and leaves the base untouched"
+        echo "OK: the release boots under {{.CONSUMER_RUNTIME}} and leaves the base untouched"
 
   clean:
     desc: Remove build output. Leaves the caches; use clean:cache for those.

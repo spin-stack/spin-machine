@@ -1,39 +1,34 @@
-# The QEMU every spin-stack guest runs on. One build, for every consumer.
+# The QEMU this machine runs on. One build, for every consumer.
 #
-# spinbox and storage each had a Dockerfile.qemu pinning 11.1.1, building
-# --target-list=x86_64-softmmu against a device allowlist that was byte-for-byte the same
-# list. They differed in flags, and in nothing else. Two builds of the same emulator is not
-# duplication that costs disk: spinbox decides whether a VM may be restored from a template
-# by hashing the QEMU binary's *contents* (internal/host/vm/qemu/template.go), so two
-# binaries are two machines, and a template built on one is undefined on the other.
+# One and not several, and the reason is not disk. `machine.Spec.Fingerprint` hashes this
+# binary's *contents* into the identity that decides whether a VM may restore from a
+# template, so two binaries are two machines and a template taken on one is undefined on
+# the other. A second build of "the same" QEMU with one flag moved is a second machine that
+# looks identical in a file listing.
 #
-# The flags here are the union of the two lists. Where they disagreed:
+# The flags, and the ones worth explaining:
 #
-#   --enable-tools   storage needed qemu-img (its Agent shells out to it for every qcow2
-#                    chain) and spinbox's build did not ship one, which is why
-#                    `spinbox run` had to grow a --qemu-img flag pointing at storage's
-#                    build. Enabled: qemu-img ships, and that flag can go.
+#   --enable-tools   ships qemu-img, which is not a convenience: a copy-on-write overlay
+#                    over the base image is created by running it, so a caller with the
+#                    emulator and no qemu-img cannot give a container somewhere to write.
 #
-#                    qemu-nbd comes out of the same --enable-tools and is deliberately
-#                    not shipped: nothing in either project runs one. It exports a disk
-#                    over NBD, which is a way of reaching an image this stack does not
-#                    use — every qcow2 here is opened by QEMU itself or by qemu-img.
+#                    qemu-nbd comes out of the same flag and is deliberately not shipped:
+#                    it exports a disk over NBD, which is a way of reaching an image
+#                    nothing here uses — every qcow2 is opened by QEMU itself or by
+#                    qemu-img.
 #   TCG              built twice, below. A host serving tenants must refuse to run without
-#                    /dev/kvm rather than emulate; CI has no /dev/kvm and must emulate.
-#   vmdk             storage disables it. spinbox cannot yet: containerd's erofs
-#                    snapshotter hands it `merged.vmdk` and --disable-vmdk turns every VM
-#                    into `Unknown driver 'vmdk'` at start-up. Kept until the qcow2 base
-#                    image (image/) replaces that path — then add --disable-vmdk here, and
-#                    know that doing so invalidates every template in the fleet.
+#                    /dev/kvm rather than emulate; a CI runner has no /dev/kvm and must.
+#   vmdk             kept, and it is the one format held open for a consumer that has not
+#                    moved to the qcow2 base image: a caller still handing this binary a
+#                    .vmdk gets `Unknown driver 'vmdk'` at start-up without it. Dropping it
+#                    is a one-line change here, and it invalidates every template in
+#                    existence — as any change to this binary does.
 #
-# Two flags the briefing for this repository listed as storage's and that storage does not
-# in fact pass, checked against storage/Dockerfile.qemu on 2026-09-07:
-#   --enable-vhost-user-blk-server   storage disables it; the vhost-user data path went
-#                                    with its local block engine.
-#   --without-default-features       storage's own comment rejects it: every device q35
-#                                    needs would then be ours to enumerate, and a missing
-#                                    one is a link error or an unusable machine.
-# Neither is enabled here.
+# Two flags that look like obvious wins and are not:
+#   --enable-vhost-user-blk-server   a device nothing asks for; a guest here gets an
+#                                    ordinary virtio-blk-pci disk over a qcow2 QEMU opens.
+#   --without-default-features       then every device q35 needs is ours to enumerate, and
+#                                    a missing one is a link error or an unusable machine.
 
 FROM ubuntu:26.04 AS builder
 
@@ -197,7 +192,7 @@ ENV QEMU_FLAGS="\
 #   fdt                          — MICROVM depends on it (hw/i386/Kconfig).
 #   CONFIG_CXL                   — not offered as optional by upstream; turning it off
 #                                  broke the 11.0.2 link (pxb_cxl_realize, acpi_build).
-#   --disable-vmdk               — see the header. spinbox still opens merged.vmdk.
+#   --disable-vmdk               — see the header; a consumer may still hand this a .vmdk.
 
 # The guard is config.status and not Makefile, and the directory is emptied before a
 # configure runs. configure writes the Makefile early and config.status only once it has
@@ -269,8 +264,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
     done
 
 # Fail the build here, not in a lane three phases later, if this configuration did not
-# produce the devices, the tools and the two accelerators this release ships. The union of
-# what spinbox's and storage's builds each asserted, because the artefact is now one.
+# produce the devices, the tools and the two accelerators this release ships.
 #
 # The last two lines are the split itself, and neither half is visible in a file listing:
 # the binary a tenant's host runs must refuse to emulate, and CI's must be able to. Getting
@@ -291,8 +285,8 @@ RUN Q=/opt/qemu/bin/qemu-system-x86_64 && \
     ! $Q -accel help | grep -qx tcg && \
     /opt/qemu-tcg/bin/qemu-system-x86_64 -accel help | grep -qx tcg
 
-# qcow2 is the base image's format and the overlay's, and vmdk is the format the erofs
-# snapshotter still hands spinbox. Both are configure flags with no device to hold them up,
+# qcow2 is the base image's format and the overlay's, and vmdk is the format a consumer
+# may still hand this. Both are configure flags with no device to hold them up,
 # so a build that dropped one produces a VM that dies at start-up with
 # `Unknown driver` — after the machine is created, in a lane a long way from here.
 #
@@ -320,7 +314,7 @@ RUN file /opt/qemu/bin/qemu-system-x86_64 && \
 # The binaries are dynamically linked against this build image's libraries, so an extracted
 # tree does not run on a bare runner (`liburing.so.2: cannot open shared object file`).
 # This stage is the answer to that for consumers who can run a container; the extract stage
-# below is for those who cannot, and storage's `task qemu:tools` bridges the two.
+# below is for those who cannot.
 FROM ubuntu:26.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive

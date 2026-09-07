@@ -1,9 +1,8 @@
 # The device set QEMU is built with, passed as `--with-devices-x86_64=spin`.
 #
-# This file was byte-for-byte the same list in spinbox (build/qemu/devices.mak) and in
-# storage (hack/qemu-devices.mak) — the comments differed, every CONFIG_ line agreed — and
-# this is now the only copy. A device set is part of what a machine *is*: two of them is
-# two machines that a template cannot be moved between, silently.
+# There is one copy of this list, and there has to be. A device set is part of what a
+# machine *is*: two of them is two machines that a template cannot be moved between, and
+# nothing says so at run time.
 #
 # A file and not a `sed`/`echo >>` over the source tree, because that tree lives in a
 # BuildKit cache mount keyed by version alone: an edit made there survives every later
@@ -19,8 +18,8 @@
 # accident, a driver its kernel has to carry, and for a NIC an option ROM QEMU refuses to
 # start without.
 #
-# What the VM actually gets is in spinbox's internal/host/vm/qemu/qemu_command.go, and it
-# is all virtio: virtio-blk-pci, virtio-net-pci, virtio-rng-pci, vhost-vsock-pci and virtconsole,
+# What a VM actually gets is in the machine package (machine/machine.go), and it is all
+# virtio: virtio-blk-pci, virtio-net-pci, virtio-rng-pci, vhost-vsock-pci and virtconsole,
 # on a q35 started with -nodefaults. Everything below follows from that one list.
 #
 # Only symbols upstream marks optional are touched — the ones carrying
@@ -59,7 +58,7 @@ CONFIG_CAN_PCI=n
 CONFIG_CAN_CTUCANFD=n
 CONFIG_CAN_CTUCANFD_PCI=n
 
-# --- storage: one disk ------------------------------------------------------------------
+# --- disks: one controller ---------------------------------------------------------------
 # (The *formats* that disk carries are a configure flag and not a device — see the vmdk
 # note in qemu/Dockerfile, which is the one flag still held open for a consumer.)
 # virtio-blk, which is what every mount becomes (internal/shim/platform/mounts). The HBAs
@@ -136,9 +135,9 @@ CONFIG_IVSHMEM_DEVICE=n
 #   PCI_BRIDGE, PCIE_PORT, XIO3130, IOH3420, I82801B11 — a q35's root ports.
 #   VIRTIO_PCI, VIRTIO_BLK, VIRTIO_NET, VIRTIO_RNG, VIRTIO_SERIAL, VHOST_VSOCK,
 #   VIRTIO_BALLOON, VIRTIO_MEM, DIMM — the devices this VM is actually given, plus the
-#   memory hotplug path (spinbox's internal/shim/memhotplug).
+#   memory hotplug path.
 #   VIRTIO_SCSI — kept for a caller that wants more disks than a q35 has PCI slots; it is
-#                 storage's reason and it costs one device model.
+#                 one device model, and PCI slots run out before disks do.
 #   VTD, AMD_IOMMU — VFIO on q35 needs them.
 #   HPET, PVPANIC — the machine line says hpet=off, which is a property of the device
 #                   being there; pvpanic is how a guest reports a panic.

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Runs inside the image tree, after the packages and mkosi.extra are in place. This is the
-# tail of spinbox's images/sandbox/Dockerfile — the three scripts, then `COPY rootfs/ /` —
-# in the same order, which is load-bearing and not stylistic (see the copy below).
+# Runs inside the image tree, after the packages and mkosi.extra are in place: the three
+# scripts, then the configuration files. That order is load-bearing and not stylistic — see
+# the copy below.
 #
-# The scripts themselves are unmodified copies. They are the record of what was measured —
-# optimize-systemd.sh names the milliseconds each mask saved — and rewriting them into
-# mkosi's idiom would lose that and gain nothing.
+# The scripts are unmodified copies of ones that came from a container image build. They
+# are the record of what was measured — optimize-systemd.sh names the milliseconds each
+# mask saved — and rewriting them into mkosi's idiom would lose that and gain nothing.
 set -euo pipefail
 
 # mkosi runs scripts with a PATH of its own choosing, and it does not include
@@ -25,7 +25,7 @@ lib=/usr/local/lib/spin-base
 # that package's conffile. Present beforehand, it is a file dpkg does not know about, so
 # `apt install` stops at a conffile prompt with no tty and the whole build fails at
 # `end of file on stdin at conffile prompt` (measured 2026-09-07). The Dockerfile had this
-# ordering for free by putting `COPY rootfs/ /` last.
+# ordering for free by copying the configuration in as its last layer.
 #
 # The symlinks optimize-systemd.sh makes into sockets.target.wants point at two of these
 # files and are dangling until this runs, which is exactly how the Dockerfile behaved.
