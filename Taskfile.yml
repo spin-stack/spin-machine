@@ -46,6 +46,17 @@ vars:
   ROOT_DIR:
     sh: pwd
   OUTPUT_DIR: '{{.OUTPUT_DIR | default "_output"}}'
+  # The same directory, absolute, resolved once.
+  #
+  # Everything handed to `docker -v`, to a VM, or to a checksum has to be an absolute path,
+  # and `{{.OUTPUT_ABS}}` is only one when OUTPUT_DIR is relative. With
+  # OUTPUT_DIR=/tmp/build it produced <repository>/tmp/build, so QEMU and the kernel were
+  # extracted to /tmp/build and the base image was written somewhere else entirely — a
+  # build that succeeds and leaves half its output where nothing looks for it.
+  #
+  # -m so an output directory that does not exist yet still resolves.
+  OUTPUT_ABS:
+    sh: realpath -m "{{.OUTPUT_DIR}}"
 
   # One version for all three artefacts. See the header.
   VERSION:
@@ -98,7 +109,7 @@ tasks:
       - task: kernel:build
       - task: image:build
       - task: tools
-      - cmd: echo "✓ build complete — {{.OUTPUT_DIR}}/"
+      - cmd: echo "✓ build complete — {{.OUTPUT_ABS}}/"
 
   tools:
     desc: >-
@@ -109,11 +120,11 @@ tasks:
       - cmd/**/*.go
       - go.mod
     generates:
-      - '{{.OUTPUT_DIR}}/bin/spin-machine'
-      - '{{.OUTPUT_DIR}}/debug-initramfs.cpio.gz'
+      - '{{.OUTPUT_ABS}}/bin/spin-machine'
+      - '{{.OUTPUT_ABS}}/debug-initramfs.cpio.gz'
     cmds:
-      - mkdir -p {{.OUTPUT_DIR}}/bin
-      - CGO_ENABLED=0 go build -ldflags '-s -w' -o {{.OUTPUT_DIR}}/bin/spin-machine ./cmd/spin-machine
+      - mkdir -p {{.OUTPUT_ABS}}/bin
+      - CGO_ENABLED=0 go build -ldflags '-s -w' -o {{.OUTPUT_ABS}}/bin/spin-machine ./cmd/spin-machine
       # The initramfs is one static binary called /init and nothing else. It mounts the
       # four filesystems a userland cannot run without and hands the machine over — see
       # cmd/spin-machine-init. It is a debugging artefact and is deliberately not in the
@@ -123,8 +134,8 @@ tasks:
         staging=$(mktemp -d); trap 'rm -rf "$staging"' EXIT
         CGO_ENABLED=0 go build -ldflags '-s -w' -o "$staging/init" ./cmd/spin-machine-init
         (cd "$staging" && find . -print0 | cpio --null -H newc -o --quiet) \
-          | gzip -1 > {{.OUTPUT_DIR}}/debug-initramfs.cpio.gz
-        echo "✓ {{.OUTPUT_DIR}}/debug-initramfs.cpio.gz"
+          | gzip -1 > {{.OUTPUT_ABS}}/debug-initramfs.cpio.gz
+        echo "✓ {{.OUTPUT_ABS}}/debug-initramfs.cpio.gz"
 
   test:
     desc: Test the machine definition.
@@ -164,7 +175,7 @@ tasks:
       machines with the same fingerprint can exchange templates.
     deps: [tools]
     cmds:
-      - '{{.OUTPUT_DIR}}/bin/spin-machine fingerprint --release {{.OUTPUT_DIR}} {{.CLI_ARGS}}'
+      - '{{.OUTPUT_ABS}}/bin/spin-machine fingerprint --release {{.OUTPUT_ABS}} {{.CLI_ARGS}}'
 
   shell:
     desc: >-
@@ -185,7 +196,7 @@ tasks:
     desc: Build everything and pack one versioned tarball.
     cmds:
       - task: build
-      - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_DIR}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" QEMU_VERSION="{{.QEMU_VERSION}}" KERNEL_VERSION="{{.KERNEL_VERSION}}" hack/release
+      - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_ABS}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" QEMU_VERSION="{{.QEMU_VERSION}}" KERNEL_VERSION="{{.KERNEL_VERSION}}" hack/release
 
   verify:consumer:
     desc: >-
@@ -205,7 +216,7 @@ tasks:
           exit 0
         fi
 
-        rel={{.OUTPUT_DIR}}/release/spin-machine-{{.VERSION}}-linux-{{.KERNEL_ARCH}}
+        rel={{.OUTPUT_ABS}}/release/spin-machine-{{.VERSION}}-linux-{{.KERNEL_ARCH}}
         test -f "$rel.tar.gz" || { echo "no release tarball at $rel.tar.gz" >&2; exit 1; }
 
         # Removed with sudo: the VM below runs as root and leaves its state and log
@@ -223,24 +234,52 @@ tasks:
           cp "{{.CONSUMER_INITRD}}" "$share/kernel/"
         fi
 
-        # The base must come back byte-identical: every VM maps it read-only through a
-        # backing chain and many share one, so a runtime that opens it read-write
-        # invalidates every overlay in existence.
-        img={{.ROOT_DIR}}/{{.OUTPUT_DIR}}/base.qcow2
+        # The image inside the tarball, and not the one in _output. They are the same
+        # file today and the point of this task is the day they are not: a release is
+        # verified by booting what it ships, or it is not verified.
+        img="$share/image/base.qcow2"
+        test -f "$img" || { echo "the tarball carries no image at $img" >&2; exit 1; }
+
+        # Three questions, because "it printed something" answers none of them.
+        #
+        # One: does a write inside the guest reach the disk and come back? A boot that
+        # cannot write has a read-only overlay or no overlay at all, and prints exactly
+        # what a working one prints.
+        marker="spin-machine-$(date -u +%s)-$$"
         before=$(sha256sum "$img" | cut -d' ' -f1)
         out=$({{.SUDO}} SPIN_MACHINE_SHARE="$share" {{.CONSUMER_RUNTIME}} \
-                --image "$img" -- /bin/sh -c "echo it works" 2>/dev/null)
-        after=$(sha256sum "$img" | cut -d' ' -f1)
+                --image "$img" -- /bin/sh -c \
+                "echo $marker > /root/marker; sync; cat /root/marker" 2>/dev/null)
+        [ "$out" = "$marker" ] || {
+          echo "the guest could not write and read back a file; it printed: $out" >&2
+          exit 1; }
 
-        [ "$out" = "it works" ] || { echo "the guest printed: $out" >&2; exit 1; }
+        # Two: is that write private to the VM that made it? Every VM maps this one file
+        # through a backing chain, so a write that leaked out of an overlay is a container
+        # reading another container's disk.
+        leaked=$({{.SUDO}} SPIN_MACHINE_SHARE="$share" {{.CONSUMER_RUNTIME}} \
+                   --image "$img" -- /bin/sh -c \
+                   "cat /root/marker 2>/dev/null || echo absent" 2>/dev/null)
+        [ "$leaked" = "absent" ] || {
+          echo "a second VM saw the first one's write: $leaked" >&2
+          echo "the overlays are not isolated, or the base image was written to." >&2
+          exit 1; }
+
+        # Three: is the base itself untouched? It is the check that costs nothing and
+        # catches the worst failure — a base that moved under every overlay built on it.
+        after=$(sha256sum "$img" | cut -d' ' -f1)
         [ "$before" = "$after" ] || {
-          echo "the base image changed during a boot: $before -> $after" >&2; exit 1; }
-        echo "OK: the release boots under {{.CONSUMER_RUNTIME}} and leaves the base untouched"
+          echo "the base image changed during a boot: $before -> $after" >&2
+          echo "every overlay in existence is now built on a file that moved." >&2
+          exit 1; }
+
+        echo "OK: the packaged image boots under {{.CONSUMER_RUNTIME}}; writes land in the"
+        echo "    overlay, do not leak to the next VM, and leave the base byte-identical"
 
   clean:
     desc: Remove build output. Leaves the caches; use clean:cache for those.
     cmds:
-      - rm -rf {{.OUTPUT_DIR}}
+      - rm -rf {{.OUTPUT_ABS}}
 
   clean:cache:
     desc: Remove the BuildKit and mkosi caches. A full rebuild after this is hours.

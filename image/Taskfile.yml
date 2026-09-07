@@ -9,7 +9,7 @@ tasks:
     desc: Build base.qcow2 (Ubuntu 26.04 userland, ext4, partitionless) into _output/.
     cmds:
       - task: builder
-      - mkdir -p {{.OUTPUT_DIR}} {{.MKOSI_CACHE_DIR}}
+      - mkdir -p {{.OUTPUT_ABS}} {{.MKOSI_CACHE_DIR}}
       # `docker run` and not `docker buildx build`, and the reason is in image/Dockerfile:
       # mkosi assembles a root filesystem by unsharing a user and mount namespace and
       # BuildKit forbids that. The flags below are exactly what it needs and nothing more —
@@ -19,7 +19,7 @@ tasks:
           --security-opt seccomp=unconfined \
           --security-opt apparmor=unconfined \
           --cap-add SYS_ADMIN \
-          -v {{.ROOT_DIR}}/{{.OUTPUT_DIR}}:/out \
+          -v {{.OUTPUT_ABS}}:/out \
           -v {{.MKOSI_CACHE_DIR}}:/cache \
           {{.IMAGE_BUILDER_TAG}}
 
@@ -57,7 +57,7 @@ tasks:
       # here first.
       - |
         set -euo pipefail
-        out={{.ROOT_DIR}}/{{.OUTPUT_DIR}}
+        out={{.OUTPUT_ABS}}
         for f in "$out/bin/spin-machine" "$out/bin/qemu-system-x86_64" "$out/vmlinux" \
                  "$out/base.qcow2" "$out/debug-initramfs.cpio.gz"; do
           test -f "$f" || { echo "missing $f — run: task build" >&2; exit 1; }

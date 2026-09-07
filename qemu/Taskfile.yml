@@ -13,8 +13,8 @@ tasks:
       # a firmware blob this build no longer produces stays on disk, indistinguishable from
       # one it does. That is how a 331 MB firmware tree outlived the build that stopped
       # shipping it, and how a qemu-nbd would outlive the decision to stop shipping one.
-      - rm -rf {{.OUTPUT_DIR}}/bin/qemu-* {{.OUTPUT_DIR}}/share/spin-stack/qemu
-      - mkdir -p {{.OUTPUT_DIR}}
+      - rm -rf {{.OUTPUT_ABS}}/bin/qemu-* {{.OUTPUT_ABS}}/share/spin-stack/qemu
+      - mkdir -p {{.OUTPUT_ABS}}
       - |
         docker buildx build \
           --file qemu/Dockerfile \
@@ -24,7 +24,7 @@ tasks:
           --cache-to {{.QEMU_CACHE_TO}} \
           --build-arg QEMU_VERSION={{.QEMU_VERSION}} \
           --build-arg JOBS={{.QEMU_JOBS}} \
-          --output type=local,dest={{.OUTPUT_DIR}} \
+          --output type=local,dest={{.OUTPUT_ABS}} \
           .
       - task: verify
 
@@ -38,8 +38,8 @@ tasks:
       - |
         set -euo pipefail
         for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
-          test -x {{.OUTPUT_DIR}}/bin/$b || {
-            echo "missing {{.OUTPUT_DIR}}/bin/$b — run: task qemu:build" >&2; exit 1; }
+          test -x {{.OUTPUT_ABS}}/bin/$b || {
+            echo "missing {{.OUTPUT_ABS}}/bin/$b — run: task qemu:build" >&2; exit 1; }
         done
         # qemu-img is not a convenience: a container's writable layer is a qcow2 overlay
         # created by running it, so a release with the emulator and without it cannot give
@@ -48,7 +48,7 @@ tasks:
         # efi-virtio.rom is the option ROM of the one NIC this build keeps; a VM given a
         # virtio-net-pci without it does not start.
         for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
-          test -f {{.OUTPUT_DIR}}/share/spin-stack/qemu/$f || {
+          test -f {{.OUTPUT_ABS}}/share/spin-stack/qemu/$f || {
             echo "missing firmware $f — run: task qemu:build" >&2; exit 1; }
         done
         echo "OK: both qemu-system binaries, qemu-img and five firmware files"

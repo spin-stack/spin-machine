@@ -13,7 +13,7 @@ tasks:
   build:
     desc: Build the guest kernel (vmlinux, PVH, stripped) into _output/.
     cmds:
-      - mkdir -p {{.OUTPUT_DIR}}
+      - mkdir -p {{.OUTPUT_ABS}}
       - |
         docker buildx build \
           --file kernel/Dockerfile \
@@ -24,7 +24,7 @@ tasks:
           --build-arg KERNEL_VERSION={{.KERNEL_VERSION}} \
           --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
-          --output type=local,dest={{.OUTPUT_DIR}} \
+          --output type=local,dest={{.OUTPUT_ABS}} \
           .
       - task: verify
 
@@ -33,7 +33,7 @@ tasks:
     cmds:
       - |
         set -euo pipefail
-        k={{.OUTPUT_DIR}}/vmlinux
+        k={{.OUTPUT_ABS}}/vmlinux
         test -f "$k" || { echo "no kernel at $k — run: task kernel:build" >&2; exit 1; }
         # The PVH notes are the entry point: there is no bootloader and no UEFI here, and
         # QEMU enters this ELF through pvh.bin using them. The build strips the symbol
@@ -58,6 +58,13 @@ tasks:
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
           --output type=docker,name=spin-machine-menuconfig \
           .
+      # KCONFIG_CONFIG is the whole mechanism: kconfig reads and writes that path, so
+      # menuconfig opens the repository's config and saves straight back onto it.
+      #
+      # There is no `cp .config` afterwards, and there must not be. That copy was here, and
+      # it copied the *container's* /usr/src/linux/.config — the olddefconfig output the
+      # image was built with — over the file menuconfig had just written. Every edit was
+      # discarded, and the task exited 0 while doing it.
       - |
         docker run --rm -it \
           -v {{.ROOT_DIR}}/kernel:/config \
@@ -65,4 +72,4 @@ tasks:
           -e KCONFIG_CONFIG=/config/config-{{.KERNEL_VERSION}}-{{.KERNEL_ARCH}} \
           -e TERM=${TERM:-xterm-256color} \
           spin-machine-menuconfig \
-          bash -c "make ARCH={{.KERNEL_ARCH}} menuconfig && cp .config /config/config-{{.KERNEL_VERSION}}-{{.KERNEL_ARCH}}"
+          make ARCH={{.KERNEL_ARCH}} menuconfig

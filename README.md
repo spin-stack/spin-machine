@@ -232,6 +232,12 @@ kernel are tens of minutes each and the base image is ~1.5 GB of apt: `qemu.yml`
 that lost a device, a kernel that lost its PVH notes, or an image that grew an identity
 fails in the workflow that produced it.
 
+`verify:consumer` is the end-to-end check and is opt-in, because this repository ships no
+runtime to boot with: pass `CONSUMER_RUNTIME` and `CONSUMER_INITRD` and it unpacks the
+tarball and asks three questions of **the image inside it** — does a write reach the disk
+and come back, is that write invisible to the next VM, and is the base byte-identical
+afterwards. "It printed something" answers none of the three.
+
 `release.yml` builds all three and packs one tarball. Versions are **CalVer**,
 `v20260909.01`: a release of this repository is the machine as it stood on a date. There is
 no API here to promise compatibility about, and the one thing a version could promise —
