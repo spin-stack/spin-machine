@@ -30,6 +30,19 @@ RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential libncurses-dev flex bison libssl-dev libelf-dev bc cpio git \
         wget xz-utils curl lz4 ca-certificates file \
+        # The four that CONFIG_DEBUG_INFO_BTF brings with it, and none of them is obvious
+        # from the symbol's name:
+        #
+        #   dwarves      provides pahole, which turns the DWARF the compiler emits into the
+        #                .BTF section. Missing, the build fails near the end with
+        #                `BTF: .tmp_vmlinux.btf: pahole (pahole) is not available`.
+        #   python3      BTF makes the kernel build tools/bpf/resolve_btfids, which builds
+        #                a copy of libbpf, which generates bpf_helper_defs.h with a python
+        #                script. Missing, that fails as exit 127 — a "command not found"
+        #                three Makefiles deep, naming a header.
+        #   zlib1g-dev,
+        #   pkg-config   what that same libbpf links and finds itself with.
+        dwarves python3 zlib1g-dev pkg-config \
         # apparmor and procps are not kernel build dependencies: they are what
         # check-docker-config.sh below shells out to. Without apparmor_parser it reports
         # "apparmor: enabled, but apparmor_parser missing" and exits non-zero, failing a
@@ -99,6 +112,29 @@ RUN <<EOT
     # Without it -kernel has nothing to enter and the VM does not start.
     grep -q "CONFIG_PVH=y" .config || (echo "ERROR: CONFIG_PVH not enabled (QEMU has no entry point into this kernel)!" ; exit 1)
 
+    # BPF. Each of these is something whose absence looks like a broken program rather than
+    # a missing kernel option, which is why they are checked rather than trusted.
+    #
+    #   BPF_JIT         without it every program runs in the interpreter — an order of
+    #                   magnitude slower, and `bpf_jit_enable` is simply not there.
+    #   DEBUG_INFO_BTF  the one that matters most. No BTF means no /sys/kernel/btf/vmlinux,
+    #                   so no `bpftool btf dump`, no vmlinux.h to generate, and no CO-RE
+    #                   relocations: a program built against one kernel will not load on
+    #                   another, which is the entire point of modern BPF.
+    #   FUNCTION_TRACER with the architecture's direct-call support it is what makes
+    #                   fentry/fexit attachment possible; without it those programs fail to
+    #                   attach with a message about the target.
+    grep -q "CONFIG_BPF_JIT=y" .config || (echo "ERROR: CONFIG_BPF_JIT not enabled (every BPF program would run interpreted)!" ; exit 1)
+    grep -q "CONFIG_DEBUG_INFO_BTF=y" .config || (echo "ERROR: CONFIG_DEBUG_INFO_BTF not enabled (no BTF means no CO-RE)!" ; exit 1)
+    grep -q "CONFIG_FUNCTION_TRACER=y" .config || (echo "ERROR: CONFIG_FUNCTION_TRACER not enabled (fentry/fexit cannot attach)!" ; exit 1)
+    # BPF_LSM is deliberately NOT enabled, and this is where the decision is written down
+    # so it is not made again by accident. It depends on CONFIG_SECURITY, which is off here
+    # and would put LSM hooks on paths this kernel is tuned for boot time on — and what it
+    # buys is the ability to enforce access policy *inside* a VM that holds one workload,
+    # which is a boundary drawn inside the boundary this machine already is. Somebody who
+    # needs to develop BPF LSM programs turns on CONFIG_SECURITY and this, deliberately,
+    # with a measurement, and accepts that it is a different machine.
+
     # Boot performance: the RAID6 PQ benchmark probes all SIMD implementations at boot to
     # pick the fastest. It must stay disabled. (RAID6_PQ itself is not selected today, so
     # the symbol is normally absent.)
@@ -152,6 +188,15 @@ RUN <<EOT
     # a VM that does not start.
     readelf -n /build/vmlinux | grep -qi 'XenVersion\|Xen' || {
         echo "ERROR: the stripped vmlinux carries no Xen PVH notes — QEMU cannot enter it"; exit 1; }
+
+    # And .BTF, for the same reason and with a longer fuse. `strip -s` removes the symbol
+    # table and the DWARF the compiler emitted — which is the point, since neither is read
+    # at run time — but .BTF is an allocated section the *guest* reads back out of its own
+    # image and publishes at /sys/kernel/btf/vmlinux. Losing it here would not break the
+    # build or the boot; it would break every CO-RE program somebody writes next month.
+    readelf -SW /build/vmlinux | grep -q '\.BTF' || {
+        echo "ERROR: the stripped vmlinux has no .BTF section — CO-RE would not work in the guest"; exit 1; }
+    echo "BTF: $(readelf -SW /build/vmlinux | awk '$2 == ".BTF" {print strtonum("0x" $6)}') bytes"
 EOT
 
 # ============================================

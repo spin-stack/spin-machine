@@ -1,0 +1,41 @@
+# SSH host keys, generated on this machine rather than shipped with the image.
+#
+# The image carries none, deliberately: a host key is identity, and an image many VMs boot
+# read-only must not hand the same one to all of them — every VM would present the same
+# fingerprint, and any of them could impersonate the rest.
+#
+# This is not sshd-keygen.service, which the distribution ships and which does not run here.
+# That unit carries ConditionFirstBoot=yes, and by the time ssh.service asks sshd to
+# validate its configuration the condition has not fired, so sshd finds no keys, exits 1,
+# and systemd retries five times before giving up:
+#
+#   ssh.service: Start request repeated too quickly.
+#
+# The condition is dropped because for this machine every boot IS a first boot: the root
+# filesystem is a fresh qcow2 overlay over a shared read-only base, so keys generated here
+# live exactly as long as the VM does.
+
+[Unit]
+Description=Generate SSH host keys for this VM
+# Ordered before the daemon and pulled in by it, and deliberately NOT by ssh.socket.
+# Hanging it off the socket puts it inside sockets.target, which is ordered before
+# basic.target, which a service is ordered after by default — and systemd breaks the loop
+# by dropping an edge at random:
+#
+#   basic.target: Found ordering cycle: sockets.target/start after ssh.socket/start
+#   after spin-machine-sshd-keygen.service/start after basic.target/start
+#
+# Socket activation still works: the socket starts ssh.service, and ssh.service waits for
+# this.
+Before=ssh.service sshd.service
+ConditionPathExists=/usr/bin/ssh-keygen
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# -A generates one key of each type sshd expects, and skips any that already exist — so a
+# VM whose provisioner placed its own keys keeps them.
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=ssh.service sshd.service

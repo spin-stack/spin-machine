@@ -77,7 +77,7 @@ tasks:
         echo "booting {{.INIT}} in the base image — {{.MEMORY}} MiB, {{.CPUS}} vCPU"
         echo "  writes go to a throwaway overlay; the base is read-only and checked after"
         case "{{.INIT}}" in
-          */init) echo "  systemd. log in as root, password spinbox" ;;
+          */init) echo "  systemd; the console autologins as root (the image carries no password)" ;;
         esac
         echo "  leave with: 'poweroff -f', or Ctrl-A then X"
         echo

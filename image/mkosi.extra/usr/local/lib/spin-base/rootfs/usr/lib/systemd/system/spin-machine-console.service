@@ -32,7 +32,11 @@ IgnoreOnIsolate=yes
 # The leading "-" keeps a port that cannot be opened from being reported as a crash;
 # --noclear leaves the boot messages on screen, and --keep-baud takes the line as QEMU set
 # it rather than renegotiating it.
-ExecStart=-/usr/sbin/agetty --noreset --noclear --keep-baud 115200 ttyS0 $TERM
+# --autologin root, and there is no password to skip: both accounts in this image are
+# locked, because a password in a filesystem every VM boots read-only is one credential
+# shared by all of them. Anyone who can attach to this port already holds the VM's disk and
+# chose its kernel, so a prompt here would guard nothing.
+ExecStart=-/usr/sbin/agetty --noreset --noclear --autologin root --keep-baud 115200 ttyS0 $TERM
 Type=idle
 Restart=always
 RestartSec=1

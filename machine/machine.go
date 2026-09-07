@@ -358,6 +358,17 @@ func (s Spec) Args() ([]string, error) {
 	// request never reaches the point of stopping the VM.
 	args = append(args, "-global", "ICH9-LPC.disable_s3=1", "-global", "ICH9-LPC.disable_s4=1")
 
+	// A reset ends the process instead of starting the machine again.
+	//
+	// The kernel command line carries panic=1, whose stated purpose is that a
+	// wedged guest becomes a process that exits rather than a VM sitting at a
+	// prompt nobody is watching. Without this it does not: the guest panics,
+	// reboots, panics again, and QEMU never exits — measured by booting an init
+	// that returns immediately, which produced a reboot loop rather than the
+	// expected exit. A VM here is cattle; something that wants a fresh machine
+	// starts one.
+	args = append(args, "-no-reboot")
+
 	args = append(args, "-kernel", s.Kernel)
 	if s.Initrd != "" {
 		args = append(args, "-initrd", s.Initrd)

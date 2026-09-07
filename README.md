@@ -98,7 +98,7 @@ template it would itself produce.
 ## Looking inside the image
 
 ```
-task shell                    # systemd; log in as root, password spinbox
+task shell                    # systemd; the console autologins as root
 task shell INIT=/bin/bash     # a bare shell, for when systemd is the broken thing
 ```
 
@@ -131,12 +131,12 @@ visible from outside:
   enable it**; the debug boot writes the one symlink that turns it on, into the throwaway
   overlay. Production must not get a login prompt on the console the machine prints its
   kernel log to.
-- **`ssh.service` fails five times and gives up.** The image has no SSH host keys, by
-  design — they are identity, and identity is not baked into an image many VMs share — and
-  `sshd-keygen.service`, which would generate them, has `ConditionFirstBoot=yes` and does
-  not run before `sshd -t` is asked to validate a configuration with no keys. Whoever wants
-  SSH in a guest has to provision the keys the way the rest of a VM's identity is
-  provisioned.
+- **`ssh.service` used to fail five times and give up.** The image ships no host keys — they
+  are identity — and the distribution's `sshd-keygen.service` carries
+  `ConditionFirstBoot=yes`, so it did not run before `sshd` was asked to validate a
+  configuration with no keys. Fixed by generating them at boot instead
+  (`spin-machine-sshd-keygen.service`): every boot here *is* a first boot, since the root
+  filesystem is a fresh overlay, so the keys live exactly as long as the VM does.
 - **Nothing mounts `/proc` before an init runs**, so a machine booted straight to a shell
   has `df` warning, `free` failing and `poweroff` answering *"Running in chroot, ignoring
   request"*. That is what PID 1 gets before an init has run, not a fault in the image.
@@ -180,6 +180,24 @@ Boot was measured at +356 ms and rejected.
 
 A version and a config file. It is here because a kernel and the machine that boots it are
 one release: changing either invalidates every template taken against the previous pair.
+
+**BPF.** The kernel carries what modern BPF development needs, and it did not before:
+`BPF_JIT` (every program ran interpreted), `DEBUG_INFO_BTF` (without it there is no
+`/sys/kernel/btf/vmlinux`, so no `vmlinux.h`, no `bpftool btf dump` and no CO-RE at all),
+`FUNCTION_TRACER` for fentry/fexit attachment, `FTRACE_SYSCALLS`, and the networking program
+types — `NET_CLS_BPF`, `NET_ACT_BPF`, `NET_SCH_INGRESS`, `XDP_SOCKETS`, `BPF_STREAM_PARSER`.
+Verified in a guest: `/sys/kernel/btf/vmlinux` is 4,552,359 bytes and
+`net.core.bpf_jit_enable` is 1.
+
+It costs **+21.4 ms** of kernel boot, measured over five runs each against the same config
+without those symbols (137.4 ms to 158.8 ms, kernel start to `Freeing unused kernel image`),
+and 5.0 MB of image — 4.55 MB of which is the `.BTF` section, which `strip -s` keeps because
+it is allocated and the guest reads it back out of its own image. `ftrace: allocating 41727
+entries` is the new work that shows up in the log.
+
+`BPF_LSM` is deliberately not enabled: it needs `CONFIG_SECURITY`, and what it buys is
+enforcing access policy inside a VM that holds one workload — a boundary drawn inside the
+boundary this machine already is.
 
 The config is not stable furniture. In one week it gained `CONFIG_VMGENID` and
 `CONFIG_PTP_1588_CLOCK_KVM`, lost `CONFIG_CRYPTO_JITTERENTROPY` (−3.7 ms of boot) and had
@@ -271,7 +289,10 @@ Built and verified on 2026-09-07:
   host, which is a glibc system that shares nothing with the one they were built on.
 - **The kernel** builds, the PVH notes survive the strip, and its config comes out
   unchanged after `olddefconfig`.
-- **base.qcow2** builds (~860 MB). `SOURCE_DATE_EPOCH` normalizes timestamps, but the
+- **base.qcow2** builds (~820 MB). Inside it: an unprivileged `spin` user in `sudo` and
+  `docker`, both accounts password-locked, SSH host keys generated per boot, and chrony
+  disciplining the clock from `/dev/ptp0` — so a VM restored from a template does not wake
+  up with the template's wall clock. `SOURCE_DATE_EPOCH` normalizes timestamps, but the
   image is not claimed to be bit-reproducible: the userland comes from a live archive.
   What a release contains is the checksum in `machine.env`.
 - **The machine boots through its own definition.** `task shell` runs
