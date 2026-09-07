@@ -1,5 +1,10 @@
 # spin-machine
 
+[![CI](https://github.com/spin-stack/spin-machine/actions/workflows/ci.yml/badge.svg)](https://github.com/spin-stack/spin-machine/actions/workflows/ci.yml)
+[![QEMU](https://github.com/spin-stack/spin-machine/actions/workflows/qemu.yml/badge.svg)](https://github.com/spin-stack/spin-machine/actions/workflows/qemu.yml)
+[![Kernel](https://github.com/spin-stack/spin-machine/actions/workflows/kernel.yml/badge.svg)](https://github.com/spin-stack/spin-machine/actions/workflows/kernel.yml)
+[![Base image](https://github.com/spin-stack/spin-machine/actions/workflows/image.yml/badge.svg)](https://github.com/spin-stack/spin-machine/actions/workflows/image.yml)
+
 A virtual machine: QEMU, the guest kernel, the base image, and the definition of the
 machine they make.
 
@@ -305,39 +310,3 @@ So a release answers them:
   build**, not only after a download — the source lives in a cache mount that outlives the
   build that filled it. That is also what makes `SOURCES` true rather than aspirational:
   what it names is what was compiled.
-
-## Status
-
-Built and verified on 2026-09-07:
-
-- **QEMU 11.1.1** builds, all three binaries static (`NEEDED=0`, no `INTERP`), and the
-  build's own assertions pass: virtio-blk, virtio-net, vhost-vsock and virtconsole present,
-  no e1000/rtl8139/vmxnet3, q35 and no pc-i440fx, `qemu-img` opening qcow2/vmdk/raw, io_uring
-  and native aio attaching, and the accelerator split. The extracted binaries run on this
-  host, which is a glibc system that shares nothing with the one they were built on.
-- **The kernel** builds, the PVH notes survive the strip, and its config comes out
-  unchanged after `olddefconfig`.
-- **base.qcow2** builds (~820 MB). Inside it: an unprivileged `spin` user in `sudo` and
-  `docker`, both accounts password-locked, SSH host keys generated per boot, and chrony
-  disciplining the clock from `/dev/ptp0` — so a VM restored from a template does not wake
-  up with the template's wall clock. `SOURCE_DATE_EPOCH` normalizes timestamps, but the
-  image is not claimed to be bit-reproducible: the userland comes from a live archive.
-  What a release contains is the checksum in `machine.env`.
-- **The machine boots through its own definition.** `task shell` runs
-  `spin-machine boot`, which builds the QEMU command line from `machine/`; inside the
-  guest, `lspci` shows the RNG at `00:03.0` and the disk at `00:05.0`, exactly the slot map
-  the package declares. `poweroff -f` exits 0 and the base image comes back byte-identical.
-- **systemd boots as PID 1 and gives a login on the serial console.** `Ubuntu 26.04.1 LTS
-  localhost ttyS0` / `localhost login:`, over the ten-line agetty unit the debug init
-  writes into the overlay.
-- `go test ./...` covers the shape, the slot map, and what does and does not move the
-  fingerprint.
-
-Three things found by running it, and fixed in the tree:
-
-- `check-docker-config.sh` needs `apparmor_parser` and `sysctl`, or it fails a config that
-  is correct.
-- `qemu-img --help` wraps its format list across lines, so a line-oriented `grep` for a
-  format matched nothing and failed a build whose every other assertion had passed.
-- `debugfs -R` exits 0 whether or not the file it was asked about exists. Every filesystem
-  check in `image/build.sh` reads its output instead.

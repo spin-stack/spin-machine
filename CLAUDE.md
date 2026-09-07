@@ -89,6 +89,12 @@ Comments here are longer than usual, on purpose. The rule is what makes them wor
   input because a tool exits 0 on failure. Someone will otherwise try it again.
 - **Date a fact that could go stale.** "measured 2026-09-07" tells a reader whether to
   re-check.
+- **Do not write down that it works.** The README had a "Status" section listing what had
+  been built and verified on a date. Every line of it was something CI answers
+  continuously and can answer *red*, or something already said next to the decision it
+  justified — so it could only rot, and it did. A claim about the state of the tree
+  belongs in a workflow, a badge, or a commit message. Never in prose that nobody
+  re-reads.
 - **Do not name the projects that consume this.** See above.
 
 ## Artefacts leave this machine
