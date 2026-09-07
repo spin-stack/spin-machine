@@ -87,6 +87,7 @@ fi
 echo "Base image:"
 require "${OUTPUT_DIR}/base.qcow2" "${SHARE}/image/base.qcow2" "the base image" 0444
 require "${OUTPUT_DIR}/packages.txt" "${SHARE}/packages.txt" "the image's package list"
+require "${OUTPUT_DIR}/licenses.txt" "${SHARE}/licenses.txt" "the image's licence texts"
 
 # What this release is, in a form something other than a human can read. The three
 # checksums are the machine's identity — the same numbers `machine.Spec.Fingerprint` hashes
@@ -145,6 +146,7 @@ Linux ${KERNEL_VERSION}
 Ubuntu userland
   image:    usr/share/spin-stack/image/base.qcow2
   contents: usr/share/spin-stack/packages.txt — every package and its exact version
+  licences: usr/share/spin-stack/licenses.txt — the copyright and licence text of each
   source:   the Ubuntu archive. For any package listed there:
                 apt-get source <package>=<version>
   built by: image/mkosi.conf and the scripts beside it

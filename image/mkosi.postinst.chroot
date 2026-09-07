@@ -18,6 +18,26 @@ lib=/usr/local/lib/spin-base
 
 "$lib/install-dev-tools.sh"
 "$lib/configure-system.sh"
+# The licence notices, collected here and not in image/build.sh, because the next line
+# deletes them: optimize-systemd.sh ends with `rm -rf /usr/share/doc/*`, which is right for
+# an image nobody reads documentation in and wrong for one that is redistributed. GPL
+# section 1 and every permissive licence in here require the copyright notices and licence
+# text to stay with a copy.
+#
+# The image still ships none of them — build.sh moves this file out and deletes it, so the
+# notices travel with the release rather than inside every VM that boots. Written under
+# /var/lib because $lib is removed at the end of this script.
+{
+    echo "Licences of the software in this image."
+    echo "One entry per package, from its own /usr/share/doc/<pkg>/copyright."
+    echo "Exact versions are in packages.txt beside this file."
+    for c in /usr/share/doc/*/copyright; do
+        [ -f "$c" ] || continue
+        printf '\n\n======== %s ========\n\n' "$(basename "$(dirname "$c")")"
+        cat "$c"
+    done
+} > /var/lib/spin-machine-licenses.txt
+
 "$lib/optimize-systemd.sh"
 
 # The configuration files, copied *after* the scripts and not delivered by ExtraTrees

@@ -34,7 +34,10 @@ almost entirely other people's software under other people's licences:
   base.qcow2
       An Ubuntu 26.04 userland: several thousand files under GPL, LGPL, MIT,
       BSD, Apache-2.0 and others. usr/share/spin-stack/packages.txt in a release
-      lists every package and version it was built from.
+      lists every package and version it was built from, and
+      usr/share/spin-stack/licenses.txt carries the copyright and licence text of
+      each — the notices those licences require to accompany a copy, which the
+      image itself does not carry because it ships no documentation.
 
 Distributing a release therefore carries obligations this licence does not
 discharge — GPL-2.0 section 3 in particular, and section 6 of the LGPL for the

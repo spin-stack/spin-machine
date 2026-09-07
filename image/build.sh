@@ -59,6 +59,25 @@ for d in etc tmp proc sys dev run; do
 done
 chmod 1777 "$tree/tmp"
 
+# --- the licences -----------------------------------------------------------------------
+#
+# Moved out of the tree, not generated here: the file was written by
+# mkosi.postinst.chroot, which is the only moment the copyright files exist —
+# optimize-systemd.sh deletes /usr/share/doc a few lines later, and it is a vendored script
+# this repository does not rewrite.
+#
+# Beside the image rather than inside it. The notices have to accompany a copy of the
+# software, and a release is what gets copied; a few hundred licence texts in every VM that
+# boots are just bytes nobody reads.
+harvested="$tree/var/lib/spin-machine-licenses.txt"
+test -s "$harvested" || {
+    echo "ERROR: no licence texts were collected — the image would be redistributed" >&2
+    echo "       without the copyright notices its licences require. See" >&2
+    echo "       image/mkosi.postinst.chroot." >&2
+    exit 1; }
+mv "$harvested" "$(dirname "$OUT")/licenses.txt"
+echo "==> $(grep -c '^======== ' "$(dirname "$OUT")/licenses.txt" || true) licence texts, $(du -h "$(dirname "$OUT")/licenses.txt" | cut -f1)"
+
 # --- the bill of materials --------------------------------------------------------------
 #
 # Every package in the tree, by name and exact version, written beside the image rather
