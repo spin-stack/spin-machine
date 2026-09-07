@@ -41,7 +41,12 @@ tasks:
     interactive: true
     deps: [':tools']
     vars:
-      INIT: '{{.INIT | default "/bin/bash"}}'
+      # systemd, because that is what this image is: a userland whose first process is
+      # /sbin/init. Booting a bare shell instead answers a different question than the one
+      # `task shell` is for — `systemd-analyze` in it replies "System has not been booted
+      # with systemd as init system (PID 1)", which is true and useless. INIT=/bin/bash is
+      # still there for when systemd is the thing that is broken.
+      INIT: '{{.INIT | default "/sbin/init"}}'
       MEMORY: '{{.MEMORY | default "2048"}}'
       CPUS: '{{.CPUS | default "2"}}'
     cmds:
@@ -71,16 +76,25 @@ tasks:
 
         echo "booting {{.INIT}} in the base image — {{.MEMORY}} MiB, {{.CPUS}} vCPU"
         echo "  writes go to a throwaway overlay; the base is read-only and checked after"
+        case "{{.INIT}}" in
+          */init) echo "  systemd. log in as root, password spinbox" ;;
+        esac
         echo "  leave with: 'poweroff -f', or Ctrl-A then X"
         echo
 
-        # -initrd, and not `root=/dev/vda init=/bin/bash` straight into the image.
+        # -initrd, and not `root=/dev/vda init=…` straight into the image.
         #
         # A kernel handed a root filesystem and a shell mounts neither /proc nor /sys, so
         # `df` warns, `free` fails and `poweroff` answers "Running in chroot, ignoring
         # request". That is what PID 1 gets before an init has run — not a fault in the
         # image, and in production it is the guest's own init that fixes it. Here it is
-        # cmd/spin-machine-init: mount the four, move onto the disk, exec.
+        # cmd/spin-machine-init: mount the four, find the disk, move onto it, exec.
+        #
+        # spinmachine.getty=ttyS0 is asked for because systemd does not start a serial
+        # login on its own here — it starts getty@tty1, a virtual console on a machine
+        # whose QEMU has no display adapter compiled in at all. The init writes the unit
+        # symlink into this VM's throwaway overlay, so the shared base image never carries
+        # a debugging convenience that production has no use for.
         #
         # accel=kvm with no fallback, from the machine package: the binary in _output/bin
         # cannot emulate, on purpose. A host with no /dev/kvm gets an error here rather
@@ -90,7 +104,7 @@ tasks:
           --disk "$scratch" \
           --initrd "$out/debug-initramfs.cpio.gz" \
           --memory {{.MEMORY}} --cpus {{.CPUS}} \
-          --append "spinmachine.root=/dev/vda spinmachine.init={{.INIT}}" || true
+          --append "spinmachine.root=/dev/vda spinmachine.init={{.INIT}} spinmachine.getty=ttyS0" || true
 
         echo
         after=$(sha256sum "$out/base.qcow2" | cut -d' ' -f1)

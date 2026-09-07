@@ -1,0 +1,62 @@
+name: Base image
+
+# The base image: ~1.5 GB of apt against a live archive, so it is path-triggered like the
+# other two rather than run on every push.
+#
+# The build runs `docker run --cap-add SYS_ADMIN` and not `docker buildx build`, because
+# mkosi assembles a root filesystem by unsharing a user and mount namespace and BuildKit
+# forbids it. See image/Dockerfile — the alternative was a buildkitd started with an
+# entitlement flag, which would make the build depend on how the runner's builder was
+# created.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - image/**
+      - Taskfile.yml
+      - .github/workflows/image.yml
+  pull_request:
+    paths:
+      - image/**
+      - Taskfile.yml
+      - .github/workflows/image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # image/build.sh asserts what came out on the finished filesystem rather than
+      # trusting the build that made it: that there is an /sbin/init and a /bin/sh, that
+      # the directories the guest mounts over exist, that no identity is baked in, and
+      # that the units masked for measured reasons are still masked. A package upgrade
+      # that undoes one of those fails here.
+      - name: Build the base image
+        run: task image:build
+
+      - name: What this image is
+        run: |
+          ls -la _output/base.qcow2
+          echo "sha256: $(sha256sum _output/base.qcow2 | cut -d' ' -f1)"
+
+      # Not uploaded as an artifact: it is ~860 MB and the release workflow rebuilds it
+      # from the same inputs. What this job is for is finding out that it still builds and
+      # still passes its own checks.

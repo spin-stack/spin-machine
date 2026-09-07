@@ -26,6 +26,7 @@ hack/       release
 ```
 task build         # everything, into _output/
 task shell         # boot the machine and look around inside it
+task lint          # gofmt, vet, and whether the scripts and Taskfiles parse
 task test          # the machine definition
 task fingerprint   # this machine's identity
 task release       # one tarball, one version
@@ -96,21 +97,45 @@ template it would itself produce.
 ## Looking inside the image
 
 ```
-task shell                    # /bin/bash as PID 1
-task shell INIT=/sbin/init    # the full systemd boot
+task shell                    # systemd; log in as root, password spinbox
+task shell INIT=/bin/bash     # a bare shell, for when systemd is the broken thing
 ```
 
-It boots this QEMU and this kernel over a throwaway qcow2 overlay on `base.qcow2`, through
-`spin-machine boot`, with the serial console on stdio. It is for finding out what the image
-is missing — and it has already found one thing: with `init=/sbin/init`, systemd comes up
-and **gives no login prompt on ttyS0**, because as a container's first process it never
-needed a serial getty.
+The default is `/sbin/init` because that is what this image is: a userland whose first
+process is systemd. Booting a bare shell answers a different question — `systemd-analyze`
+in it replies *"System has not been booted with systemd as init system (PID 1)"*, which is
+true and useless.
 
-The initrd it boots is `cmd/spin-machine-init`, ~100 lines of static Go that mount `/proc`,
-`/sys`, devtmpfs and devpts, move onto the disk, and exec. Without something doing that, a
-kernel handed a root filesystem and a shell has no `/proc`, so `df` warns, `free` fails and
-`poweroff` answers *"Running in chroot, ignoring request"* — which looks like a fault in the
-image and is not. In production that job belongs to the guest's own init.
+It boots this QEMU and this kernel over a throwaway qcow2 overlay on `base.qcow2`, through
+`spin-machine boot`, with the serial console on stdio.
+
+The initrd it boots is `cmd/spin-machine-init`: static Go that mounts `/proc`, `/sys`,
+devtmpfs and devpts, finds the root disk, moves onto it and execs. That is deliberately
+where it stops — everything past it, an RPC channel to the host or a container lifecycle,
+belongs to whatever software runs guests. What is here is the part that is the same
+whoever that is, which is also why it resolves a disk by virtio-blk serial as well as by
+`/dev` node: a node depends on the order the guest probed the bus in, and a serial does
+not.
+
+Three things the shell has already found, all of them true of the image and none of them
+visible from outside:
+
+- **systemd starts no login on the serial port.** It starts `getty@tty1`, a virtual console
+  on a machine whose QEMU has no display adapter compiled in. Enabling the distribution's
+  `serial-getty@ttyS0` does not help either: it carries `BindsTo=dev-ttyS0.device`, and a
+  `.device` unit exists only if udev announced it — and this image masks `systemd-udevd`,
+  because a VM's hardware is fixed and udev is boot time spent discovering it. So the debug
+  init writes its own ten-line agetty unit into the throwaway overlay, and the shared base
+  never carries a debugging convenience production has no use for.
+- **`ssh.service` fails five times and gives up.** The image has no SSH host keys, by
+  design — they are identity, and identity is not baked into an image many VMs share — and
+  `sshd-keygen.service`, which would generate them, has `ConditionFirstBoot=yes` and does
+  not run before `sshd -t` is asked to validate a configuration with no keys. Whoever wants
+  SSH in a guest has to provision the keys the way the rest of a VM's identity is
+  provisioned.
+- **Nothing mounts `/proc` before an init runs**, so a machine booted straight to a shell
+  has `df` warning, `free` failing and `poweroff` answering *"Running in chroot, ignoring
+  request"*. That is what PID 1 gets before an init has run, not a fault in the image.
 
 ## The parts
 
@@ -193,6 +218,24 @@ the ordinary way — or a container run with the privileges mkosi needs. `image/
 pins the toolchain, `image/build.sh` is the build, and the task runs it with
 `--cap-add SYS_ADMIN` and seccomp/apparmor unconfined. Not `--privileged`.
 
+## CI
+
+Five workflows, and the split is about cost. `ci.yml` runs on every push and builds none of
+the three artefacts — it is `task lint` and `task test`, which is fast and catches most
+mistakes. Each artefact has a path-triggered workflow of its own, because QEMU and the
+kernel are tens of minutes each and the base image is ~1.5 GB of apt: `qemu.yml`,
+`kernel.yml`, `image.yml`. Each ends in the verification that belongs to it, so a build
+that lost a device, a kernel that lost its PVH notes, or an image that grew an identity
+fails in the workflow that produced it.
+
+`release.yml` builds all three and packs one tarball. Versions are **CalVer**,
+`v20260909.01`: a release of this repository is the machine as it stood on a date. There is
+no API here to promise compatibility about, and the one thing a version could promise —
+that templates still match — is decided by the fingerprint of the artefacts, not by a
+number anybody chose. Pushing a `v*` tag releases that version; running the workflow by
+hand with no input generates the next sequence for today, tags the commit, and puts the
+three checksums in the release notes.
+
 ## Status
 
 Built and verified on 2026-09-07:
@@ -209,6 +252,9 @@ Built and verified on 2026-09-07:
   `spin-machine boot`, which builds the QEMU command line from `machine/`; inside the
   guest, `lspci` shows the RNG at `00:03.0` and the disk at `00:05.0`, exactly the slot map
   the package declares. `poweroff -f` exits 0 and the base image comes back byte-identical.
+- **systemd boots as PID 1 and gives a login on the serial console.** `Ubuntu 26.04.1 LTS
+  localhost ttyS0` / `localhost login:`, over the ten-line agetty unit the debug init
+  writes into the overlay.
 - `go test ./...` covers the shape, the slot map, and what does and does not move the
   fingerprint.
 

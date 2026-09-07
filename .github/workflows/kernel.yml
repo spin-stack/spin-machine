@@ -1,0 +1,74 @@
+name: Kernel
+
+# The guest kernel, for the same reason QEMU has its own workflow: compiling it is tens of
+# minutes and the merge gate must not wait for it.
+#
+# It matters more than a build time, though. A changed kernel is a changed machine — the
+# fingerprint hashes this binary by content — so every template taken against the previous
+# one stops matching. The job prints the checksum of what it produced for exactly that
+# reason: a config change whose effect nobody looked at is a fleet-wide event nobody
+# noticed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - kernel/**
+      - Taskfile.yml
+      - .github/workflows/kernel.yml
+  pull_request:
+    paths:
+      - kernel/**
+      - Taskfile.yml
+      - .github/workflows/kernel.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Ends in `task kernel:verify`, which opens the ELF and checks the Xen PVH notes
+      # survived the strip. Without them QEMU has no entry point into this kernel and the
+      # failure is a VM that does not start, in whichever lane boots one next.
+      - name: Build the kernel
+        run: |
+          task kernel:build \
+            KERNEL_CACHE_FROM=type=gha \
+            KERNEL_CACHE_TO=type=gha,mode=max \
+            KERNEL_NPROC=4
+
+      # Printed, not compared: this workflow has no way to know which checksum is the
+      # right one. It is here so that a pull request that changes the config shows, in its
+      # own log, that it changed the machine — and so that the number can be read back
+      # when somebody asks why their templates stopped matching.
+      - name: What this kernel is
+        run: |
+          echo "kernel sha256: $(sha256sum _output/vmlinux | cut -d' ' -f1)"
+          echo "config sha256: $(sha256sum _output/kernel-config | cut -d' ' -f1)"
+
+      - name: Upload the kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmlinux-${{ github.sha }}
+          path: |
+            _output/vmlinux
+            _output/kernel-config
+          retention-days: 30
+          if-no-files-found: error

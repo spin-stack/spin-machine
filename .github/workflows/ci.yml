@@ -1,0 +1,56 @@
+name: CI
+
+# The gate that runs on everything. It deliberately builds none of the three artefacts:
+# QEMU is tens of minutes, the kernel is tens of minutes, and the base image is 1.5 GB of
+# apt. Each has its own workflow, triggered by the files that can change it. What is left
+# here is fast and is the half that catches most mistakes — the machine definition, and
+# whether the scripts and Taskfiles parse at all.
+
+on:
+  push:
+  pull_request:
+
+# One run per branch, not one per event. A push to a branch with an open pull request fires
+# both triggers; keying on `head_ref || ref_name` gives both the same string, while
+# `github.ref` — the obvious choice — does not (`refs/pull/N/merge` against
+# `refs/heads/my-branch`, two groups, nothing de-duplicated).
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # A ceiling, not a budget. The default is six hours, and a `go test` that deadlocks
+    # would hold a runner for all of them without printing a failure.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+
+      # `task lint` and `task test`, and not a list of steps: a second definition of what
+      # the gate is, maintained in a workflow file, goes out of step with the first exactly
+      # when a check is added.
+      - name: Lint
+        run: task lint
+
+      - name: Test the machine definition
+        run: task test
+
+      # The debug initramfs is a static Go binary in a cpio, and the only thing that can
+      # break it is the Go build — which is worth catching here rather than in whichever
+      # boot first found itself with no /init.
+      - name: Build the tools
+        run: task tools

@@ -131,6 +131,32 @@ tasks:
     cmds:
       - go test ./...
 
+  lint:
+    desc: >-
+      Everything CI checks that is not a build: formatting, vet, the Taskfiles parse, and
+      every shell script is syntactically valid.
+    cmds:
+      - |
+        set -euo pipefail
+        unformatted=$(gofmt -l machine cmd)
+        if [ -n "$unformatted" ]; then
+          echo "not gofmt'd:"; echo "$unformatted"; exit 1
+        fi
+        echo "OK: gofmt"
+      - go vet ./...
+      - cmd: 'echo "OK: go vet"'
+      # `task --list` parses every included Taskfile, so a syntax error or a name defined
+      # twice fails here rather than in whichever lane first called it.
+      - task --list > /dev/null
+      - cmd: 'echo "OK: the Taskfiles parse"'
+      - |
+        set -euo pipefail
+        for f in hack/release image/build.sh image/mkosi.postinst.chroot \
+                 image/mkosi.extra/usr/local/lib/spin-base/*.sh; do
+          bash -n "$f" || { echo "$f does not parse" >&2; exit 1; }
+        done
+        echo "OK: the shell scripts parse"
+
   fingerprint:
     desc: >-
       Print this machine's identity: the hash of the QEMU binary, the kernel and the initrd
