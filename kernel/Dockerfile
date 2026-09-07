@@ -1,0 +1,168 @@
+# The guest kernel, moved here from spinbox's Dockerfile (targets kernel-build-base,
+# kernel-build, kernel) unchanged in what it produces.
+#
+# Why it is here and not there: storage consumes this kernel and cannot build one, so it
+# grew Dockerfile.guest-kernel — a file that builds nothing and exists only to move an
+# artefact through a registry and back out, "so the lane's kernel can be named by digest
+# instead of by a relative path into someone's home directory" (ADR-0021, ADR-0022). That
+# whole mechanism is plumbing across a repository boundary that should not be there. And
+# the kernel and QEMU are already one release unit: both go into spinbox's template
+# fingerprint *by content*, so changing either invalidates every template on every host.
+# They were coupled by necessity and stored apart by accident.
+#
+# The build does not depend on spinbox's source. It is a version and a config file.
+#
+# What stays in spinbox: the initrd. It carries vminitd, built from spinbox's source, and
+# it is the one guest artefact that belongs to the runtime rather than to the machine.
+#
+# Base image: debian bookworm, and deliberately not something newer. spinbox built this
+# kernel with bookworm's gcc (its stages descended from golang:1.27.1-bookworm), and a
+# different compiler is a different vmlinux, which is a different machine fingerprint,
+# which is every template in the fleet invalidated. That may be a change worth making; it
+# is not one to make by accident while moving a file.
+
+FROM debian:bookworm AS kernel-build-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
+    --mount=type=cache,sharing=locked,id=kernel-aptcache,target=/var/cache/apt \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libncurses-dev flex bison libssl-dev libelf-dev bc cpio git \
+        wget xz-utils curl lz4 ca-certificates file \
+        # apparmor and procps are not kernel build dependencies: they are what
+        # check-docker-config.sh below shells out to. Without apparmor_parser it reports
+        # "apparmor: enabled, but apparmor_parser missing" and exits non-zero, failing a
+        # configuration that is correct; without sysctl it prints three "sysctl: not found"
+        # lines while inspecting the bridge driver. spinbox's build had both by accident,
+        # from the golang base image its kernel stages descended from.
+        apparmor procps
+
+ARG KERNEL_VERSION="7.2.1"
+ARG KERNEL_ARCH="x86_64"
+ARG KERNEL_NPROC="16"
+
+# moby's check-config.sh, with the SELinux and AppArmor checks removed: they are host
+# policy, not kernel features this guest needs, and they fail a config that is correct.
+RUN curl -o /usr/local/bin/check-docker-config.sh -fsSL https://raw.githubusercontent.com/moby/moby/master/contrib/check-config.sh \
+  && chmod +x /usr/local/bin/check-docker-config.sh \
+  && sed -i '/IP_VS_RR/s/\\$//; /SECURITY_SELINUX/d; /SECURITY_APPARMOR/d' /usr/local/bin/check-docker-config.sh
+
+WORKDIR /usr/src
+
+RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/var/cache/kernel \
+    KERNEL_MAJOR="$(echo "${KERNEL_VERSION}" | cut -d. -f1)" && \
+    if [ ! -f "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" ]; then \
+        wget -O "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz"; \
+    fi && \
+    tar -xf "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" -C /usr/src && \
+    mv linux-${KERNEL_VERSION} linux
+
+COPY kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH} /usr/src/linux/.config
+
+# Every check below is a symbol that olddefconfig can silently drop and whose absence
+# presents as something other than a missing kernel option.
+RUN <<EOT
+    set -e
+    cd /usr/src/linux
+
+    make ARCH=${KERNEL_ARCH} olddefconfig
+
+    echo "Verifying critical kernel configs after olddefconfig..."
+    grep -q "CONFIG_VIRTIO_NET=y" .config || (echo "ERROR: CONFIG_VIRTIO_NET not enabled after olddefconfig!" ; grep VIRTIO_NET .config ; exit 1)
+    grep -q "CONFIG_VIRTIO_PCI=y" .config || (echo "ERROR: CONFIG_VIRTIO_PCI not enabled!" ; exit 1)
+    grep -q "CONFIG_NET_CLS_ACT=y" .config || (echo "ERROR: CONFIG_NET_CLS_ACT not enabled!" ; exit 1)
+
+    # Memory hotplug. Without these three the host can add a DIMM, QEMU will accept it,
+    # query-memory-devices will show it, and /sys/devices/system/memory/memory<N>/online —
+    # the file spinbox's internal/guest/services/system.go writes to — will not exist, so
+    # the guest never sees the memory.
+    grep -q "CONFIG_MEMORY_HOTPLUG=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTPLUG not enabled (memory hotplug cannot reach the guest)!" ; exit 1)
+    grep -q "CONFIG_MEMORY_HOTREMOVE=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTREMOVE not enabled (unplug cannot work)!" ; exit 1)
+    grep -q "CONFIG_ACPI_HOTPLUG_MEMORY=y" .config || (echo "ERROR: CONFIG_ACPI_HOTPLUG_MEMORY not enabled (a pc-dimm is never noticed)!" ; exit 1)
+
+    # spinbox's initrd is lz4. Without this the kernel does not recognise the archive at
+    # all and the VM does not boot.
+    grep -q "CONFIG_RD_LZ4=y" .config || (echo "ERROR: CONFIG_RD_LZ4 not enabled (the lz4 initramfs cannot be unpacked)!" ; exit 1)
+
+    # The filesystems the base image and the guest's overlay are made of. ext4 is what
+    # image/ produces and what a writable layer is formatted as; erofs is the read-only
+    # half of the containerd path that qcow2 replaces; overlayfs stacks them. A base image
+    # in a filesystem this kernel cannot mount is a VM that boots and finds no root, so
+    # changing image/mkosi.conf to xfs or squashfs starts here, not there.
+    grep -q "CONFIG_EXT4_FS=y" .config || (echo "ERROR: CONFIG_EXT4_FS not enabled (the base image cannot be mounted)!" ; exit 1)
+    grep -q "CONFIG_EROFS_FS=y" .config || (echo "ERROR: CONFIG_EROFS_FS not enabled!" ; exit 1)
+    grep -q "CONFIG_OVERLAY_FS=y" .config || (echo "ERROR: CONFIG_OVERLAY_FS not enabled!" ; exit 1)
+
+    # PVH is the only boot path: there is no bootloader and no UEFI, and QEMU enters this
+    # kernel through pvh.bin using the Xen notes CONFIG_PVH puts in the program headers.
+    # Without it -kernel has nothing to enter and the VM does not start.
+    grep -q "CONFIG_PVH=y" .config || (echo "ERROR: CONFIG_PVH not enabled (QEMU has no entry point into this kernel)!" ; exit 1)
+
+    # Boot performance: the RAID6 PQ benchmark probes all SIMD implementations at boot to
+    # pick the fastest. It must stay disabled. (RAID6_PQ itself is not selected today, so
+    # the symbol is normally absent.)
+    ! grep -q "CONFIG_RAID6_PQ_BENCHMARK=y" .config || (echo "ERROR: CONFIG_RAID6_PQ_BENCHMARK must not be enabled (boot perf)!" ; exit 1)
+
+    echo "Virtio configuration:"
+    grep "CONFIG_VIRTIO" .config | grep -v "^#" || echo "No VIRTIO options enabled!"
+
+    echo "Verifying kernel config for Docker support..."
+    /usr/local/bin/check-docker-config.sh /usr/src/linux/.config || (echo "Kernel config verification failed!" ; exit 1)
+
+    echo "Using kernel config from kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH}"
+EOT
+
+FROM kernel-build-base AS kernel-build
+
+ARG KERNEL_ARCH
+ARG KERNEL_NPROC
+
+# No cache mount: kernel compilation is not incremental between builds, so Docker's layer
+# cache is the effective one.
+RUN cd linux && make ARCH=${KERNEL_ARCH} -j${KERNEL_NPROC} all
+
+RUN <<EOT
+    set -e
+    cd linux
+    mkdir /build
+    cp .config /build/kernel-config
+
+    if [ "${KERNEL_ARCH}" != "x86_64" ]; then
+        echo "ERROR: Only x86_64 architecture is supported, got: ${KERNEL_ARCH}"
+        exit 1
+    fi
+
+    # Strip the ELF symbol table before handing the image to QEMU. QEMU's load_elf() reads
+    # and qsort()s the symbol table of every kernel it loads — 42k entries here — and
+    # nothing in this stack ever asks it for a symbol: the guest resolves its own names
+    # through CONFIG_KALLSYMS, which lives in the loaded image data and is untouched by
+    # this.
+    #
+    # PT_LOAD is byte-identical either way (30.68 MB), so the guest boots the same bits;
+    # what goes away is 5.1 MB of file and the parse and sort of it. The PVH ELF notes this
+    # machine boots from are in the program headers and survive the strip.
+    #
+    # Measured: qemu_launch 36.1 ms -> 24.3 ms, guest boot unchanged.
+    cp vmlinux /build/vmlinux
+    strip -s /build/vmlinux
+
+    # The strip is the one step here that could plausibly remove what QEMU needs, and it is
+    # asserted rather than reasoned about: no PVH note, no entry point, and the failure is
+    # a VM that does not start.
+    readelf -n /build/vmlinux | grep -qi 'XenVersion\|Xen' || {
+        echo "ERROR: the stripped vmlinux carries no Xen PVH notes — QEMU cannot enter it"; exit 1; }
+EOT
+
+# ============================================
+# Output stage
+# ============================================
+#
+# Named vmlinux, which is what storage's lane already calls it and what the ELF is.
+# spinbox looks for spinbox-kernel-x86_64 (internal/paths/paths.go); hack/release installs
+# a symlink under that name so spinbox needs no change to consume this release.
+FROM scratch AS kernel
+COPY --from=kernel-build /build/vmlinux /vmlinux
+COPY --from=kernel-build /build/kernel-config /kernel-config

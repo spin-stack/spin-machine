@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#
+# One tarball, one version: qemu-system-x86_64, qemu-img, qemu-nbd, the five firmware
+# files, vmlinux and base.qcow2.
+#
+# Not because it is tidy. spinbox fingerprints the QEMU binary, the kernel and the initrd
+# by content to decide whether a VM may be restored from a template
+# (internal/host/vm/qemu/template.go), so a release in which any of them moved is a
+# different machine and every template built against the previous one stops matching.
+# Shipping them separately would let two of the three drift and leave the third to notice.
+#
+# The layout under usr/share/spin-stack/ is spinbox's, so a host installs this the way it
+# installs a spinbox release and nothing has to learn a new path.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
+
+OUTPUT_DIR="${OUTPUT_DIR:-_output}"
+KERNEL_ARCH="${KERNEL_ARCH:-x86_64}"
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+QEMU_VERSION="${QEMU_VERSION:-unknown}"
+KERNEL_VERSION="${KERNEL_VERSION:-unknown}"
+
+RELEASE_NAME="spin-machine-${VERSION}-linux-${KERNEL_ARCH}"
+RELEASE_DIR="${OUTPUT_DIR}/release/${RELEASE_NAME}"
+SHARE="${RELEASE_DIR}/usr/share/spin-stack"
+
+rm -rf "${OUTPUT_DIR}/release"
+mkdir -p "${SHARE}/bin" "${SHARE}/qemu" "${SHARE}/kernel" "${SHARE}/image"
+
+# Every artefact, and every one required. A release missing a piece is worse than no
+# release: it installs, and the thing it left out fails somewhere else — a VM that will not
+# start for want of an option ROM, a `spinbox run` that cannot create an overlay for want of
+# qemu-img. The warn-and-continue that spinbox's release script has for QEMU is the reason
+# this one does not.
+require() {
+  local src="$1" dest="$2" what="$3"
+  if [ ! -f "${src}" ]; then
+    echo "👹 missing ${what}: ${src}" >&2
+    echo "   run: task build" >&2
+    exit 1
+  fi
+  install -m "${4:-0644}" "${src}" "${dest}"
+  echo "  ok: $(basename "${dest}")"
+}
+
+echo "Packing ${RELEASE_NAME}..."
+
+echo "QEMU:"
+for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img qemu-nbd; do
+  require "${OUTPUT_DIR}/bin/${b}" "${SHARE}/bin/${b}" "the ${b} binary" 0755
+done
+
+echo "Firmware:"
+# pvh.bin is how QEMU enters a PVH ELF kernel and there is no other boot path here;
+# efi-virtio.rom is the option ROM of the one NIC the build keeps, and a VM given a
+# virtio-net-pci without it does not start at all.
+for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
+  require "${OUTPUT_DIR}/share/spin-stack/qemu/${f}" "${SHARE}/qemu/${f}" "firmware ${f}"
+done
+
+echo "Kernel:"
+require "${OUTPUT_DIR}/vmlinux" "${SHARE}/kernel/vmlinux" "the guest kernel" 0644
+require "${OUTPUT_DIR}/kernel-config" "${SHARE}/kernel/kernel-config" "the kernel config"
+# spinbox resolves its kernel at usr/share/spin-stack/kernel/spinbox-kernel-<arch>
+# (internal/paths/paths.go). A symlink, so that a spinbox that has not been changed to
+# look for `vmlinux` installs this release and works, and one that has still finds it.
+ln -sfn vmlinux "${SHARE}/kernel/spinbox-kernel-${KERNEL_ARCH}"
+echo "  ok: spinbox-kernel-${KERNEL_ARCH} -> vmlinux"
+
+echo "Base image:"
+require "${OUTPUT_DIR}/base.qcow2" "${SHARE}/image/base.qcow2" "the base image" 0444
+
+# What this release is, in a form something other than a human can read. The three
+# checksums are the machine's identity: spinbox recomputes the first two (and the initrd's,
+# which is not in this tarball) to decide whether a template may be restored, so a host that
+# wants to know why its templates stopped matching can diff this file against the last one.
+{
+  echo "version=${VERSION}"
+  echo "qemu_version=${QEMU_VERSION}"
+  echo "kernel_version=${KERNEL_VERSION}"
+  echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "qemu_sha256=$(sha256sum "${SHARE}/bin/qemu-system-x86_64" | cut -d' ' -f1)"
+  echo "kernel_sha256=$(sha256sum "${SHARE}/kernel/vmlinux" | cut -d' ' -f1)"
+  echo "image_sha256=$(sha256sum "${SHARE}/image/base.qcow2" | cut -d' ' -f1)"
+} > "${SHARE}/machine.env"
+echo "Manifest:"
+sed 's/^/  /' "${SHARE}/machine.env"
+
+TARBALL="${OUTPUT_DIR}/release/${RELEASE_NAME}.tar.gz"
+tar -czf "${TARBALL}" -C "${OUTPUT_DIR}/release" "${RELEASE_NAME}"
+sha256sum "${TARBALL}" | sed "s|${OUTPUT_DIR}/release/||" > "${TARBALL}.sha256"
+
+echo
+echo "✓ ${TARBALL}"
+echo "  $(du -h "${TARBALL}" | cut -f1)"
