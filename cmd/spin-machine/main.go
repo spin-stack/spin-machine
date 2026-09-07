@@ -134,7 +134,7 @@ func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
 	fs.StringVar(&o.serial, "disk-serial", "", "virtio-blk serial the guest can resolve the disk by")
 
 	fs.IntVar(&o.memoryMB, "memory", 2048, "guest memory in MiB")
-	fs.IntVar(&o.maxMemMB, "max-memory", 0, "memory hotplug ceiling in MiB (0: no hotplug)")
+	fs.IntVar(&o.maxMemMB, "max-memory", 0, "ceiling this VM may grow to and shrink back from, in MiB, through virtio-mem (0: fixed memory)")
 	fs.StringVar(&o.cpuModel, "cpu", "", "CPU model shown to the guest (default: host; name one, e.g. Skylake-Server-v4, to let VMs move between machines)")
 	fs.IntVar(&o.cpus, "cpus", 2, "boot vCPUs")
 	fs.IntVar(&o.maxCPUs, "max-cpus", 0, "vCPU hotplug ceiling (0: no hotplug)")

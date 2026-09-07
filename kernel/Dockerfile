@@ -93,13 +93,19 @@ RUN <<EOT
     grep -q "CONFIG_VIRTIO_PCI=y" .config || (echo "ERROR: CONFIG_VIRTIO_PCI not enabled!" ; exit 1)
     grep -q "CONFIG_NET_CLS_ACT=y" .config || (echo "ERROR: CONFIG_NET_CLS_ACT not enabled!" ; exit 1)
 
-    # Memory hotplug. Without these three the host can add a DIMM, QEMU will accept it,
-    # query-memory-devices will show it, and /sys/devices/system/memory/memory<N>/online —
-    # the file something in the guest has to write to bring it online — will not exist,
-    # so the guest never sees the memory.
+    # Resizing a VM's memory while it runs, which is virtio-mem and no longer ACPI DIMM
+    # hotplug — the machine offers no memory slots to plug one into.
+    #
+    # VIRTIO_MEM is the driver; the other two are the core it plugs and unplugs through.
+    # Without them the host can grow the device, QEMU will accept it,
+    # query-memory-devices will show it, and the guest will never see a byte of it.
+    #
+    # Shrinking is the half that made this worth changing: unplugging a whole pc-dimm
+    # needs the guest to offline an entire memory block and usually fails on one
+    # unmovable page, while virtio-mem returns memory in small blocks and succeeds.
+    grep -q "CONFIG_VIRTIO_MEM=y" .config || (echo "ERROR: CONFIG_VIRTIO_MEM not enabled (a VM cannot be resized while it runs)!" ; exit 1)
     grep -q "CONFIG_MEMORY_HOTPLUG=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTPLUG not enabled (memory hotplug cannot reach the guest)!" ; exit 1)
     grep -q "CONFIG_MEMORY_HOTREMOVE=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTREMOVE not enabled (unplug cannot work)!" ; exit 1)
-    grep -q "CONFIG_ACPI_HOTPLUG_MEMORY=y" .config || (echo "ERROR: CONFIG_ACPI_HOTPLUG_MEMORY not enabled (a pc-dimm is never noticed)!" ; exit 1)
 
     # An lz4 initramfs. lz4 is among the fastest formats to decompress and unpacking the
     # archive is one of the largest single items in kernel boot; without this the kernel
@@ -204,7 +210,16 @@ RUN <<EOT
     # build or the boot; it would break every CO-RE program somebody writes next month.
     readelf -SW /build/vmlinux | grep -q '\.BTF' || {
         echo "ERROR: the stripped vmlinux has no .BTF section — CO-RE would not work in the guest"; exit 1; }
-    echo "BTF: $(readelf -SW /build/vmlinux | awk '$2 == ".BTF" {print strtonum("0x" $6)}') bytes"
+    # The size of .BTF, reported because it is the largest thing BPF support adds to the
+    # image and somebody bumping the kernel should see it move.
+    #
+    # readelf prints "[ 8] .BTF PROGBITS <addr> <off> <size>", so the section name is in
+    # column 2 or 3 depending on whether the index is one digit or two: found by name, and
+    # the size is four columns on. No strtonum — that is GNU awk and this image has mawk,
+    # so it would have failed here rather than in the two earlier attempts, which printed
+    # an empty string and then the offset.
+    btf=$(readelf -SW /build/vmlinux | awk '{for (i=1;i<=NF;i++) if ($i==".BTF") print $(i+4)}')
+    printf 'BTF: %d bytes\n' "0x$btf"
 EOT
 
 # ============================================

@@ -118,6 +118,47 @@ func TestDiskFormatIsRequired(t *testing.T) {
 	}
 }
 
+// Growing a VM is virtio-mem now, not ACPI DIMM slots. -m carries the ceiling and
+// no slots=, the device appears, and nothing is plugged until somebody asks.
+func TestMemoryCeilingGivesAVirtioMemDeviceAndNoSlots(t *testing.T) {
+	s := spec(t)
+	s.Memory.SizeMB = 2048
+	s.Memory.MaxMB = 8192
+
+	if got := s.Shape().Memory; got != "2048,maxmem=8192M" {
+		t.Errorf("-m is %q; slots are ACPI DIMM sockets and this machine plugs none", got)
+	}
+
+	args, err := s.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		// The region between the boot memory and the ceiling, and nothing else.
+		"memory-backend-ram,id=mem.growth,size=6144M",
+		"virtio-mem-pci,id=vmem0,memdev=mem.growth,requested-size=0,disable-legacy=on,addr=0x1e",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in %s", want, joined)
+		}
+	}
+
+	// A VM that cannot grow gets neither, and its -m says so.
+	fixed := spec(t)
+	fixed.Memory.SizeMB = 2048
+	if got := fixed.Shape().Memory; got != "2048" {
+		t.Errorf("-m is %q for a machine with no ceiling", got)
+	}
+	args, err = fixed.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(args, " "), "virtio-mem") {
+		t.Error("a machine with no memory ceiling was given a virtio-mem device")
+	}
+}
+
 // File-backed RAM changes the machine string, which is why it is in the shape
 // and not only in an -object.
 func TestMemoryFileChangesTheShape(t *testing.T) {
@@ -363,6 +404,14 @@ func TestCmdlineStopsThePCIScanAtBusZero(t *testing.T) {
 	got := DefaultCmdline().String()
 	if !strings.Contains(got, "pci=lastbus=0") {
 		t.Errorf("pci=lastbus=0 is missing, and every boot pays 8192 config reads for it: %s", got)
+	}
+}
+
+// Memory that arrives at runtime is no use to a guest that does not online it,
+// and the failure is silent: growth stops at the boot size with no error.
+func TestCmdlineOnlinesMemoryAsItArrives(t *testing.T) {
+	if got := DefaultCmdline().String(); !strings.Contains(got, "memhp_default_state=online") {
+		t.Errorf("virtio-mem growth would stall at the boot size: %s", got)
 	}
 }
 

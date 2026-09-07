@@ -190,6 +190,22 @@ Boot was measured at +356 ms and rejected.
 A version and a config file. It is here because a kernel and the machine that boots it are
 one release: changing either invalidates every template taken against the previous pair.
 
+**Memory that moves.** A VM given a ceiling gets a `virtio-mem` device covering the gap
+between its boot size and that ceiling, with nothing plugged. The host grows and shrinks it
+over QMP; there are no ACPI DIMM slots, because a DIMM can be added and, in practice, not
+removed — unplugging one needs the guest to offline a whole memory block and a single
+unmovable page in it makes that fail. Measured on a 1 GiB VM with a 4 GiB ceiling:
+0 → 3072 MiB and back to 2 MiB.
+
+The kernel command line carries `memhp_default_state=online` for it. Without that the
+growth stops at the boot size and says nothing: memory added and never onlined is memory
+the guest cannot use but must still describe, so the driver declines to take more — asked
+for 2048 and then 3072 MiB, it plugged 1024 and stayed there.
+
+Separately, every VM gets a `virtio-balloon-pci` with `free-page-reporting=on`, which is
+how a guest hands back memory it merely stopped using. The two answer different questions:
+the balloon returns what is free, virtio-mem changes how much there is.
+
 **BPF.** The kernel carries what modern BPF development needs, and it did not before:
 `BPF_JIT` (every program ran interpreted), `DEBUG_INFO_BTF` (without it there is no
 `/sys/kernel/btf/vmlinux`, so no `vmlinux.h`, no `bpftool btf dump` and no CO-RE at all),

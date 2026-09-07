@@ -54,7 +54,12 @@ const (
 	SlotDiskMax  = 0x0f
 
 	SlotNICBase = 0x10
-	SlotNICMax  = 0x1e
+	SlotNICMax  = 0x1d
+
+	// Taken off the top of the NIC range rather than inserted anywhere earlier:
+	// every slot below this one is where it was, so this did not renumber a
+	// single existing device. Fifteen NICs was not a number anything needed.
+	SlotMem = 0x1e
 )
 
 // MaxDisks and MaxNICs bound the fixed slot ranges above. Exceeding either is a
@@ -84,11 +89,10 @@ const virtioModern = "disable-legacy=on"
 // same block.
 const MemoryBackendID = "pc.ram"
 
-// DefaultMemorySlots is how many hotplug slots a machine with a memory ceiling
-// gets. Slots are described in the machine's ACPI tables, so the number is part
-// of the machine's shape and cannot be changed for a VM that must restore from
-// an existing template.
-const DefaultMemorySlots = 4
+// memGrowthID names the memory a virtio-mem device hands out. It is a separate
+// region from pc.ram: that one is the memory the guest boots with and a template
+// is made of, this one is empty until somebody asks for it.
+const memGrowthID = "mem.growth"
 
 // Disk is one virtio-blk device.
 type Disk struct {
@@ -138,8 +142,21 @@ type NIC struct {
 // Memory describes guest RAM.
 type Memory struct {
 	SizeMB int
-	// MaxMB, when larger than SizeMB, gives the machine hotplug slots up to that
-	// ceiling. Both numbers are in the machine's shape.
+	// MaxMB, when larger than SizeMB, is the ceiling this VM's memory may grow to
+	// and shrink back from while it runs, through virtio-mem. Both numbers are in
+	// the machine's shape.
+	//
+	// Growth is virtio-mem and not ACPI DIMM hotplug, which this machine offers
+	// no slots for. A DIMM can be added and, in practice, not removed: unplugging
+	// one needs the guest to offline a whole memory block, and a single unmovable
+	// page in it makes that fail. virtio-mem plugs and unplugs in small blocks
+	// inside one device, so a VM that grew for a build can give the memory back
+	// afterwards — which is the half that made this worth having.
+	//
+	// Nothing is plugged at start-up. The caller sets requested-size over QMP when
+	// it wants more, which is also what makes one template serve VMs that end up
+	// different sizes: the template is taken with the boot memory and nothing
+	// else, and each restored VM grows on its own.
 	MaxMB int
 	// File backs guest RAM with a file rather than anonymous memory. Empty means
 	// anonymous.
@@ -227,7 +244,7 @@ type Spec struct {
 
 // Shape is the four arguments that decide what machine a guest sees: the chipset
 // and its options, the CPU model, the vCPU count with its hotplug ceiling, and
-// the memory size with its slots and ceiling.
+// the memory size with its ceiling.
 //
 // It is one type with one constructor because it has two consumers that must
 // never disagree: the command line QEMU is given, and the fingerprint that
@@ -261,11 +278,6 @@ func (s Spec) Shape() Shape {
 		"q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on", backend,
 	), ",")
 
-	slots := DefaultMemorySlots
-	if s.Memory.MaxMB <= s.Memory.SizeMB {
-		slots = 0
-	}
-
 	cpu := s.CPU
 	if cpu == "" {
 		cpu = "host"
@@ -292,7 +304,7 @@ func (s Spec) Shape() Shape {
 		Machine: machine,
 		CPU:     cpu,
 		SMP:     smpArg(s.BootCPUs, s.MaxCPUs),
-		Memory:  memoryArg(s.Memory.SizeMB, slots, s.Memory.MaxMB),
+		Memory:  memoryArg(s.Memory.SizeMB, s.Memory.MaxMB),
 	}
 }
 
@@ -326,9 +338,15 @@ func smpArg(bootCPUs, maxCPUs int) string {
 	return fmt.Sprintf("%d", bootCPUs)
 }
 
-func memoryArg(sizeMB, slots, maxMB int) string {
-	if slots > 0 && maxMB > sizeMB {
-		return fmt.Sprintf("%d,slots=%d,maxmem=%dM", sizeMB, slots, maxMB)
+// memoryArg formats -m.
+//
+// No slots=, and that is the change: slots are ACPI DIMM sockets, and this
+// machine plugs no DIMMs. maxmem on its own is the address space reserved for
+// memory devices, which is what virtio-mem needs and all it needs — verified by
+// starting a machine with maxmem and no slots.
+func memoryArg(sizeMB, maxMB int) string {
+	if maxMB > sizeMB {
+		return fmt.Sprintf("%d,maxmem=%dM", sizeMB, maxMB)
 	}
 	return fmt.Sprintf("%d", sizeMB)
 }
@@ -491,6 +509,27 @@ func (s Spec) Args() ([]string, error) {
 				s.VsockCID, virtioModern, SlotVsock))
 	}
 
+	// virtio-mem, when this VM is allowed to grow: the region between its boot
+	// memory and its ceiling, present as a device and empty.
+	//
+	// requested-size=0 — nothing is plugged until somebody asks over QMP. That is
+	// what lets one template serve VMs of different final sizes: it is taken with
+	// the boot memory and an empty device, and each restored VM grows on its own.
+	//
+	// memory-backend-ram and not a file, unlike the boot memory. The boot memory
+	// is file-backed because a template *is* that file; this region is empty when
+	// a template is taken, so a second file would be a second empty file to
+	// manage. What is plugged at freeze time goes through the migration stream
+	// instead, which is correct and only matters for a template taken from a VM
+	// that had already grown.
+	if s.Memory.MaxMB > s.Memory.SizeMB {
+		growth := s.Memory.MaxMB - s.Memory.SizeMB
+		args = append(args,
+			"-object", fmt.Sprintf("memory-backend-ram,id=%s,size=%dM", memGrowthID, growth),
+			"-device", fmt.Sprintf("virtio-mem-pci,id=vmem0,memdev=%s,requested-size=0,%s,addr=0x%x",
+				memGrowthID, virtioModern, SlotMem))
+	}
+
 	for i, d := range s.Disks {
 		// aio=io_uring, and QEMU is built with it for this reason. The default is
 		// aio=threads, which hands every request to a worker pool and pays a
@@ -644,6 +683,9 @@ func (s Spec) topology() string {
 	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", SlotRNG, SlotBalloon)
 	if s.VsockCID != 0 {
 		fmt.Fprintf(&b, ";vhost-vsock-pci@%#x", SlotVsock)
+	}
+	if s.Memory.MaxMB > s.Memory.SizeMB {
+		fmt.Fprintf(&b, ";virtio-mem-pci@%#x", SlotMem)
 	}
 	for i, d := range s.Disks {
 		// Read-only is part of it: the guest sees a different device, and QEMU

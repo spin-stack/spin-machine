@@ -112,6 +112,21 @@ func (c Cmdline) String() string {
 	// set of processes, and nothing this machine runs asks for v1.
 	parts = append(parts, "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=all")
 
+	// Bring memory online as it arrives, because on this machine it does: a VM
+	// with a ceiling is given a virtio-mem device it can grow through.
+	//
+	// Without this the growth silently stops at the boot size. Memory that is
+	// added and never onlined is memory the guest cannot use but must still
+	// describe, so the driver declines to take more — measured on this machine
+	// with 1 GiB of boot memory: asked for 2048 MiB and then 3072 MiB, it plugged
+	// 1024 MiB and stayed there, with no error on either side. With this, the
+	// same requests plug 2048 and 3072.
+	//
+	// Unconditional, and not only when there is a ceiling: it costs one token on
+	// a machine with no virtio-mem, and a command line that changes with the
+	// memory configuration is a second thing that has to agree with the first.
+	parts = append(parts, "memhp_default_state=online")
+
 	// A short-lived VM never amortises the tickless machinery's setup cost, and
 	// on a guest the timer interrupt it saves is cheap.
 	parts = append(parts, "nohz=off")
