@@ -17,6 +17,7 @@ One repository, one version, one generation of templates.
 ```
 machine/    what the machine is: PCI slot map, shape, memory backing, kernel command line
 cmd/        spin-machine (boot one, print its fingerprint) and the debug init it boots
+CLAUDE.md   how to work in here
 qemu/       Dockerfile + devices.mak
 kernel/     Dockerfile + config-<version>-<arch>
 image/      mkosi configuration producing base.qcow2 (ext4 inside)
@@ -124,9 +125,12 @@ visible from outside:
   on a machine whose QEMU has no display adapter compiled in. Enabling the distribution's
   `serial-getty@ttyS0` does not help either: it carries `BindsTo=dev-ttyS0.device`, and a
   `.device` unit exists only if udev announced it — and this image masks `systemd-udevd`,
-  because a VM's hardware is fixed and udev is boot time spent discovering it. So the debug
-  init writes its own ten-line agetty unit into the throwaway overlay, and the shared base
-  never carries a debugging convenience production has no use for.
+  because a VM's hardware is fixed and udev is boot time spent discovering it. A drop-in
+  clearing `BindsTo` does not lift it either. So the image ships
+  `spin-machine-console.service`, an agetty unit with no device dependency, **and does not
+  enable it**; the debug boot writes the one symlink that turns it on, into the throwaway
+  overlay. Production must not get a login prompt on the console the machine prints its
+  kernel log to.
 - **`ssh.service` fails five times and gives up.** The image has no SSH host keys, by
   design — they are identity, and identity is not baked into an image many VMs share — and
   `sshd-keygen.service`, which would generate them, has `ConditionFirstBoot=yes` and does

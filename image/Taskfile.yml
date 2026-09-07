@@ -90,11 +90,12 @@ tasks:
         # image, and in production it is the guest's own init that fixes it. Here it is
         # cmd/spin-machine-init: mount the four, find the disk, move onto it, exec.
         #
-        # spinmachine.getty=ttyS0 is asked for because systemd does not start a serial
-        # login on its own here — it starts getty@tty1, a virtual console on a machine
-        # whose QEMU has no display adapter compiled in at all. The init writes the unit
-        # symlink into this VM's throwaway overlay, so the shared base image never carries
-        # a debugging convenience that production has no use for.
+        # spinmachine.getty=1 enables the login unit the image already carries and does
+        # not start. systemd gives no serial login on its own here — it starts getty@tty1,
+        # a virtual console on a machine whose QEMU has no display adapter compiled in at
+        # all. The unit is in the image; the symlink that turns it on is written into this
+        # VM's throwaway overlay, because a login prompt on the console the machine prints
+        # its kernel log to is a debugging convenience production must not get.
         #
         # accel=kvm with no fallback, from the machine package: the binary in _output/bin
         # cannot emulate, on purpose. A host with no /dev/kvm gets an error here rather
@@ -104,7 +105,7 @@ tasks:
           --disk "$scratch" \
           --initrd "$out/debug-initramfs.cpio.gz" \
           --memory {{.MEMORY}} --cpus {{.CPUS}} \
-          --append "spinmachine.root=/dev/vda spinmachine.init={{.INIT}} spinmachine.getty=ttyS0" || true
+          --append "spinmachine.root=/dev/vda spinmachine.init={{.INIT}} spinmachine.getty=1" || true
 
         echo
         after=$(sha256sum "$out/base.qcow2" | cut -d' ' -f1)

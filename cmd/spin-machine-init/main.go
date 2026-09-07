@@ -23,7 +23,7 @@
 //	spinmachine.root=/dev/vda        the disk to move onto, by /dev node …
 //	spinmachine.root=serial:sbxroot  … or by virtio-blk serial (see findDisk)
 //	spinmachine.init=/sbin/init      what to exec there (default /sbin/init)
-//	spinmachine.getty=ttyS0          enable a serial login on that port first
+//	spinmachine.getty=1              enable the image's serial login before exec
 package main
 
 import (
@@ -154,11 +154,11 @@ func run() error {
 
 	if getty != "" {
 		if err := enableSerialGetty(getty); err == nil {
-			fmt.Fprintf(os.Stderr, "spin-machine-init: enabled a serial login on %s\n", getty)
+			fmt.Fprintln(os.Stderr, "spin-machine-init: enabled the serial login")
 		} else {
 			// Not fatal: a machine with no login prompt is still one to look at
 			// through whatever else was asked for.
-			fmt.Fprintf(os.Stderr, "spin-machine-init: enabling a login on %s: %v\n", getty, err)
+			fmt.Fprintf(os.Stderr, "spin-machine-init: enabling the serial login: %v\n", err)
 		}
 	}
 
@@ -203,61 +203,23 @@ func findDisk(spec string) (string, error) {
 	return "", fmt.Errorf("no block device has serial %q", name)
 }
 
-// enableSerialGetty gives the guest a login prompt on a serial port.
+// enableSerialGetty turns on the login prompt the image already carries.
 //
-// It is done here, into the root filesystem this VM is about to enter, and not
-// baked into an image: the image is shared read-only by every VM that boots from
-// it, this VM's root is a throwaway overlay over it, and a login prompt on a
-// serial port is a debugging convenience production has no use for — a guest with
-// no serial console would start an agetty on a port that is not there and retry
-// until systemd gave up.
+// The unit itself is in the image, inert — see
+// /usr/lib/systemd/system/spin-machine-console.service, which explains why it exists and
+// why nothing enables it there. This is the symlink `systemctl enable` would write, and it
+// is written here rather than in the image because it is a decision about *this boot*: the
+// image is shared read-only by every VM that boots from it, this VM's root is a throwaway
+// overlay over it, and a login prompt on the console the machine prints its kernel log to
+// is a debugging convenience production must not get.
 //
-// It is needed at all because systemd starts getty@tty1 — a virtual console on a
-// machine whose QEMU has no display adapter compiled in — and does not start one
-// on the serial port, even though /sys/class/tty/console/active says ttyS0.
-//
-// The unit is written here rather than enabling the distribution's
-// serial-getty@.service, and that is the part that took three boots to find. That
-// unit carries `BindsTo=dev-%i.device`, and a .device unit exists only if udev
-// announced it — but this image masks systemd-udevd, because a VM's hardware is
-// fixed and known and udev is boot time spent discovering it. Enabling it gets:
-//
-//	[DEPEND] Dependency failed for serial-getty@ttyS0.service.
-//
-// A drop-in clearing BindsTo did not lift it either. Ten lines of unit with no
-// device dependency at all does, and it says exactly what it wants: agetty, on
-// this port, at getty.target.
+// So: static configuration in the image, the decision to use it in the boot that wants it.
 func enableSerialGetty(port string) error {
 	const unit = "spin-machine-console.service"
 
-	if _, err := os.Stat("/usr/sbin/agetty"); err != nil {
-		return fmt.Errorf("this guest has no agetty: %w", err)
-	}
-
-	// --noclear keeps the boot messages on screen, --keep-baud leaves the port as
-	// QEMU set it, and the leading "-" on ExecStart stops a failure to open the
-	// port from being reported as a crash on a machine that simply has no console.
-	body := "[Unit]\n" +
-		"Description=Serial console login (spin-machine debug boot)\n" +
-		"After=systemd-user-sessions.service\n" +
-		"Before=getty.target\n" +
-		"IgnoreOnIsolate=yes\n" +
-		"\n[Service]\n" +
-		"ExecStart=-/usr/sbin/agetty --noreset --noclear --keep-baud 115200 " + port + " $TERM\n" +
-		"Type=idle\n" +
-		"Restart=always\n" +
-		"RestartSec=1\n" +
-		"TTYPath=/dev/" + port + "\n" +
-		"TTYReset=yes\n" +
-		"TTYVHangup=yes\n" +
-		"StandardInput=tty\n" +
-		"StandardOutput=tty\n" +
-		"IgnoreSIGPIPE=no\n" +
-		"SendSIGHUP=yes\n"
-
-	path := "/etc/systemd/system/" + unit
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil { // #nosec G306 -- a unit file
-		return err
+	target := "/usr/lib/systemd/system/" + unit
+	if _, err := os.Stat(target); err != nil {
+		return fmt.Errorf("this guest does not carry %s: %w", unit, err)
 	}
 
 	dir := "/etc/systemd/system/getty.target.wants"
@@ -266,7 +228,7 @@ func enableSerialGetty(port string) error {
 	}
 	link := dir + "/" + unit
 	_ = os.Remove(link)
-	return os.Symlink(path, link)
+	return os.Symlink(target, link)
 }
 
 // arg reads one key=value from a kernel command line.

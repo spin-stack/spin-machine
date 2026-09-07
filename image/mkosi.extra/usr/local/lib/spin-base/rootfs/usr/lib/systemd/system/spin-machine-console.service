@@ -1,0 +1,45 @@
+# A login prompt on the serial console. Shipped, and NOT enabled.
+#
+# Nothing starts this unless something links it into getty.target.wants, which the debug
+# boot does and production does not. That split is the whole point of the file:
+#
+#   - The unit is static configuration and belongs in the image, next to every other unit.
+#   - Enabling it is a decision about one boot, and belongs to whoever made that boot.
+#
+# Production does not want it. This image's systemd is the first process of a workload
+# inside a VM, and the VM's serial port is where the kernel prints and where whoever runs
+# the guest reads its logs. An agetty there would compete for the console with the machine's
+# own log stream, and on a guest given no serial port at all it would fail and retry until
+# systemd gave up.
+#
+# Why this and not the distribution's serial-getty@.service, which does the same job: that
+# unit carries `BindsTo=dev-%i.device`, a .device unit exists only if udev announced it, and
+# this image masks systemd-udevd — a VM's hardware is fixed and known, and udev is boot time
+# spent discovering it. Enabling serial-getty here gets
+# `[DEPEND] Dependency failed for serial-getty@ttyS0.service`, and a drop-in clearing
+# BindsTo does not lift it either. This unit has no device dependency to fail.
+#
+# The port is fixed at ttyS0 rather than templated, because that is the only serial port
+# this machine has (see the QEMU device set).
+
+[Unit]
+Description=Serial console login (debug boots only)
+After=systemd-user-sessions.service
+Before=getty.target
+IgnoreOnIsolate=yes
+
+[Service]
+# The leading "-" keeps a port that cannot be opened from being reported as a crash;
+# --noclear leaves the boot messages on screen, and --keep-baud takes the line as QEMU set
+# it rather than renegotiating it.
+ExecStart=-/usr/sbin/agetty --noreset --noclear --keep-baud 115200 ttyS0 $TERM
+Type=idle
+Restart=always
+RestartSec=1
+TTYPath=/dev/ttyS0
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=tty
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
