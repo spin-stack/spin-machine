@@ -17,9 +17,15 @@ hack/       release
 
 ```
 task build            # everything, into _output/
-task verify:image     # boot base.qcow2 and run a command in it
+task shell            # boot the machine and look around inside the image
 task release          # one tarball, one version
+task verify:machine   # boot the whole release end to end
 ```
+
+Each part's own targets live beside the thing they build — `qemu/Taskfile.yml`,
+`kernel/Taskfile.yml`, `image/Taskfile.yml` — so `task qemu:build` is next to
+`qemu/Dockerfile`. The root `Taskfile.yml` holds the vars every part reads and the targets
+that cross all three.
 
 ## What it publishes
 
@@ -29,11 +35,32 @@ One tarball, laid out the way a spinbox release is, so a host installs it the sa
 |---|---|
 | `bin/qemu-system-x86_64` | KVM only — it refuses to emulate, on purpose |
 | `bin/qemu-system-x86_64-tcg` | for CI, which has no `/dev/kvm` |
-| `bin/qemu-img`, `bin/qemu-nbd` | |
+| `bin/qemu-img` | |
 | `qemu/{bios.bin,bios-256k.bin,pvh.bin,kvmvapic.bin,efi-virtio.rom}` | |
 | `kernel/vmlinux` | plus a `spinbox-kernel-x86_64` symlink |
 | `image/base.qcow2` | read-only, 0444 |
 | `machine.env` | the version and the three checksums that decide template validity |
+
+## Looking inside the image
+
+```
+task shell                    # /bin/bash as PID 1 — instant, nothing mounted yet
+task shell INIT=/sbin/init    # the full systemd boot
+```
+
+It boots this QEMU and this kernel over a throwaway qcow2 overlay on `base.qcow2`, with the
+serial console on stdio. Not `spinbox run`: that path boots the initrd, runs vminitd as
+PID 1 and speaks ttrpc over vsock — it wires stdout and stderr and has no stdin at all, so
+there is no way to type into it. This is a plain VM boot, which is not how production runs a
+container, and that is the point: it is for finding out what the image is missing.
+
+Two things it has already found:
+
+- With `init=/bin/bash` nothing is mounted, so `df` warns, `free` fails and `poweroff`
+  answers *"Running in chroot, ignoring request"*. That is what PID 1 gets before an init
+  has run, not a fault in the image; the task prints the one line that fixes it.
+- With `init=/sbin/init` systemd comes up and **gives no login prompt on ttyS0**. Nothing in
+  the image enables a serial getty, because as a container's PID 1 it never needed one.
 
 ## The three parts
 
@@ -159,13 +186,17 @@ task build && task verify:machine
 
 - **QEMU 11.1.1** builds, both binaries. The build's own assertions pass: virtio-blk,
   virtio-net, vhost-vsock and virtconsole present, no e1000/rtl8139/vmxnet3, q35 and no
-  pc-i440fx, `qemu-img` and `qemu-nbd` present, and the accelerator split — the production
+  pc-i440fx, `qemu-img` present, and the accelerator split — the production
   binary refuses to emulate, the CI one can.
 - **The kernel** builds. Its config comes out byte-identical to spinbox's after
   `olddefconfig`, the PVH notes survive the strip, and the stripped `vmlinux` is the same
   size as spinbox's (34,298,960 bytes). It is not byte-identical — a kernel never is
   across builds — so it is a new machine fingerprint, which is what moving it costs.
-- **base.qcow2** builds (863 MB) and boots.
+- **base.qcow2** builds (~860 MB) and boots. It is not bit-reproducible: two builds of the
+  same tree on the same day differed in size and checksum, because the userland comes from
+  a live archive and the filesystem is sized from what came out of it. The checksum in
+  `machine.env` records what a given release actually contains; nothing yet lets you
+  predict it from the inputs.
 - **The whole release boots as one machine**: this QEMU, this kernel, this base image, plus
   spinbox's initrd, driven through `spinbox run` with `SPINBOX_CONFIG` pointed at the
   unpacked tarball. 151 ms to a running guest. `--qemu-img` was not passed and did not need

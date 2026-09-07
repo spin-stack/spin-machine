@@ -9,8 +9,13 @@
 # of the three drift and leave the third to notice.
 #
 #   task build            everything, into _output/
+#   task shell            boot the machine and look around inside it
 #   task release          one tarball, one version
-#   task verify:image     boot base.qcow2 and run a command in it
+#
+# What is in this file is the vars every part reads and the targets that cross all three.
+# Each part's own targets live beside the thing they build — qemu/Taskfile.yml,
+# kernel/Taskfile.yml, image/Taskfile.yml — namespaced, so `task qemu:build` is next to
+# qemu/Dockerfile and nobody has to read three hundred lines to change one flag.
 #
 # The initrd is not here. It carries vminitd, built from spinbox's source, and it is the
 # one guest artefact that belongs to the runtime rather than to the machine.
@@ -19,6 +24,20 @@ version: '3'
 
 silent: true
 output: prefixed
+
+includes:
+  qemu:
+    taskfile: qemu/Taskfile.yml
+    # The build context is the repository root: the Dockerfiles COPY qemu/devices.mak and
+    # image/mkosi.extra by their path from here, so every part sees the same tree and no
+    # `..` appears in a COPY.
+    dir: '{{.ROOT_DIR}}'
+  kernel:
+    taskfile: kernel/Taskfile.yml
+    dir: '{{.ROOT_DIR}}'
+  image:
+    taskfile: image/Taskfile.yml
+    dir: '{{.ROOT_DIR}}'
 
 vars:
   ROOT_DIR:
@@ -37,7 +56,7 @@ vars:
 
   # BuildKit cache backends. Local by default; CI overrides them with `type=gha` so the
   # build is not duplicated in a workflow file — the Dockerfiles and the flags stay in one
-  # place, which is the rule this file exists for.
+  # place, which is the rule these files exist for.
   BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default (printf "%s/.cache/buildkit" .ROOT_DIR)}}'
   QEMU_CACHE_FROM: '{{.QEMU_CACHE_FROM | default (printf "type=local,src=%s/qemu" .BUILDKIT_CACHE_DIR)}}'
   QEMU_CACHE_TO: '{{.QEMU_CACHE_TO | default (printf "type=local,dest=%s/qemu,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
@@ -53,6 +72,11 @@ vars:
   # `task qemu:image` needs no registry.
   QEMU_IMAGE: '{{.QEMU_IMAGE | default "spin-stack/spin-machine-qemu"}}'
 
+  # A sibling spinbox checkout, for the two things this repository cannot produce: the
+  # initrd, and the `spinbox run` that drives a VM.
+  SPINBOX_DIR: '{{.SPINBOX_DIR | default "../spinbox"}}'
+  SUDO: '{{.SUDO | default "sudo"}}'
+
 tasks:
 
   default:
@@ -62,224 +86,37 @@ tasks:
   build:
     desc: Build QEMU, the guest kernel and the base image into _output/
     cmds:
-      - task: build:qemu
-      - task: build:kernel
-      - task: build:image
+      - task: qemu:build
+      - task: kernel:build
+      - task: image:build
       - cmd: echo "✓ build complete — {{.OUTPUT_DIR}}/"
 
-  # ==========================================================================
-  # QEMU
-  # ==========================================================================
-
-  build:qemu:
-    desc: "Build QEMU: qemu-system-x86_64 (KVM-only), the TCG binary for CI, qemu-img, qemu-nbd and the firmware."
-    cmds:
-      # Emptied first: `--output type=local` writes files and removes none, so a binary or
-      # a firmware blob this build no longer produces stays on disk, indistinguishable from
-      # one it does. That is how a 331 MB firmware tree outlived the build that stopped
-      # shipping it.
-      - rm -rf {{.OUTPUT_DIR}}/bin/qemu-* {{.OUTPUT_DIR}}/share/spin-stack/qemu
-      - mkdir -p {{.OUTPUT_DIR}}
-      - |
-        docker buildx build \
-          --file qemu/Dockerfile \
-          --target extract \
-          --platform linux/amd64 \
-          --cache-from {{.QEMU_CACHE_FROM}} \
-          --cache-to {{.QEMU_CACHE_TO}} \
-          --build-arg QEMU_VERSION={{.QEMU_VERSION}} \
-          --build-arg JOBS={{.QEMU_JOBS}} \
-          --output type=local,dest={{.OUTPUT_DIR}} \
-          .
-      - task: verify:qemu
-
-  verify:qemu:
-    desc: Assert the extracted QEMU tree carries what every consumer needs.
-    cmds:
-      # Files only. The extracted binaries link against the build image's libraries and do
-      # not run on a bare runner (`liburing.so.2: cannot open shared object file`), which is
-      # what `task qemu:image` exists for; the behavioural assertions are inside the build
-      # itself, in qemu/Dockerfile, where the binary is guaranteed runnable.
-      - |
-        set -euo pipefail
-        for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img qemu-nbd; do
-          test -x {{.OUTPUT_DIR}}/bin/$b || {
-            echo "missing {{.OUTPUT_DIR}}/bin/$b — run: task build:qemu" >&2; exit 1; }
-        done
-        # qemu-img is the flag this repository exists to remove: `spinbox run` had to be
-        # given --qemu-img pointing at storage's build because spinbox's own release, built
-        # --disable-tools, does not contain one.
-        # pvh.bin is how -kernel enters a PVH ELF kernel, which is the only boot path here.
-        # efi-virtio.rom is the option ROM of the one NIC this build keeps; a VM given a
-        # virtio-net-pci without it does not start.
-        for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
-          test -f {{.OUTPUT_DIR}}/share/spin-stack/qemu/$f || {
-            echo "missing firmware $f — run: task build:qemu" >&2; exit 1; }
-        done
-        echo "OK: both qemu-system binaries, qemu-img, qemu-nbd and five firmware files"
-
-  qemu:image:
+  shell:
     desc: >-
-      Build the QEMU runtime image locally (--load, not pushed). It is how a consumer on a
-      bare runner gets a QEMU that runs: the extracted binaries carry the build image's
-      library dependencies and this image carries the libraries.
-    cmds:
-      - |
-        docker buildx build \
-          --file qemu/Dockerfile \
-          --target runtime \
-          --platform linux/amd64 \
-          --cache-from {{.QEMU_CACHE_FROM}} \
-          --build-arg QEMU_VERSION={{.QEMU_VERSION}} \
-          --build-arg JOBS={{.QEMU_JOBS}} \
-          --tag {{.QEMU_IMAGE}}:{{.QEMU_VERSION}} \
-          --load \
-          .
-
-  qemu:version:
-    desc: Print the pinned QEMU version (the single source of truth for CI tags).
-    cmds:
-      - echo "{{.QEMU_VERSION}}"
-
-  # ==========================================================================
-  # Guest kernel
-  # ==========================================================================
-
-  build:kernel:
-    desc: Build the guest kernel (vmlinux, PVH, stripped) into _output/.
-    cmds:
-      - mkdir -p {{.OUTPUT_DIR}}
-      - |
-        docker buildx build \
-          --file kernel/Dockerfile \
-          --target kernel \
-          --platform linux/amd64 \
-          --cache-from {{.KERNEL_CACHE_FROM}} \
-          --cache-to {{.KERNEL_CACHE_TO}} \
-          --build-arg KERNEL_VERSION={{.KERNEL_VERSION}} \
-          --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
-          --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
-          --output type=local,dest={{.OUTPUT_DIR}} \
-          .
-      - |
-        set -euo pipefail
-        test -f {{.OUTPUT_DIR}}/vmlinux || { echo "no kernel at {{.OUTPUT_DIR}}/vmlinux" >&2; exit 1; }
-        echo "OK: {{.OUTPUT_DIR}}/vmlinux  sha256 $(sha256sum {{.OUTPUT_DIR}}/vmlinux | cut -c1-16)…"
-
-  kernel:menuconfig:
-    desc: "Edit the kernel config. Writes back to kernel/config-<version>-<arch>."
+      Boot this machine and get a shell inside the base image, to see how it feels and what
+      it is missing. `task shell INIT=/sbin/init` boots systemd instead of a bare shell.
+    aliases: [vm]
     interactive: true
     cmds:
-      - |
-        docker buildx build \
-          --file kernel/Dockerfile \
-          --target kernel-build-base \
-          --platform linux/amd64 \
-          --cache-from {{.KERNEL_CACHE_FROM}} \
-          --cache-to {{.KERNEL_CACHE_TO}} \
-          --build-arg KERNEL_VERSION={{.KERNEL_VERSION}} \
-          --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
-          --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
-          --output type=docker,name=spin-machine-menuconfig \
-          .
-      # A changed config is a changed kernel is a changed machine: every template on every
-      # host stops matching. That is by design — it is how a fleet is stopped from restoring
-      # a template into a machine of another shape — but it should be a deliberate commit
-      # with a measurement in it, not a drive-by.
-      - |
-        docker run --rm -it \
-          -v {{.ROOT_DIR}}/kernel:/config \
-          -w /usr/src/linux \
-          -e KCONFIG_CONFIG=/config/config-{{.KERNEL_VERSION}}-{{.KERNEL_ARCH}} \
-          -e TERM=${TERM:-xterm-256color} \
-          spin-machine-menuconfig \
-          bash -c "make ARCH={{.KERNEL_ARCH}} menuconfig && cp .config /config/config-{{.KERNEL_VERSION}}-{{.KERNEL_ARCH}}"
+      - task: image:shell
+        vars:
+          INIT: '{{.INIT}}'
 
   # ==========================================================================
-  # Base image
+  # Release
   # ==========================================================================
 
-  build:image:
-    desc: Build base.qcow2 (Ubuntu 26.04 userland, ext4, partitionless) into _output/.
+  release:
+    desc: Build everything and pack one versioned tarball.
     cmds:
-      - task: image:builder
-      - mkdir -p {{.OUTPUT_DIR}} {{.MKOSI_CACHE_DIR}}
-      # `docker run` and not `docker buildx build`, and the reason is in image/Dockerfile:
-      # mkosi assembles a root filesystem by unsharing a user and mount namespace and
-      # BuildKit forbids that. The flags below are exactly what it needs and nothing more —
-      # not --privileged.
-      - |
-        docker run --rm \
-          --security-opt seccomp=unconfined \
-          --security-opt apparmor=unconfined \
-          --cap-add SYS_ADMIN \
-          -v {{.ROOT_DIR}}/{{.OUTPUT_DIR}}:/out \
-          -v {{.MKOSI_CACHE_DIR}}:/cache \
-          {{.IMAGE_BUILDER_TAG}}
-
-  image:builder:
-    desc: Build the container that builds the base image (mkosi, e2fsprogs, qemu-utils).
-    cmds:
-      - |
-        docker buildx build \
-          --file image/Dockerfile \
-          --platform linux/amd64 \
-          --tag {{.IMAGE_BUILDER_TAG}} \
-          --load \
-          .
-
-  verify:image:
-    desc: >-
-      Boot base.qcow2 and run a command in it, with a sibling spinbox checkout's
-      `spinbox run`. This is the assertion the image half is actually finished — every
-      other check in image/build.sh reads the filesystem without executing anything in it.
-    vars:
-      SPINBOX_DIR: '{{.SPINBOX_DIR | default "../spinbox"}}'
-      SUDO: '{{.SUDO | default "sudo"}}'
-    cmds:
-      - |
-        set -euo pipefail
-        img={{.ROOT_DIR}}/{{.OUTPUT_DIR}}/base.qcow2
-        test -f "$img" || { echo "no base image at $img — run: task build:image" >&2; exit 1; }
-        test -d {{.SPINBOX_DIR}} || {
-          echo "no spinbox checkout at {{.SPINBOX_DIR}} — pass SPINBOX_DIR=<path>" >&2; exit 1; }
-
-        # Built here rather than taken from _output: `spinbox run` is not one of the
-        # binaries spinbox's own `task build` produces, so a checkout that has been built
-        # still does not have it.
-        bin=$(mktemp -d)/spinbox
-        (cd {{.SPINBOX_DIR}} && CGO_ENABLED=0 GOOS=linux \
-            go build -tags 'osusergo netgo static_build no_grpc' -o "$bin" ./cmd/spinbox)
-
-        # --qemu-img: this repository's own, which is the point. A spinbox release built
-        # --disable-tools has none, which is why that flag exists at all; once spinbox
-        # consumes a spin-machine release the flag can go.
-        qemu_img={{.ROOT_DIR}}/{{.OUTPUT_DIR}}/bin/qemu-img
-        args=""
-        [ -x "$qemu_img" ] && args="--qemu-img $qemu_img"
-
-        # The base must come back byte-identical. Every VM maps it read-only through a
-        # backing chain and many VMs share one, so a step that opens it read-write
-        # invalidates every overlay in existence — silently, because the overlays keep
-        # working until they read a cluster that moved.
-        before=$(sha256sum "$img" | cut -d' ' -f1)
-        out=$({{.SUDO}} "$bin" run --image "$img" --memory 1024 $args -- \
-                /bin/sh -c "echo it works" 2>/dev/null)
-        after=$(sha256sum "$img" | cut -d' ' -f1)
-
-        [ "$out" = "it works" ] || { echo "the guest printed: $out" >&2; exit 1; }
-        [ "$before" = "$after" ] || {
-          echo "the base image changed during a boot: $before -> $after" >&2; exit 1; }
-        echo "OK: base.qcow2 boots, runs a command, and is unchanged afterwards"
+      - task: build
+      - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_DIR}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" QEMU_VERSION="{{.QEMU_VERSION}}" KERNEL_VERSION="{{.KERNEL_VERSION}}" hack/release
 
   verify:machine:
     desc: >-
       Boot the whole release — this QEMU, this kernel, this base image, plus spinbox's
       initrd — and run a command in the guest. The end-to-end assertion that a release is
       one machine.
-    vars:
-      SPINBOX_DIR: '{{.SPINBOX_DIR | default "../spinbox"}}'
-      SUDO: '{{.SUDO | default "sudo"}}'
     cmds:
       - task: release
       - |
@@ -287,7 +124,10 @@ tasks:
         rel={{.OUTPUT_DIR}}/release/spin-machine-{{.VERSION}}-linux-{{.KERNEL_ARCH}}
         test -f "$rel.tar.gz" || { echo "no release tarball at $rel.tar.gz" >&2; exit 1; }
 
-        stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
+        # Removed with sudo: the VM below runs as root and leaves its state and log
+        # directories owned by root inside $stage, so a plain rm -rf leaves them and the
+        # trap prints two permission errors after a run that succeeded.
+        stage=$(mktemp -d); trap '{{.SUDO}} rm -rf "$stage"' EXIT
         tar -xzf "$rel.tar.gz" -C "$stage"
         share="$stage/$(basename "$rel")/usr/share/spin-stack"
 
@@ -326,16 +166,6 @@ tasks:
         [ "$before" = "$after" ] || {
           echo "the base image changed during a boot: $before -> $after" >&2; exit 1; }
         echo "OK: the release boots as one machine, finds its own qemu-img, and leaves the base untouched"
-
-  # ==========================================================================
-  # Release
-  # ==========================================================================
-
-  release:
-    desc: Build everything and pack one versioned tarball.
-    cmds:
-      - task: build
-      - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_DIR}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" QEMU_VERSION="{{.QEMU_VERSION}}" KERNEL_VERSION="{{.KERNEL_VERSION}}" hack/release
 
   clean:
     desc: Remove build output. Leaves the caches; use clean:cache for those.

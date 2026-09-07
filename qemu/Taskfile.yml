@@ -1,0 +1,77 @@
+version: '3'
+
+# QEMU. See qemu/Dockerfile for what is built and why the flags are what they are; the
+# vars these tasks read (QEMU_VERSION, the cache backends, OUTPUT_DIR) are in the root
+# Taskfile.yml, which is where the version pin lives.
+
+tasks:
+
+  build:
+    desc: "Build QEMU: qemu-system-x86_64 (KVM only), the TCG binary for CI, qemu-img and the firmware."
+    cmds:
+      # Emptied first: `--output type=local` writes files and removes none, so a binary or
+      # a firmware blob this build no longer produces stays on disk, indistinguishable from
+      # one it does. That is how a 331 MB firmware tree outlived the build that stopped
+      # shipping it, and how a qemu-nbd would outlive the decision to stop shipping one.
+      - rm -rf {{.OUTPUT_DIR}}/bin/qemu-* {{.OUTPUT_DIR}}/share/spin-stack/qemu
+      - mkdir -p {{.OUTPUT_DIR}}
+      - |
+        docker buildx build \
+          --file qemu/Dockerfile \
+          --target extract \
+          --platform linux/amd64 \
+          --cache-from {{.QEMU_CACHE_FROM}} \
+          --cache-to {{.QEMU_CACHE_TO}} \
+          --build-arg QEMU_VERSION={{.QEMU_VERSION}} \
+          --build-arg JOBS={{.QEMU_JOBS}} \
+          --output type=local,dest={{.OUTPUT_DIR}} \
+          .
+      - task: verify
+
+  verify:
+    desc: Assert the extracted QEMU tree carries what every consumer needs.
+    cmds:
+      # Files only. The extracted binaries link against the build image's libraries and do
+      # not run on a bare runner (`liburing.so.2: cannot open shared object file`), which is
+      # what `task qemu:image` exists for; the behavioural assertions are inside the build
+      # itself, in qemu/Dockerfile, where the binary is guaranteed runnable.
+      - |
+        set -euo pipefail
+        for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
+          test -x {{.OUTPUT_DIR}}/bin/$b || {
+            echo "missing {{.OUTPUT_DIR}}/bin/$b — run: task qemu:build" >&2; exit 1; }
+        done
+        # qemu-img is the flag this repository exists to remove: `spinbox run` had to be
+        # given --qemu-img pointing at storage's build because spinbox's own release, built
+        # --disable-tools, does not contain one.
+        # pvh.bin is how -kernel enters a PVH ELF kernel, which is the only boot path here.
+        # efi-virtio.rom is the option ROM of the one NIC this build keeps; a VM given a
+        # virtio-net-pci without it does not start.
+        for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
+          test -f {{.OUTPUT_DIR}}/share/spin-stack/qemu/$f || {
+            echo "missing firmware $f — run: task qemu:build" >&2; exit 1; }
+        done
+        echo "OK: both qemu-system binaries, qemu-img and five firmware files"
+
+  image:
+    desc: >-
+      Build the QEMU runtime image locally (--load, not pushed). It is how a consumer on a
+      bare runner gets a QEMU that runs: the extracted binaries carry the build image's
+      library dependencies and this image carries the libraries.
+    cmds:
+      - |
+        docker buildx build \
+          --file qemu/Dockerfile \
+          --target runtime \
+          --platform linux/amd64 \
+          --cache-from {{.QEMU_CACHE_FROM}} \
+          --build-arg QEMU_VERSION={{.QEMU_VERSION}} \
+          --build-arg JOBS={{.QEMU_JOBS}} \
+          --tag {{.QEMU_IMAGE}}:{{.QEMU_VERSION}} \
+          --load \
+          .
+
+  version:
+    desc: Print the pinned QEMU version (the single source of truth for CI tags).
+    cmds:
+      - echo "{{.QEMU_VERSION}}"

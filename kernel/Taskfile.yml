@@ -1,0 +1,68 @@
+version: '3'
+
+# The guest kernel. See kernel/Dockerfile; KERNEL_VERSION and KERNEL_ARCH are pinned in the
+# root Taskfile.yml.
+#
+# A changed kernel is a changed machine: spinbox hashes this binary by content, so every
+# template on every host stops matching. That is the point — it is how a fleet is stopped
+# from restoring a template into a machine of another shape — but it means a config change
+# here is a fleet-wide event and should be a deliberate commit with a measurement in it.
+
+tasks:
+
+  build:
+    desc: Build the guest kernel (vmlinux, PVH, stripped) into _output/.
+    cmds:
+      - mkdir -p {{.OUTPUT_DIR}}
+      - |
+        docker buildx build \
+          --file kernel/Dockerfile \
+          --target kernel \
+          --platform linux/amd64 \
+          --cache-from {{.KERNEL_CACHE_FROM}} \
+          --cache-to {{.KERNEL_CACHE_TO}} \
+          --build-arg KERNEL_VERSION={{.KERNEL_VERSION}} \
+          --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
+          --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
+          --output type=local,dest={{.OUTPUT_DIR}} \
+          .
+      - task: verify
+
+  verify:
+    desc: Assert the built kernel is one QEMU can enter and one this machine can boot.
+    cmds:
+      - |
+        set -euo pipefail
+        k={{.OUTPUT_DIR}}/vmlinux
+        test -f "$k" || { echo "no kernel at $k — run: task kernel:build" >&2; exit 1; }
+        # The PVH notes are the entry point: there is no bootloader and no UEFI here, and
+        # QEMU enters this ELF through pvh.bin using them. The build strips the symbol
+        # table, which is the one step that could plausibly take them with it.
+        readelf -n "$k" 2>/dev/null | grep -qi xen || {
+          echo "$k carries no Xen PVH notes — QEMU has no entry point into it" >&2; exit 1; }
+        echo "OK: $k, PVH notes present, sha256 $(sha256sum "$k" | cut -c1-16)…"
+
+  menuconfig:
+    desc: "Edit the kernel config. Writes back to kernel/config-<version>-<arch>."
+    interactive: true
+    cmds:
+      - |
+        docker buildx build \
+          --file kernel/Dockerfile \
+          --target kernel-build-base \
+          --platform linux/amd64 \
+          --cache-from {{.KERNEL_CACHE_FROM}} \
+          --cache-to {{.KERNEL_CACHE_TO}} \
+          --build-arg KERNEL_VERSION={{.KERNEL_VERSION}} \
+          --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
+          --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
+          --output type=docker,name=spin-machine-menuconfig \
+          .
+      - |
+        docker run --rm -it \
+          -v {{.ROOT_DIR}}/kernel:/config \
+          -w /usr/src/linux \
+          -e KCONFIG_CONFIG=/config/config-{{.KERNEL_VERSION}}-{{.KERNEL_ARCH}} \
+          -e TERM=${TERM:-xterm-256color} \
+          spin-machine-menuconfig \
+          bash -c "make ARCH={{.KERNEL_ARCH}} menuconfig && cp .config /config/config-{{.KERNEL_VERSION}}-{{.KERNEL_ARCH}}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# One tarball, one version: qemu-system-x86_64, qemu-img, qemu-nbd, the five firmware
-# files, vmlinux and base.qcow2.
+# One tarball, one version: qemu-system-x86_64, qemu-img, the five firmware files, vmlinux
+# and base.qcow2.
 #
 # Not because it is tidy. spinbox fingerprints the QEMU binary, the kernel and the initrd
 # by content to decide whether a VM may be restored from a template
@@ -48,7 +48,7 @@ require() {
 echo "Packing ${RELEASE_NAME}..."
 
 echo "QEMU:"
-for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img qemu-nbd; do
+for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
   require "${OUTPUT_DIR}/bin/${b}" "${SHARE}/bin/${b}" "the ${b} binary" 0755
 done
 

@@ -20,9 +20,14 @@
 set -euo pipefail
 
 OUT="${OUT:-/out/base.qcow2}"
-# Timestamps in the tree, so two builds of the same inputs produce the same filesystem. It
-# matters more here than usual: the base is shared by every VM through a backing chain, and
-# "did the machine change?" has to have an answer that is not the build's wall clock.
+# Normalizes timestamps in the tree, so the build's wall clock is not baked into every
+# file. It does NOT make the image bit-reproducible, and it should not be read as if it
+# did: two builds of this tree on 2026-09-07 produced base.qcow2 files with different
+# checksums and different sizes (1,258,999,808 and 1,204,006,912 bytes of ext4), because
+# the userland is assembled from a live archive and the filesystem is sized from what came
+# out of it. That matters, because "did the machine change?" is the question this whole
+# repository is organised around: today the honest answer for the image is the checksum in
+# machine.env, recorded per build, and not a claim that the inputs determine it.
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 
 mkdir -p "$(dirname "$OUT")" /work/out /cache

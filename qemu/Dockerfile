@@ -12,7 +12,12 @@
 #   --enable-tools   storage needed qemu-img (its Agent shells out to it for every qcow2
 #                    chain) and spinbox's build did not ship one, which is why
 #                    `spinbox run` had to grow a --qemu-img flag pointing at storage's
-#                    build. Enabled: qemu-img and qemu-nbd ship, and that flag can go.
+#                    build. Enabled: qemu-img ships, and that flag can go.
+#
+#                    qemu-nbd comes out of the same --enable-tools and is deliberately
+#                    not shipped: nothing in either project runs one. It exports a disk
+#                    over NBD, which is a way of reaching an image this stack does not
+#                    use — every qcow2 here is opened by QEMU itself or by qemu-img.
 #   TCG              built twice, below. A host serving tenants must refuse to run without
 #                    /dev/kvm rather than emulate; CI has no /dev/kvm and must emulate.
 #   vmdk             storage disables it. spinbox cannot yet: containerd's erofs
@@ -207,8 +212,8 @@ ENV QEMU_FLAGS="\
 # timings that read like measurements.
 #
 # /opt/qemu-tcg is for CI, where the runner has no /dev/kvm. Only its system binary is
-# kept: qemu-img and qemu-nbd link no accelerator at all, so there is one of each and they
-# come from the build above.
+# kept: qemu-img links no accelerator at all, so there is one of it and it comes from the
+# build above.
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
     --mount=type=cache,sharing=locked,id=qemu-build-kvm-${QEMU_VERSION}-${QEMU_CONFIG_REV},target=/build/qemu-build-kvm \
     cp /build/spin-devices.mak \
@@ -280,7 +285,6 @@ RUN Q=/opt/qemu/bin/qemu-system-x86_64 && \
     $Q -machine help | grep -q '^q35 ' && \
     ! $Q -machine help | grep -q '^pc-i440fx' && \
     test -x /opt/qemu/bin/qemu-img && \
-    test -x /opt/qemu/bin/qemu-nbd && \
     /opt/qemu/bin/qemu-img --version && \
     $Q --version && \
     /opt/qemu-tcg/bin/qemu-system-x86_64 --version && \
@@ -346,7 +350,6 @@ RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu-tcg/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64-tcg
 COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
-COPY --from=builder /opt/qemu/bin/qemu-nbd /usr/local/bin/qemu-nbd
 COPY --from=builder /build/pc-bios/ /usr/share/spin-stack/qemu/
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
@@ -359,5 +362,4 @@ FROM scratch AS extract
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu-tcg/bin/qemu-system-x86_64 /bin/qemu-system-x86_64-tcg
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
-COPY --from=builder /opt/qemu/bin/qemu-nbd /bin/qemu-nbd
 COPY --from=builder /build/pc-bios/ /share/spin-stack/qemu/

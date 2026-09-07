@@ -1,0 +1,131 @@
+version: '3'
+
+# The base image. See image/mkosi.conf for what goes into it and image/build.sh for how the
+# tree becomes a partitionless ext4 in a read-only qcow2.
+
+tasks:
+
+  build:
+    desc: Build base.qcow2 (Ubuntu 26.04 userland, ext4, partitionless) into _output/.
+    cmds:
+      - task: builder
+      - mkdir -p {{.OUTPUT_DIR}} {{.MKOSI_CACHE_DIR}}
+      # `docker run` and not `docker buildx build`, and the reason is in image/Dockerfile:
+      # mkosi assembles a root filesystem by unsharing a user and mount namespace and
+      # BuildKit forbids that. The flags below are exactly what it needs and nothing more —
+      # not --privileged.
+      - |
+        docker run --rm \
+          --security-opt seccomp=unconfined \
+          --security-opt apparmor=unconfined \
+          --cap-add SYS_ADMIN \
+          -v {{.ROOT_DIR}}/{{.OUTPUT_DIR}}:/out \
+          -v {{.MKOSI_CACHE_DIR}}:/cache \
+          {{.IMAGE_BUILDER_TAG}}
+
+  builder:
+    desc: Build the container that builds the base image (mkosi, e2fsprogs, qemu-utils).
+    cmds:
+      - |
+        docker buildx build \
+          --file image/Dockerfile \
+          --platform linux/amd64 \
+          --tag {{.IMAGE_BUILDER_TAG}} \
+          --load \
+          .
+
+  shell:
+    desc: >-
+      Boot this machine and get a shell inside the base image. INIT=/sbin/init boots systemd
+      instead; MEMORY and CPUS override the defaults.
+    interactive: true
+    vars:
+      INIT: '{{.INIT | default "/bin/bash"}}'
+      MEMORY: '{{.MEMORY | default "2048"}}'
+      CPUS: '{{.CPUS | default "2"}}'
+    cmds:
+      # Not `spinbox run`, deliberately. That path boots the initrd, runs vminitd as PID 1
+      # and speaks ttrpc over vsock to start a process — it wires stdout and stderr and has
+      # no stdin at all, so there is no way to type into it. This boots the image the way a
+      # plain VM would: the kernel mounts it as root over virtio-blk and runs INIT on the
+      # serial console. It is not how production runs a container, and that is the point —
+      # it is for looking around and finding what the image is missing.
+      - |
+        set -euo pipefail
+        out={{.ROOT_DIR}}/{{.OUTPUT_DIR}}
+        for f in "$out/bin/qemu-system-x86_64" "$out/vmlinux" "$out/base.qcow2"; do
+          test -f "$f" || { echo "missing $f — run: task build" >&2; exit 1; }
+        done
+
+        # A throwaway overlay, which is both the safe thing and the honest one: it is the
+        # exact shape production uses (`qemu-img create -f qcow2 -F qcow2 -b base`), so
+        # everything typed in this shell is written where a container's writes would go,
+        # and the base — which every VM shares read-only — cannot be touched.
+        scratch=$(mktemp -d)/scratch.qcow2
+        trap 'rm -rf "$(dirname "$scratch")"' EXIT
+        "$out/bin/qemu-img" create -f qcow2 -F qcow2 -b "$out/base.qcow2" "$scratch" >/dev/null
+
+        before=$(sha256sum "$out/base.qcow2" | cut -d' ' -f1)
+
+        # Two modes, and they fail in different places, so each says its own way out.
+        #
+        # /bin/bash is PID 1 with nothing mounted: the kernel mounts devtmpfs and the root
+        # filesystem and stops there, so /proc and /sys are empty. `df` warns, `ps` sees
+        # nothing, and `poweroff` answers "Running in chroot, ignoring request" — it looks
+        # for /proc, does not find it, and declines. That is not a fault in the image; it is
+        # what PID 1 gets before an init has run. The line printed below fixes it in one
+        # paste, and Ctrl-A X always works because it never reaches the guest at all.
+        cmdline="console=ttyS0 root=/dev/vda rw init={{.INIT}} panic=5 loglevel=4"
+        case "{{.INIT}}" in
+          */init)
+            # systemd's own logging is turned down to errors in the image
+            # (optimize-systemd.sh writes LogLevel=err, ShowStatus=no) precisely so a
+            # production boot is quiet. Turned back up here, because a silent boot is
+            # useless for finding out what it is doing.
+            cmdline="$cmdline systemd.log_level=info systemd.show_status=yes"
+            ;;
+        esac
+
+        echo "booting {{.INIT}} in the base image — {{.MEMORY}} MiB, {{.CPUS}} vCPU"
+        echo "  writes go to a throwaway overlay; the base is read-only and checked after"
+        case "{{.INIT}}" in
+          */init)
+            echo "  systemd as PID 1. It comes up, and as of 2026-09-07 it does NOT give a"
+            echo "  login prompt on ttyS0 — one of the things this image is missing."
+            echo "  leave with: Ctrl-A then X"
+            ;;
+          *)
+            echo "  nothing is mounted yet. paste this first:"
+            echo "    mount -t proc proc /proc; mount -t sysfs sys /sys"
+            echo "  then 'poweroff -f' shuts it down cleanly. Ctrl-A then X always works."
+            ;;
+        esac
+        echo
+
+        # -nodefaults and no display: this QEMU has no display adapter compiled in at all
+        # (qemu/devices.mak), so there is nothing to show. The console is the ISA 16550 the
+        # kernel prints to on ttyS0 — mon:stdio so Ctrl-A X reaches the monitor and can
+        # always get out, including from a guest that has stopped responding.
+        #
+        # accel=kvm with no fallback: the binary in _output/bin cannot emulate, on purpose.
+        # A host with no /dev/kvm gets an error here instead of a guest at a tenth of the
+        # speed. `task shell` on such a host wants _output/bin/qemu-system-x86_64-tcg.
+        {{.SUDO}} "$out/bin/qemu-system-x86_64" \
+          -machine q35,accel=kvm \
+          -cpu host -m {{.MEMORY}} -smp {{.CPUS}} \
+          -nodefaults -display none -no-reboot \
+          -L "$out/share/spin-stack/qemu" \
+          -kernel "$out/vmlinux" \
+          -append "$cmdline" \
+          -drive file="$scratch",format=qcow2,if=virtio \
+          -device virtio-rng-pci \
+          -serial mon:stdio || true
+
+        echo
+        after=$(sha256sum "$out/base.qcow2" | cut -d' ' -f1)
+        if [ "$before" != "$after" ]; then
+          echo "👹 the base image changed during that session: $before -> $after" >&2
+          echo "   every overlay in existence is now built on a file that moved." >&2
+          exit 1
+        fi
+        echo "base.qcow2 unchanged; the overlay held $(du -h "$scratch" | cut -f1) of writes and is gone"
