@@ -90,6 +90,9 @@ func TestDevicesSitOnTheirFixedSlots(t *testing.T) {
 	for _, want := range []string{
 		"vhost-vsock-pci,guest-cid=7,disable-legacy=on,addr=0x2",
 		"virtio-rng-pci,disable-legacy=on,addr=0x3",
+		// The only way a running VM gives memory back. Without it the answer to
+		// "how is memory reclaimed?" is "the VM exits".
+		"virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on,disable-legacy=on,addr=0x4",
 		"virtio-blk-pci,drive=blk0,disable-legacy=on,addr=0x5",
 		"virtio-blk-pci,drive=blk1,disable-legacy=on,addr=0x6",
 		"virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01,romfile=,disable-legacy=on,addr=0x10",
@@ -196,6 +199,80 @@ func TestFingerprintChangesWithTheMachine(t *testing.T) {
 		if want, err = base.Fingerprint(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// The device list is part of the machine, because a restore loads device state
+// into one. Each of these changes what a template may be restored into, and none
+// of them touches a file the fingerprint hashes — so before the topology was
+// included, every one of them was invisible.
+func TestFingerprintCoversTheDeviceList(t *testing.T) {
+	base := spec(t)
+	want, err := base.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, mutate := range map[string]func(*Spec){
+		"a disk":  func(s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw"}} },
+		"a NIC":   func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}} },
+		"a vsock": func(s *Spec) { s.VsockCID = 7 },
+	} {
+		changed := base
+		mutate(&changed)
+		got, err := changed.Fingerprint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == want {
+			t.Errorf("%s did not change the fingerprint", name)
+		}
+	}
+
+	// A second disk is a different machine from one disk; a read-only disk is a
+	// different machine from a writable one at the same slot.
+	one := base
+	one.Disks = []Disk{{Path: "/a", Format: "raw"}}
+	two := base
+	two.Disks = []Disk{{Path: "/a", Format: "raw"}, {Path: "/b", Format: "raw"}}
+	ro := base
+	ro.Disks = []Disk{{Path: "/a", Format: "raw", Readonly: true}}
+
+	f1, _ := one.Fingerprint()
+	f2, _ := two.Fingerprint()
+	fro, _ := ro.Fingerprint()
+	if f1 == f2 {
+		t.Error("one disk and two disks fingerprinted the same")
+	}
+	if f1 == fro {
+		t.Error("a writable disk and a read-only one fingerprinted the same")
+	}
+}
+
+// What is behind a device is not the machine. Two VMs with one disk each are the
+// same machine whether that disk holds a database or a scratch overlay — which is
+// the whole reason a template is worth having.
+func TestFingerprintIgnoresWhatIsBehindTheDevices(t *testing.T) {
+	a := spec(t)
+	a.Disks = []Disk{{Path: "/one.qcow2", Format: "qcow2", Serial: "aaa"}}
+	a.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
+	a.VsockCID = 7
+
+	b := a
+	b.Disks = []Disk{{Path: "/another.qcow2", Format: "qcow2", Serial: "bbb"}}
+	b.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:00:00:02"}}
+	b.VsockCID = 42
+
+	fa, err := a.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb, err := b.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fa != fb {
+		t.Error("different paths, MACs and context ids made it a different machine")
 	}
 }
 

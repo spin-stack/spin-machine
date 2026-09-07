@@ -45,9 +45,9 @@ import (
 // ICH9 LPC/SATA/SMBus function block. 0x01 is left free — the q35 convention
 // puts VGA there, and this machine has no display adapter at all.
 const (
-	SlotVsock = 0x02
-	SlotRNG   = 0x03
-	// 0x04 is free.
+	SlotVsock   = 0x02
+	SlotRNG     = 0x03
+	SlotBalloon = 0x04
 
 	SlotDiskBase = 0x05
 	SlotDiskMax  = 0x0f
@@ -406,6 +406,33 @@ func (s Spec) Args() ([]string, error) {
 	args = append(args, "-device",
 		fmt.Sprintf("virtio-rng-pci,%s,addr=0x%x", virtioModern, SlotRNG))
 
+	// The balloon, and the only way a running VM here gives memory back.
+	//
+	// Without it the answer to "how is memory reclaimed?" is "the VM exits". A
+	// guest that peaked at 8 GB during a build holds 8 GB of the host until it is
+	// shut down, however little of it is still in use — which for a fleet of
+	// long-lived development VMs is most of the host, most of the time.
+	//
+	// free-page-reporting rather than a host-driven target: the guest reports
+	// pages it has genuinely freed and QEMU discards them, continuously and with
+	// nobody deciding a number. On file-backed memory that is a hole punched in
+	// the file, so the host gets the pages back rather than only the mapping. The
+	// guest half is CONFIG_PAGE_REPORTING, which this kernel has.
+	//
+	// deflate-on-oom is the safety valve for the other direction: a guest about
+	// to kill a process for want of memory takes some back from the balloon
+	// first. It costs nothing when nothing is inflated, and the alternative is a
+	// build dying with the host holding memory this VM had already earned.
+	//
+	// It is safe with templates, which is the part worth writing down. A VM being
+	// frozen maps its memory file share=on, so reporting punches holes in the very
+	// file that becomes the template — and that is fine, and slightly good: a
+	// reported page is one the guest considers free, its content is not relied
+	// upon, and it reads back as zero on restore. The template ends up sparser.
+	args = append(args, "-device",
+		fmt.Sprintf("virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on,%s,addr=0x%x",
+			virtioModern, SlotBalloon))
+
 	if s.VsockCID != 0 {
 		args = append(args, "-device",
 			fmt.Sprintf("vhost-vsock-pci,guest-cid=%d,%s,addr=0x%x",
@@ -517,8 +544,46 @@ func (s Spec) Fingerprint() (string, error) {
 	}
 	fmt.Fprintf(h, "machine=%s\ncpu=%s\nsmp=%s\nmemory=%s\n",
 		shape.Machine, shape.CPU, shape.SMP, shape.Memory)
+	fmt.Fprintf(h, "devices=%s\n", s.topology())
 
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// topology is the machine's device list — which models, at which slots — with
+// everything about *this* VM removed: no paths, no file descriptors, no context
+// id, no MAC.
+//
+// It is in the fingerprint because a restore loads device state into a machine
+// that has to have the same devices, and without it the fingerprint answers the
+// question wrongly in both directions. Adding a device to this package changes
+// what a template may restore into and would not have moved the hash — a
+// balloon was added at slot 0x04 and every existing template would have gone on
+// matching a machine it can no longer be restored into. And two VMs given
+// different numbers of disks have different device state and had the same
+// fingerprint, so one could be handed the other's template.
+//
+// What is deliberately not in it: the backing files and the identifiers. Two VMs
+// with one disk each are the same machine whether that disk is a database or a
+// scratch overlay; that is the whole reason a template is worth having.
+func (s Spec) topology() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", SlotRNG, SlotBalloon)
+	if s.VsockCID != 0 {
+		fmt.Fprintf(&b, ";vhost-vsock-pci@%#x", SlotVsock)
+	}
+	for i, d := range s.Disks {
+		// Read-only is part of it: the guest sees a different device, and QEMU
+		// puts a different block backend behind it.
+		ro := ""
+		if d.Readonly {
+			ro = ",ro"
+		}
+		fmt.Fprintf(&b, ";virtio-blk-pci@%#x%s", SlotDiskBase+i, ro)
+	}
+	for i := range s.NICs {
+		fmt.Fprintf(&b, ";virtio-net-pci@%#x", SlotNICBase+i)
+	}
+	return b.String()
 }
 
 func fileSum(path string) (string, error) {
