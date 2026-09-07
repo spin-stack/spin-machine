@@ -1,0 +1,42 @@
+spin-machine
+Copyright The spin-stack Authors
+
+This product includes software developed by the spin-stack project.
+Licensed under the Apache License, Version 2.0; see LICENSE.
+
+--------------------------------------------------------------------------------
+Third-party software in a release, which this licence does NOT cover
+--------------------------------------------------------------------------------
+
+The Apache-2.0 licence above applies to the contents of this repository — the
+recipes. It does not apply to what those recipes build, and a release tarball is
+almost entirely other people's software under other people's licences:
+
+  qemu-system-x86_64, qemu-system-x86_64-tcg, qemu-img
+      QEMU, GPL-2.0-only, with components under other licences. Statically
+      linked, so the binaries also contain GLib (LGPL-2.1-or-later), libseccomp
+      (LGPL-2.1-only), libcap-ng (LGPL-2.1-or-later), pixman (MIT), zlib
+      (Zlib), liburing (LGPL-2.1-or-later OR MIT), libaio (LGPL-2.1-or-later)
+      and musl (MIT).
+
+  bios.bin, bios-256k.bin, vgabios*.bin
+      SeaBIOS, LGPL-3.0-or-later, shipped as part of QEMU.
+
+  pvh.bin, kvmvapic.bin
+      Part of QEMU, GPL-2.0-only.
+
+  efi-virtio.rom
+      iPXE, GPL-2.0-or-later with an OpenSSL exception, shipped as part of QEMU.
+
+  vmlinux
+      Linux, GPL-2.0-only WITH Linux-syscall-note.
+
+  base.qcow2
+      An Ubuntu 26.04 userland: several thousand files under GPL, LGPL, MIT,
+      BSD, Apache-2.0 and others. usr/share/spin-stack/packages.txt in a release
+      lists every package and version it was built from.
+
+Distributing a release therefore carries obligations this licence does not
+discharge — GPL-2.0 section 3 in particular, and section 6 of the LGPL for the
+statically linked libraries above. usr/share/spin-stack/SOURCES in a release
+names every upstream source by version, URL and SHA-256, and states the offer.

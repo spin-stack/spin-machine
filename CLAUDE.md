@@ -121,6 +121,20 @@ cross all of them. CI calls the same targets a developer calls: a second definit
 the gate is, kept in a workflow file, goes out of step with the first exactly when a check
 is added.
 
+## Licence and third-party source
+
+Apache-2.0. New Go files carry `// SPDX-License-Identifier: Apache-2.0`.
+
+Anything vendored into this tree goes in `NOTICE`, with its licence and — if it was
+changed — a statement that it was. Anything that ends up *inside a release* goes in the
+`SOURCES` file that `hack/release` writes: what it is, which upstream tarball it was built
+from, that tarball's SHA-256, and how to get it. The repository's licence covers the
+recipes; a tarball of GPL binaries carries obligations of its own, and the release is where
+they are answered.
+
+An input downloaded from outside is pinned by hash and checked on every build, not only
+after a download — the caches outlive the builds that filled them.
+
 ## Versions
 
 CalVer, `vYYYYMMDD.NN`. A release is the machine as it stood on a date. There is no API here

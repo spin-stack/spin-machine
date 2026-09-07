@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package machine defines the virtual machine this repository builds: which
 // chipset, which devices at which PCI slots, which kernel command line, and how
 // guest RAM is backed.

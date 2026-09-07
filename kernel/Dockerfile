@@ -53,6 +53,10 @@ RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
 ARG KERNEL_VERSION="7.2.1"
 ARG KERNEL_ARCH="x86_64"
 ARG KERNEL_NPROC="16"
+# The tarball this kernel is made of, by content. See the same argument in qemu/Dockerfile:
+# https says who sent it, not what they sent, and this is the one input that comes from
+# outside the repository. It is also what makes the SOURCES file in a release true.
+ARG KERNEL_SHA256=4158098c8a28ea8fbe068c855d3aa6341e03d06282add3cb9049f3a24e4557b3
 
 # moby's check-config.sh, with the SELinux and AppArmor checks removed: they are host
 # policy, not kernel features this guest needs, and they fail a config that is correct.
@@ -64,10 +68,14 @@ WORKDIR /usr/src
 
 RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/var/cache/kernel \
     KERNEL_MAJOR="$(echo "${KERNEL_VERSION}" | cut -d. -f1)" && \
-    if [ ! -f "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" ]; then \
-        wget -O "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz"; \
+    tarball="/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" && \
+    if [ ! -f "$tarball" ]; then \
+        wget -O "$tarball" "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz"; \
     fi && \
-    tar -xf "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" -C /usr/src && \
+    # Every build, not only after a download: the cache mount outlives the build that
+    # filled it.
+    echo "${KERNEL_SHA256}  $tarball" | sha256sum -c - && \
+    tar -xf "$tarball" -C /usr/src && \
     mv linux-${KERNEL_VERSION} linux
 
 COPY kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH} /usr/src/linux/.config

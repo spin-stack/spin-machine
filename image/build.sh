@@ -59,6 +59,21 @@ for d in etc tmp proc sys dev run; do
 done
 chmod 1777 "$tree/tmp"
 
+# --- the bill of materials --------------------------------------------------------------
+#
+# Every package in the tree, by name and exact version, written beside the image rather
+# than into it.
+#
+# It is the only record of what this image is made of. The tree is thrown away, the qcow2
+# is opaque, and `CleanPackageMetadata=no` keeps dpkg's database inside the image — but
+# reading it back requires booting a VM. This file answers "which version of that library
+# shipped in the release from March?" without one, and it is what the SOURCES file in a
+# release points at for the userland half: an Ubuntu source package is fetched by name and
+# version, and those are the two things here.
+dpkg-query --admindir="$tree/var/lib/dpkg" -W -f='${Package} ${Version} ${Architecture}\n' \
+    2>/dev/null | sort > "$(dirname "$OUT")/packages.txt"
+echo "==> $(wc -l < "$(dirname "$OUT")/packages.txt") packages recorded"
+
 # --- filesystem -------------------------------------------------------------------------
 #
 # Sized from the tree, not fixed: a hardcoded size is either wasted space or a build that

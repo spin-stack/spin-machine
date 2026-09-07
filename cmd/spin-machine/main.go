@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Command spin-machine starts a VM of the machine this repository defines, and
 // prints what that machine is.
 //

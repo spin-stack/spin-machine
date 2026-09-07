@@ -64,6 +64,17 @@ ARG ALPINE_VERSION=3.24
 FROM alpine:${ALPINE_VERSION} AS builder
 
 ARG QEMU_VERSION=11.1.1
+# The tarball this build is made of, by content.
+#
+# https is a claim about who you are talking to, not about what they sent, and this
+# download is the one input to the machine that comes from outside and is not read from a
+# file in this repository. Without the check, an archive that served a different tarball —
+# or a cache mount holding a truncated one from an interrupted build — is compiled and
+# shipped, and the first sign is a fingerprint nobody can explain.
+#
+# It also makes usr/share/spin-stack/SOURCES in a release true rather than aspirational:
+# what that file names is what was built.
+ARG QEMU_SHA256=079ffbff8a7111bbc89022107cbabf3bbfd614d5fc9d7cc675991196aca12482
 ARG JOBS=8
 # Bump when the configure flags, the base image, or qemu/devices.mak change: the build
 # directories live in cache mounts and configure only runs when one holds no config.status,
@@ -94,12 +105,15 @@ WORKDIR /build
 
 # Source tarball + extracted tree live in a cache mount, shared across builds.
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
-    if [ ! -f "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" ]; then \
-        curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" \
-             -o "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz"; \
+    tarball="/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" && \
+    if [ ! -f "$tarball" ]; then \
+        curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o "$tarball"; \
     fi && \
+    # Checked on every build and not only after a download: the tarball lives in a cache
+    # mount, so the copy being compiled today may have arrived weeks ago.
+    echo "${QEMU_SHA256}  $tarball" | sha256sum -c - && \
     if [ ! -d "/var/cache/qemu/qemu-${QEMU_VERSION}" ]; then \
-        tar -xf "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" -C /var/cache/qemu; \
+        tar -xf "$tarball" -C /var/cache/qemu; \
     fi
 
 # The device set (see qemu/devices.mak) and the flags both builds share.
@@ -197,11 +211,27 @@ ENV QEMU_FLAGS="\
 #                                  broke the 11.0.2 link (pxb_cxl_realize, acpi_build).
 #   --disable-vmdk               — see the header; a consumer may still hand this a .vmdk.
 
-# The guard is config.status and not Makefile, and the directory is emptied before a
+# Two guards, and the second was learned the hard way.
+#
+# The first is config.status and not Makefile, and the directory is emptied before a
 # configure runs. configure writes the Makefile early and config.status only once it has
 # finished, so a configure that failed leaves a build directory that looks configured and a
 # `make` that dies at `./config.status: No such file or directory` — in a cache mount, on
 # every later build, until somebody thinks to prune it.
+#
+# The second guard is the compiler. A cache mount outlives the base image it was filled
+# from, and `alpine:3.22` is a moving tag: the day its gcc went from 14 to 15.2 the cached
+# object files stopped being usable by the compiler now present, and the build died in the
+# linker with
+#
+#   lto1: fatal error: bytecode stream in file '…link-test.c.o' generated with LTO
+#   version 14.0 instead of the expected 15.1
+#
+# which names neither the cache nor the base image. QEMU_CONFIG_REV does not help: it
+# guards the *configuration*, and nothing about the configuration changed. So the compiler
+# version is recorded in the build directory and the directory is thrown away when it
+# stops matching — the build heals instead of waiting for somebody to recognise a linker
+# error as a stale cache.
 #
 # Two builds, differing in one flag: whether TCG is compiled in.
 #
@@ -217,12 +247,18 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
     cp /build/spin-devices.mak \
        "/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/spin.mak" && \
     mkdir -p qemu-build-kvm && cd qemu-build-kvm && \
+    cc_now="$(cc -dumpfullversion 2>/dev/null || cc -dumpversion)" && \
+    if [ -f config.status ] && [ "$(cat spin-cc-version 2>/dev/null)" != "$cc_now" ]; then \
+        echo "the cached build directory was made by cc $(cat spin-cc-version 2>/dev/null || echo unknown), this is $cc_now — starting over"; \
+        rm -rf ./*; \
+    fi && \
     if [ ! -f config.status ]; then \
         rm -rf ./* && \
         /var/cache/qemu/qemu-${QEMU_VERSION}/configure \
             --prefix=/opt/qemu \
             --disable-tcg \
-            ${QEMU_FLAGS}; \
+            ${QEMU_FLAGS} && \
+        echo "$cc_now" > spin-cc-version; \
     fi && \
     make -j${JOBS} && \
     make install
@@ -232,12 +268,18 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
     cp /build/spin-devices.mak \
        "/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/spin.mak" && \
     mkdir -p qemu-build-tcg && cd qemu-build-tcg && \
+    cc_now="$(cc -dumpfullversion 2>/dev/null || cc -dumpversion)" && \
+    if [ -f config.status ] && [ "$(cat spin-cc-version 2>/dev/null)" != "$cc_now" ]; then \
+        echo "the cached build directory was made by cc $(cat spin-cc-version 2>/dev/null || echo unknown), this is $cc_now — starting over"; \
+        rm -rf ./*; \
+    fi && \
     if [ ! -f config.status ]; then \
         rm -rf ./* && \
         /var/cache/qemu/qemu-${QEMU_VERSION}/configure \
             --prefix=/opt/qemu-tcg \
             --enable-tcg \
-            ${QEMU_FLAGS}; \
+            ${QEMU_FLAGS} && \
+        echo "$cc_now" > spin-cc-version; \
     fi && \
     make -j${JOBS} && \
     make install

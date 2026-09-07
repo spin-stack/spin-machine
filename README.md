@@ -55,6 +55,10 @@ One tarball:
 | `kernel/vmlinux` | plus `kernel-config` |
 | `image/base.qcow2` | read-only, 0444 |
 | `machine.env` | the version and the three checksums that decide template validity |
+| `SOURCES` | every upstream source by version, URL and SHA-256, and the written offer |
+| `packages.txt` | every package and exact version in the base image |
+
+`LICENSE` and `NOTICE` sit at the root of the tarball, next to `install.sh`.
 
 ## The machine
 
@@ -277,6 +281,30 @@ that templates still match — is decided by the fingerprint of the artefacts, n
 number anybody chose. Pushing a `v*` tag releases that version; running the workflow by
 hand with no input generates the next sequence for today, tags the commit, and puts the
 three checksums in the release notes.
+
+## Licence
+
+Apache-2.0, matching the rest of this stack — and not only for consistency: three scripts
+under `image/mkosi.extra/` came from another Apache-2.0 project here, so a different licence
+would make this a mixed-licence tree for nothing. `NOTICE` names them and states which was
+modified, as section 4(b) requires.
+
+**That licence covers the recipes, not what they build.** A release tarball is almost
+entirely other people's software: QEMU and Linux are GPL-2.0, and the base image is an
+Ubuntu userland under a dozen licences. Shipping their binaries carries obligations a
+LICENSE file in a source tree does not discharge — GPL-2.0 section 3, and section 6 of the
+LGPL for the libraries now inside the statically linked QEMU.
+
+So a release answers them:
+
+- `SOURCES` names every upstream source by version, URL and SHA-256, says how it was built,
+  and carries the written offer.
+- `packages.txt` lists all 209 packages in the base image with exact versions, which is
+  what `apt-get source <package>=<version>` needs.
+- The two upstream tarballs are pinned by SHA-256 in the Dockerfiles and **verified on every
+  build**, not only after a download — the source lives in a cache mount that outlives the
+  build that filled it. That is also what makes `SOURCES` true rather than aspirational:
+  what it names is what was compiled.
 
 ## Status
 

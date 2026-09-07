@@ -18,6 +18,12 @@ KERNEL_ARCH="${KERNEL_ARCH:-x86_64}"
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 QEMU_VERSION="${QEMU_VERSION:-unknown}"
 KERNEL_VERSION="${KERNEL_VERSION:-unknown}"
+# The two upstream tarballs this release was compiled from, pinned in the Dockerfiles and
+# repeated here so SOURCES states them without anybody reading a build file. They are
+# checked at build time; if they disagree with the Dockerfiles, one of the two was bumped
+# and the other was not.
+QEMU_SHA256="${QEMU_SHA256:-$(sed -n 's/^ARG QEMU_SHA256=//p' qemu/Dockerfile)}"
+KERNEL_SHA256="${KERNEL_SHA256:-$(sed -n 's/^ARG KERNEL_SHA256=//p' kernel/Dockerfile)}"
 
 RELEASE_NAME="spin-machine-${VERSION}-linux-${KERNEL_ARCH}"
 RELEASE_DIR="${OUTPUT_DIR}/release/${RELEASE_NAME}"
@@ -41,6 +47,13 @@ require() {
 }
 
 echo "Packing ${RELEASE_NAME}..."
+
+# The licence travels with the artefacts. A tarball of GPL binaries and an Ubuntu userland
+# handed over without the terms is the one packaging mistake that is not recoverable by the
+# recipient.
+echo "Licence:"
+require "LICENSE" "${RELEASE_DIR}/LICENSE" "the licence"
+require "NOTICE" "${RELEASE_DIR}/NOTICE" "the notice"
 
 echo "QEMU:"
 for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
@@ -73,6 +86,7 @@ fi
 
 echo "Base image:"
 require "${OUTPUT_DIR}/base.qcow2" "${SHARE}/image/base.qcow2" "the base image" 0444
+require "${OUTPUT_DIR}/packages.txt" "${SHARE}/packages.txt" "the image's package list"
 
 # What this release is, in a form something other than a human can read. The three
 # checksums are the machine's identity — the same numbers `machine.Spec.Fingerprint` hashes
@@ -90,6 +104,60 @@ require "${OUTPUT_DIR}/base.qcow2" "${SHARE}/image/base.qcow2" "the base image" 
 } > "${SHARE}/machine.env"
 echo "Manifest:"
 sed 's/^/  /' "${SHARE}/machine.env"
+
+# Where every part of this release came from.
+#
+# The licence on this repository covers the recipes. What the recipes build is other
+# people's software — QEMU and Linux are GPL-2.0, the userland is several thousand files
+# under a dozen licences — and shipping their binaries carries obligations that a LICENSE
+# file in a source tree does not discharge. This is the part that answers them: what was
+# built, from exactly which source, and how to get that source.
+#
+# Written from the same values the build verified, not from a list maintained by hand:
+# the two SHA-256s are checked against the downloaded tarballs during the build, and
+# packages.txt is generated from the image tree's own dpkg database.
+cat > "${SHARE}/SOURCES" <<SOURCES
+spin-machine ${VERSION}
+Sources for the third-party software in this release.
+
+This release contains software under the GNU General Public License, the GNU Lesser
+General Public License and other licences; see NOTICE for what is under which. The
+complete corresponding source for the GPL and LGPL components is available as set out
+below. The statically linked libraries in the QEMU binaries are covered by the same offer,
+which satisfies section 6 of the LGPL by making a relinkable build reproducible from source.
+
+QEMU ${QEMU_VERSION}
+  binaries: usr/share/spin-stack/bin/qemu-system-x86_64
+            usr/share/spin-stack/bin/qemu-system-x86_64-tcg
+            usr/share/spin-stack/bin/qemu-img
+  firmware: usr/share/spin-stack/qemu/*
+  source:   https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz
+  sha256:   ${QEMU_SHA256}
+  built by: qemu/Dockerfile, unpatched, with the configure flags in that file
+
+Linux ${KERNEL_VERSION}
+  binary:   usr/share/spin-stack/kernel/vmlinux
+  source:   https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz
+  sha256:   ${KERNEL_SHA256}
+  built by: kernel/Dockerfile, unpatched, with the configuration shipped alongside the
+            binary as usr/share/spin-stack/kernel/kernel-config
+
+Ubuntu userland
+  image:    usr/share/spin-stack/image/base.qcow2
+  contents: usr/share/spin-stack/packages.txt — every package and its exact version
+  source:   the Ubuntu archive. For any package listed there:
+                apt-get source <package>=<version>
+  built by: image/mkosi.conf and the scripts beside it
+
+Written offer
+  For three years from the date of this release, the copyright holders will provide, to
+  anyone who asks, the complete corresponding machine-readable source for the GPL and
+  LGPL software in it, on a medium customarily used for software interchange, for no more
+  than the cost of performing the distribution. Requests go to the issue tracker of the
+  repository this release was built from.
+SOURCES
+echo "Sources:"
+echo "  ok: SOURCES"
 
 TARBALL="${OUTPUT_DIR}/release/${RELEASE_NAME}.tar.gz"
 tar -czf "${TARBALL}" -C "${OUTPUT_DIR}/release" "${RELEASE_NAME}"

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Command spin-machine-init brings a guest up far enough to hand it over.
 //
 // It does the part of a guest's bring-up that is the same whoever runs the guest:
