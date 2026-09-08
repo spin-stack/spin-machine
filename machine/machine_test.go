@@ -244,10 +244,13 @@ func TestFingerprintChangesWithTheMachine(t *testing.T) {
 }
 
 // The device list is part of the machine, because a restore loads device state
-// into one. Each of these changes what a template may be restored into, and none
-// of them touches a file the fingerprint hashes — so before the topology was
-// included, every one of them was invisible.
-func TestFingerprintCoversTheDeviceList(t *testing.T) {
+// into one — but only the part of it that exists when the state is loaded.
+//
+// A vsock, a memory ceiling and a serial port are there on both sides of a
+// restore. Disks and NICs are not: a template is built from an empty VM and each
+// restored VM is given its own afterwards, so counting them here would mean a VM
+// never finding the template it should restore from.
+func TestFingerprintCoversTheDevicesPresentAtRestore(t *testing.T) {
 	base := spec(t)
 	want, err := base.Fingerprint()
 	if err != nil {
@@ -255,9 +258,8 @@ func TestFingerprintCoversTheDeviceList(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(*Spec){
-		"a disk":  func(s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw"}} },
-		"a NIC":   func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}} },
-		"a vsock": func(s *Spec) { s.VsockCID = 7 },
+		"a vsock":          func(s *Spec) { s.VsockCID = 7 },
+		"a memory ceiling": func(s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB * 2 },
 	} {
 		changed := base
 		mutate(&changed)
@@ -270,55 +272,19 @@ func TestFingerprintCoversTheDeviceList(t *testing.T) {
 		}
 	}
 
-	// A second disk is a different machine from one disk; a read-only disk is a
-	// different machine from a writable one at the same slot.
-	one := base
-	one.Disks = []Disk{{Path: "/a", Format: "raw"}}
-	two := base
-	two.Disks = []Disk{{Path: "/a", Format: "raw"}, {Path: "/b", Format: "raw"}}
-	ro := base
-	ro.Disks = []Disk{{Path: "/a", Format: "raw", Readonly: true}}
-
-	f1, _ := one.Fingerprint()
-	f2, _ := two.Fingerprint()
-	fro, _ := ro.Fingerprint()
-	if f1 == f2 {
-		t.Error("one disk and two disks fingerprinted the same")
-	}
-	if f1 == fro {
-		t.Error("a writable disk and a read-only one fingerprinted the same")
-	}
-}
-
-// The serial port has state, so a machine saved with one cannot be resumed
-// without one — `Unknown section or instance 'serial'`. Where its bytes go is not
-// part of the machine; whether it exists is.
-func TestFingerprintCoversTheSerialPort(t *testing.T) {
-	with := spec(t)
-	with.Serial = "mon:stdio"
-	without := spec(t)
-	without.Serial = ""
-
-	a, err := with.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := without.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a == b {
-		t.Error("a machine with a serial port and one without fingerprinted the same")
-	}
-
-	elsewhere := with
-	elsewhere.Serial = "file:/var/log/console.log"
-	c, err := elsewhere.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c != a {
-		t.Error("where the console's bytes go made it a different machine")
+	for name, mutate := range map[string]func(*Spec){
+		"a disk": func(s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw"}} },
+		"a NIC":  func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}} },
+	} {
+		changed := base
+		mutate(&changed)
+		got, err := changed.Fingerprint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s changed the fingerprint; it is cold-plugged after a restore, so a VM would never find its template", name)
+		}
 	}
 }
 

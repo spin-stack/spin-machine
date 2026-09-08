@@ -236,9 +236,14 @@ type Spec struct {
 	// Cmdline is the kernel command line. Build it with Cmdline.String().
 	Cmdline string
 
-	// IncomingDefer starts QEMU with no machine state, waiting to be told where
-	// to load it from over QMP. Without it the source of a restore has to be
-	// known at exec time, which would mean re-execing QEMU to change templates.
+	// IncomingDefer starts QEMU with no machine state, waiting to be told over
+	// QMP where to load it from.
+	//
+	// Deferred and not a URI on the command line, because a restore that keeps
+	// the guest's RAM in the memory file needs the x-ignore-shared capability
+	// agreed before the first byte is read, and there is no way to pass a
+	// migration capability to exec. Whoever drives that owns the lifecycle; this
+	// is the machine argument they need.
 	IncomingDefer bool
 
 	// Incoming names that source at exec time instead — a migration URI, most
@@ -407,8 +412,6 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("memory is %d MB", s.Memory.SizeMB)
 	case s.Memory.Shared && s.Memory.File == "":
 		return fmt.Errorf("Memory.Shared with no Memory.File to share")
-	case s.Incoming != "" && s.IncomingDefer:
-		return fmt.Errorf("both Incoming (%q) and IncomingDefer are set", s.Incoming)
 	case len(s.Disks) > MaxDisks:
 		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), MaxDisks)
 	case len(s.NICs) > MaxNICs:
@@ -614,10 +617,7 @@ func (s Spec) Args() ([]string, error) {
 			fmt.Sprintf("unix:%s,server=on,wait=off", s.QMPSocket))
 	}
 
-	switch {
-	case s.Incoming != "":
-		args = append(args, "-incoming", s.Incoming)
-	case s.IncomingDefer:
+	if s.IncomingDefer {
 		args = append(args, "-incoming", "defer")
 	}
 
@@ -704,9 +704,22 @@ func (s Spec) Fingerprint() (string, error) {
 // different numbers of disks have different device state and had the same
 // fingerprint, so one could be handed the other's template.
 //
-// What is deliberately not in it: the backing files and the identifiers. Two VMs
-// with one disk each are the same machine whether that disk is a database or a
-// scratch overlay; that is the whole reason a template is worth having.
+// What is deliberately not in it: the backing files and the identifiers, and the
+// disks and NICs themselves.
+//
+// The files and identifiers, because two VMs with one disk each are the same
+// machine whether that disk is a database or a scratch overlay — that is the
+// whole reason a template is worth having.
+//
+// The disks and NICs, because a machine restored from a template does not have
+// them yet. A template is built from the emptiest VM there is — it does not know
+// which workload it will become — and each restored VM is given its disks and its
+// address afterwards, cold-plugged onto a guest that is already running. So the
+// device set that has to match is the one present when the state is loaded, and
+// counting disks here would mean a VM never finding the template it should
+// restore from.
+//
+// The devices below are the ones that are there at that moment, on both sides.
 func (s Spec) topology() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", SlotRNG, SlotBalloon)
@@ -716,28 +729,6 @@ func (s Spec) topology() string {
 	if s.Memory.MaxMB > s.Memory.SizeMB {
 		fmt.Fprintf(&b, ";virtio-mem-pci@%#x", SlotMem)
 	}
-	for i, d := range s.Disks {
-		// Read-only is part of it: the guest sees a different device, and QEMU
-		// puts a different block backend behind it.
-		ro := ""
-		if d.Readonly {
-			ro = ",ro"
-		}
-		fmt.Fprintf(&b, ";virtio-blk-pci@%#x%s", SlotDiskBase+i, ro)
-	}
-	for i := range s.NICs {
-		fmt.Fprintf(&b, ";virtio-net-pci@%#x", SlotNICBase+i)
-	}
-	// Whether there is a serial port, though not what is attached to it. It has
-	// state, so a machine saved with one cannot be resumed without one:
-	//
-	//   load of migration failed: Invalid argument: Unknown section or instance
-	//   'serial'
-	//
-	// which is what restoring a saved VM with -serial none says, and it took a
-	// while to read that as "the console". Where the bytes go is not part of the
-	// machine — a log file on one host and a terminal on another are the same
-	// machine — but the port being there is.
 	if s.Serial != "" {
 		b.WriteString(";isa-serial")
 	}
