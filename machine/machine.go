@@ -645,6 +645,19 @@ func (s Spec) Fingerprint() (string, error) {
 	shape := s.TemplateShape()
 
 	h := sha256.New()
+
+	// Length-prefixed, so that no two different machines can produce the same
+	// byte stream by moving a delimiter into a value. Every value here is
+	// something a caller supplies or a tool prints — a CPU model name, a device
+	// list, a line out of /proc/cpuinfo — and none of them is guaranteed to be
+	// free of the separator. Prefixing costs nothing and removes the question.
+	//
+	// The error is discarded because hash.Hash's Write never returns one; that is
+	// part of the interface's contract.
+	write := func(key, value string) {
+		_, _ = fmt.Fprintf(h, "%s=%d:%s\n", key, len(value), value)
+	}
+
 	for _, f := range []struct{ name, path string }{
 		{"qemu", s.QEMU},
 		{"kernel", s.Kernel},
@@ -653,18 +666,20 @@ func (s Spec) Fingerprint() (string, error) {
 		if f.path == "" {
 			// An absent initrd is part of the identity too: a machine that boots
 			// one and a machine that does not are different machines.
-			fmt.Fprintf(h, "%s=none\n", f.name)
+			write(f.name, "none")
 			continue
 		}
 		sum, err := fileSum(f.path)
 		if err != nil {
 			return "", fmt.Errorf("fingerprinting %s: %w", f.name, err)
 		}
-		fmt.Fprintf(h, "%s=%s\n", f.name, sum)
+		write(f.name, sum)
 	}
-	fmt.Fprintf(h, "machine=%s\ncpu=%s\nsmp=%s\nmemory=%s\n",
-		shape.Machine, shape.CPU, shape.SMP, shape.Memory)
-	fmt.Fprintf(h, "devices=%s\n", s.topology())
+	write("machine", shape.Machine)
+	write("cpu", shape.CPU)
+	write("smp", shape.SMP)
+	write("memory", shape.Memory)
+	write("devices", s.topology())
 
 	// The host's own CPU, but only when the guest is being shown it.
 	//
@@ -685,7 +700,7 @@ func (s Spec) Fingerprint() (string, error) {
 			return "", fmt.Errorf("fingerprinting the host CPU, which model %q exposes to the guest: %w",
 				strings.SplitN(shape.CPU, ",", 2)[0], err)
 		}
-		fmt.Fprintf(h, "host-cpu=%s\n", cpu)
+		write("host-cpu", cpu)
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -709,7 +724,14 @@ func (s Spec) Fingerprint() (string, error) {
 //
 // The files and identifiers, because two VMs with one disk each are the same
 // machine whether that disk is a database or a scratch overlay — that is the
-// whole reason a template is worth having.
+// whole reason a template is worth having. Each of the three is a thing a
+// restore is known to be allowed to differ in, and each for its own reason: the
+// vsock context id is not carried in the migration stream at all, and the guest
+// re-reads it when QEMU resets the transport after the restore; a disk is
+// cold-plugged onto the running guest afterwards and found with a PCI rescan;
+// and what sits behind a NIC is a host-side file descriptor the guest never
+// sees. What is present here is the device *model at its slot*, which is what
+// the state being loaded describes.
 //
 // The disks and NICs, because a machine restored from a template does not have
 // them yet. A template is built from the emptiest VM there is — it does not know

@@ -1,4 +1,4 @@
-# The toolchain that builds base.qcow2. It is not the image build itself: that is
+# The toolchain that builds rootfs.qcow2. It is not the image build itself: that is
 # image/build.sh, run inside a container from this Dockerfile.
 #
 # Why the split, since everything else here is a `docker buildx build --target extract`:

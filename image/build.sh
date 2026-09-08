@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build base.qcow2 from the tree mkosi assembles. Runs inside the image/Dockerfile
-# container; writes $OUT (default /out/base.qcow2).
+# Build rootfs.qcow2 from the tree mkosi assembles. Runs inside the image/Dockerfile
+# container; writes $OUT (default /out/image/rootfs.qcow2).
 #
 # What it produces: a partitionless ext4 filesystem holding the workload's userland,
 # wrapped in a read-only qcow2 that every VM maps as a backing file.
@@ -10,7 +10,7 @@
 # overlayfs in the guest. Copy-on-write was done by the filesystem. Here it moves to the
 # block layer, where QEMU does it:
 #
-#     qemu-img create -f qcow2 -F qcow2 -b base.qcow2 overlay.qcow2
+#     qemu-img create -f qcow2 -F qcow2 -b rootfs.qcow2 overlay.qcow2
 #
 # which is the shape a chain of images is made of: one base, many overlays.
 #
@@ -19,7 +19,12 @@
 # filesystem here starts with a kernel config change one directory over.
 set -euo pipefail
 
-OUT="${OUT:-/out/base.qcow2}"
+OUT="${OUT:-/out/image/rootfs.qcow2}"
+
+# The two texts that describe the image rather than being it. They go at the root of the
+# tree and not beside the image, because that is where a release carries them: one
+# licences.txt and one packages.txt for the whole machine, not one per part.
+SHARE="${SHARE:-$(dirname "$(dirname "$OUT")")}"
 # Normalizes timestamps in the tree, so the build's wall clock is not baked into every
 # file. It is not on its own a claim that the image is bit-reproducible: the userland is
 # assembled from a live archive, and the filesystem is sized from what came out of it, so
@@ -27,7 +32,7 @@ OUT="${OUT:-/out/base.qcow2}"
 # release actually contains is the checksum in machine.env.
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 
-mkdir -p "$(dirname "$OUT")" /work/out /cache
+mkdir -p "$(dirname "$OUT")" "$SHARE" /work/out /cache
 cd /work
 
 echo "==> mkosi: assembling the userland"
@@ -75,8 +80,8 @@ test -s "$harvested" || {
     echo "       without the copyright notices its licences require. See" >&2
     echo "       image/mkosi.postinst.chroot." >&2
     exit 1; }
-mv "$harvested" "$(dirname "$OUT")/licenses.txt"
-echo "==> $(grep -c '^======== ' "$(dirname "$OUT")/licenses.txt" || true) licence texts, $(du -h "$(dirname "$OUT")/licenses.txt" | cut -f1)"
+mv "$harvested" "$SHARE/licenses.txt"
+echo "==> $(grep -c '^======== ' "$SHARE/licenses.txt" || true) licence texts, $(du -h "$SHARE/licenses.txt" | cut -f1)"
 
 # --- the bill of materials --------------------------------------------------------------
 #
@@ -90,8 +95,8 @@ echo "==> $(grep -c '^======== ' "$(dirname "$OUT")/licenses.txt" || true) licen
 # release points at for the userland half: an Ubuntu source package is fetched by name and
 # version, and those are the two things here.
 dpkg-query --admindir="$tree/var/lib/dpkg" -W -f='${Package} ${Version} ${Architecture}\n' \
-    2>/dev/null | sort > "$(dirname "$OUT")/packages.txt"
-echo "==> $(wc -l < "$(dirname "$OUT")/packages.txt") packages recorded"
+    2>/dev/null | sort > "$SHARE/packages.txt"
+echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 
 # --- filesystem -------------------------------------------------------------------------
 #

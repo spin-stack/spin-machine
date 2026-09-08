@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # One tarball, one version: qemu-system-x86_64, qemu-img, the five firmware files, vmlinux
-# and base.qcow2.
+# and rootfs.qcow2.
 #
 # Not because it is tidy. `machine.Spec.Fingerprint` hashes the QEMU binary, the kernel and
 # the initrd by content to decide whether a VM may restore from a template, so a release in
@@ -67,27 +67,14 @@ echo "Firmware:"
 # efi-virtio.rom is the option ROM of the one NIC the build keeps, and a VM given a
 # virtio-net-pci without it does not start at all.
 for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
-  require "${OUTPUT_DIR}/share/spin-stack/qemu/${f}" "${SHARE}/qemu/${f}" "firmware ${f}"
+  require "${OUTPUT_DIR}/qemu/${f}" "${SHARE}/qemu/${f}" "firmware ${f}"
 done
 
 echo "Kernel:"
-require "${OUTPUT_DIR}/vmlinux" "${SHARE}/kernel/vmlinux" "the guest kernel" 0644
-require "${OUTPUT_DIR}/kernel-config" "${SHARE}/kernel/kernel-config" "the kernel config"
-# An optional second name for the kernel, off by default.
-#
-# The kernel is `vmlinux`, which is what the ELF is. A consumer that resolves it under some
-# other name can be given a symlink here rather than being changed — but this repository
-# does not know that any such consumer exists, and hardcoding one repository's filename
-# into another's release is exactly how two projects end up knowing about each other.
-#
-#   COMPAT_KERNEL_NAME=spinbox-kernel-x86_64 task release
-if [ -n "${COMPAT_KERNEL_NAME:-}" ]; then
-  ln -sfn vmlinux "${SHARE}/kernel/${COMPAT_KERNEL_NAME}"
-  echo "  ok: ${COMPAT_KERNEL_NAME} -> vmlinux"
-fi
-
+require "${OUTPUT_DIR}/kernel/vmlinux" "${SHARE}/kernel/vmlinux" "the guest kernel" 0644
+require "${OUTPUT_DIR}/kernel/kernel-config" "${SHARE}/kernel/kernel-config" "the kernel config"
 echo "Base image:"
-require "${OUTPUT_DIR}/base.qcow2" "${SHARE}/image/base.qcow2" "the base image" 0444
+require "${OUTPUT_DIR}/image/rootfs.qcow2" "${SHARE}/image/rootfs.qcow2" "the base image" 0444
 require "${OUTPUT_DIR}/packages.txt" "${SHARE}/packages.txt" "the image's package list"
 require "${OUTPUT_DIR}/licenses.txt" "${SHARE}/licenses.txt" "the image's licence texts"
 
@@ -103,7 +90,7 @@ require "${OUTPUT_DIR}/licenses.txt" "${SHARE}/licenses.txt" "the image's licenc
   echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "qemu_sha256=$(sha256sum "${SHARE}/bin/qemu-system-x86_64" | cut -d' ' -f1)"
   echo "kernel_sha256=$(sha256sum "${SHARE}/kernel/vmlinux" | cut -d' ' -f1)"
-  echo "image_sha256=$(sha256sum "${SHARE}/image/base.qcow2" | cut -d' ' -f1)"
+  echo "image_sha256=$(sha256sum "${SHARE}/image/rootfs.qcow2" | cut -d' ' -f1)"
 } > "${SHARE}/machine.env"
 echo "Manifest:"
 sed 's/^/  /' "${SHARE}/machine.env"
@@ -146,7 +133,7 @@ Linux ${KERNEL_VERSION}
             binary as usr/share/spin-stack/kernel/kernel-config
 
 Ubuntu userland
-  image:    usr/share/spin-stack/image/base.qcow2
+  image:    usr/share/spin-stack/image/rootfs.qcow2
   contents: usr/share/spin-stack/packages.txt — every package and its exact version
   licences: usr/share/spin-stack/licenses.txt — the copyright and licence text of each
   source:   the Ubuntu archive. For any package listed there:

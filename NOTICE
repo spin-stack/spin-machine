@@ -31,7 +31,7 @@ almost entirely other people's software under other people's licences:
   vmlinux
       Linux, GPL-2.0-only WITH Linux-syscall-note.
 
-  base.qcow2
+  rootfs.qcow2
       An Ubuntu 26.04 userland: several thousand files under GPL, LGPL, MIT,
       BSD, Apache-2.0 and others. usr/share/spin-stack/packages.txt in a release
       lists every package and version it was built from, and

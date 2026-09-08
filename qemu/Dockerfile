@@ -416,4 +416,4 @@ FROM scratch AS extract
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu-tcg/bin/qemu-system-x86_64 /bin/qemu-system-x86_64-tcg
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
-COPY --from=builder /build/pc-bios/ /share/spin-stack/qemu/
+COPY --from=builder /build/pc-bios/ /qemu/

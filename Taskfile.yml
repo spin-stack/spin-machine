@@ -254,7 +254,7 @@ tasks:
         # The image inside the tarball, and not the one in _output. They are the same
         # file today and the point of this task is the day they are not: a release is
         # verified by booting what it ships, or it is not verified.
-        img="$share/image/base.qcow2"
+        img="$share/image/rootfs.qcow2"
         test -f "$img" || { echo "the tarball carries no image at $img" >&2; exit 1; }
 
         # Three questions, because "it printed something" answers none of them.

@@ -25,7 +25,7 @@ cmd/        spin-machine (boot one, print its fingerprint) and the debug init it
 CLAUDE.md   how to work in here
 qemu/       Dockerfile + devices.mak
 kernel/     Dockerfile + config-<version>-<arch>
-image/      mkosi configuration producing base.qcow2 (ext4 inside)
+image/      mkosi configuration producing rootfs.qcow2 (ext4 inside)
 hack/       release
 ```
 
@@ -58,12 +58,24 @@ One tarball:
 | `bin/qemu-img` | |
 | `qemu/{bios.bin,bios-256k.bin,pvh.bin,kvmvapic.bin,efi-virtio.rom}` | |
 | `kernel/vmlinux` | plus `kernel-config` |
-| `image/base.qcow2` | read-only, 0444 |
+| `image/rootfs.qcow2` | read-only, 0444 |
 | `machine.env` | the version and the three checksums that decide template validity |
 | `SOURCES` | every upstream source by version, URL and SHA-256, and the written offer |
 | `packages.txt` | every package and exact version in the base image |
 
 `LICENSE` and `NOTICE` sit at the root of the tarball, next to `install.sh`.
+
+`task build` writes that same tree into `_output/`, byte for byte the layout above, and
+`machine.Open` reads either. There is one layout: nothing rearranges the files on the way
+out of a build, into a tarball or into a consumer, because the three used to differ and
+what fell out of the translation between them was a path that existed and held the
+previous release's kernel.
+
+```go
+rel, err := machine.Open("/usr/share/spin-stack")  // says which file is missing, if one is
+spec := rel.Spec()                                 // QEMU, Kernel, Firmware
+img, err := rel.Rootfs()
+```
 
 ## The machine
 
@@ -76,7 +88,7 @@ spec := machine.Spec{
     QEMU: …, Kernel: …, Initrd: …, Firmware: …,
     BootCPUs: 2,
     Memory:   machine.Memory{SizeMB: 2048, File: "/…/pc.ram", Shared: true},
-    Disks:    []machine.Disk{{Path: "base.qcow2", Format: "qcow2", Readonly: true}},
+    Disks:    []machine.Disk{{Path: overlay, Format: "qcow2"}},
     VsockCID: 7,
 }
 args, err := spec.Args()          // the QEMU command line
@@ -155,7 +167,7 @@ process is systemd. Booting a bare shell answers a different question — `syste
 in it replies *"System has not been booted with systemd as init system (PID 1)"*, which is
 true and useless.
 
-It boots this QEMU and this kernel over a throwaway qcow2 overlay on `base.qcow2`, through
+It boots this QEMU and this kernel over a throwaway qcow2 overlay on `rootfs.qcow2`, through
 `spin-machine boot`, with the serial console on stdio.
 
 The initrd it boots is `cmd/spin-machine-init`: static Go that mounts `/proc`, `/sys`,
@@ -277,7 +289,7 @@ moving a file.
 A **qcow2 base, read-only, with a fresh qcow2 overlay per VM**:
 
 ```
-qemu-img create -f qcow2 -F qcow2 -b base.qcow2 overlay.qcow2
+qemu-img create -f qcow2 -F qcow2 -b rootfs.qcow2 overlay.qcow2
 ```
 
 Copy-on-write happens in the block layer, where QEMU does it, rather than in a filesystem

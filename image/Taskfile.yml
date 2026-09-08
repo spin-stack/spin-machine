@@ -6,7 +6,7 @@ version: '3'
 tasks:
 
   build:
-    desc: Build base.qcow2 (Ubuntu 26.04 userland, ext4, partitionless) into _output/.
+    desc: Build rootfs.qcow2 (Ubuntu 26.04 userland, ext4, partitionless) into _output/.
     cmds:
       - task: builder
       - mkdir -p {{.OUTPUT_ABS}} {{.MKOSI_CACHE_DIR}}
@@ -60,8 +60,8 @@ tasks:
       - |
         set -euo pipefail
         out={{.OUTPUT_ABS}}
-        for f in "$out/bin/spin-machine" "$out/bin/qemu-system-x86_64" "$out/vmlinux" \
-                 "$out/base.qcow2" "$out/debug-initramfs.cpio.gz"; do
+        for f in "$out/bin/spin-machine" "$out/bin/qemu-system-x86_64" "$out/kernel/vmlinux" \
+                 "$out/image/rootfs.qcow2" "$out/debug-initramfs.cpio.gz"; do
           test -f "$f" || { echo "missing $f — run: task build" >&2; exit 1; }
         done
 
@@ -72,9 +72,9 @@ tasks:
         # cannot be touched.
         scratch=$(mktemp -d)/scratch.qcow2
         trap 'rm -rf "$(dirname "$scratch")"' EXIT
-        "$out/bin/qemu-img" create -f qcow2 -F qcow2 -b "$out/base.qcow2" "$scratch" >/dev/null
+        "$out/bin/qemu-img" create -f qcow2 -F qcow2 -b "$out/image/rootfs.qcow2" "$scratch" >/dev/null
 
-        before=$(sha256sum "$out/base.qcow2" | cut -d' ' -f1)
+        before=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)
 
         echo "booting {{.INIT}} in the base image — {{.MEMORY}} MiB, {{.CPUS}} vCPU"
         echo "  writes go to a throwaway overlay; the base is read-only and checked after"
@@ -110,10 +110,10 @@ tasks:
           --append "spinmachine.root=/dev/vda spinmachine.init={{.INIT}} spinmachine.getty=1" || true
 
         echo
-        after=$(sha256sum "$out/base.qcow2" | cut -d' ' -f1)
+        after=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)
         if [ "$before" != "$after" ]; then
           echo "👹 the base image changed during that session: $before -> $after" >&2
           echo "   every overlay in existence is now built on a file that moved." >&2
           exit 1
         fi
-        echo "base.qcow2 unchanged; the overlay held $(du -h "$scratch" | cut -f1) of writes and is gone"
+        echo "rootfs.qcow2 unchanged; the overlay held $(du -h "$scratch" | cut -f1) of writes and is gone"
