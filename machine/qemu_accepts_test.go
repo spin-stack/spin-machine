@@ -49,8 +49,10 @@ import (
 //   - accel=kvm -> accel=tcg. The KVM-only binary refuses to start without
 //     /dev/kvm and CI has none, so the TCG build is the only one that can answer
 //     the question at all. Nothing else in the machine string moves;
-//     kernel-irqchip=on, hpet=off and acpi=on are accepted by both, which is
-//     itself worth knowing.
+//     kernel-irqchip=on, hpet=off, acpi=on, sata=off and smbus=off are accepted
+//     by both, which is itself worth knowing — every case below asks that of
+//     whichever machine string Shape currently produces, so an option added
+//     there is under this check without a case being written for it.
 //
 //   - -cpu host -> max. "host" is a KVM-only value by construction — QEMU says
 //     "CPU model 'host' requires KVM or HVF" and exits — and max is the other

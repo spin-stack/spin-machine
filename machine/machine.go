@@ -43,8 +43,10 @@ import (
 // inside the guest.
 //
 // The machine owns both ends of the bus: 0x00 is the host bridge and 0x1f the
-// ICH9 LPC/SATA/SMBus function block. 0x01 is left free — the q35 convention
-// puts VGA there, and this machine has no display adapter at all.
+// ICH9 function block, which here is the LPC bridge alone — the SATA and SMBus
+// functions beside it are turned off in the machine string, see Shape. 0x01 is
+// left free — the q35 convention puts VGA there, and this machine has no
+// display adapter at all.
 const (
 	SlotVsock   = 0x02
 	SlotRNG     = 0x03
@@ -288,8 +290,45 @@ func (s Spec) Shape() Shape {
 	// kernel-irqchip=on keeps interrupt delivery in the kernel rather than
 	// bouncing every one through userspace. acpi=on is not optional: memory
 	// hotplug is announced through ACPI, and so is the machine's slot table.
+	//
+	// sata=off and smbus=off remove the two ICH9 functions a q35 builds beside
+	// the LPC bridge and this machine has no use for: an AHCI controller at
+	// 00:1f.2, on a kernel built without CONFIG_ATA, and an SMBus controller at
+	// 00:1f.3 with eight SPD EEPROMs behind it, on a kernel with no i2c bus
+	// driver to reach them. Both were on the bus with no driver bound, and the
+	// guest paid for enumerating them, for their BARs and for their I/O windows
+	// (0x0700-0x073f and 0xc040-0xc05f, gone from the guest's /proc/ioports).
+	//
+	// Kernel to init, medians of 400 boots each, measured 2026-09-08 on the KVM
+	// binary: 62.3 ms as it was, 61.3 ms with sata=off, 61.7 ms with smbus=off,
+	// 60.6 ms with both. Nothing else moved — the guest's PCI list loses exactly
+	// those two functions, the remaining BARs shift down by the page the AHCI
+	// controller had, and a boot onto the real root filesystem still reaches its
+	// init.
+	//
+	// Four more machine options were measured the same way and are deliberately
+	// not here, because each bought nothing (same date, 300 boots per variant,
+	// medians against a 62.9 ms baseline whose run-to-run spread was ±2 ms):
+	//
+	//   - usb=off, 63.0 ms, is a no-op twice over. This q35 already reports
+	//     /machine usb false, and the binary is built from qemu/devices.mak with
+	//     no USB controller in it at all, so usb=on is not even startable here:
+	//     "unknown type 'ich9-usb-ehci1'".
+	//   - vmport=off, 62.6 ms. The VMware backdoor port is emulated but never
+	//     touched: nothing in the guest's /proc/ioports claims it, because a
+	//     Linux guest decides whether to talk to it from CPUID and this one
+	//     finds KVM.
+	//   - smm=off, 62.3 ms. The scepticism it deserves is what makes it a
+	//     no-change: this machine enters a PVH ELF kernel directly, has no
+	//     pflash and no OVMF, and the 0.6 ms is inside the noise, so the option
+	//     would be carrying an interaction with firmware nobody here has for a
+	//     number that cannot be told from zero.
+	//   - i8042=off, 62.5 ms. It does remove the PS/2 controller, its two ports
+	//     and port92 — 92 bytes off the DSDT is the whole visible effect — and
+	//     the kernel has no CONFIG_SERIO_I8042 to probe any of it with.
 	machine := strings.Join(nonEmpty(
-		"q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on", backend,
+		"q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on",
+		"sata=off", "smbus=off", backend,
 	), ",")
 
 	cpu := s.CPU
