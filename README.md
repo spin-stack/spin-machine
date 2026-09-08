@@ -34,6 +34,7 @@ task build         # everything, into _output/
 task shell         # boot the machine and look around inside it
 task lint          # gofmt, vet, and whether the scripts and Taskfiles parse
 task test          # the machine definition
+task verify:args   # and whether the QEMU in _output/ accepts what it produces
 task fingerprint   # this machine's identity
 task release       # one tarball, one version
 ```
@@ -334,7 +335,12 @@ pins the toolchain, `image/build.sh` is the build, and the task runs it with
 
 Five workflows, and the split is about cost. `ci.yml` runs on every push and builds none of
 the three artefacts — it is `task lint` and `task test`, which is fast and catches most
-mistakes. Each artefact has a path-triggered workflow of its own, because QEMU and the
+mistakes. It also *pulls* one: `task qemu:fetch` unpacks the published QEMU of the pinned
+version in seconds, and `task verify:args` hands it the command line `machine.Spec.Args`
+builds. The device set is decided in `qemu/devices.mak` and the device and property names
+are written out by hand in `machine/machine.go`; nothing else connects the two, and a
+device dropped from the allowlist reads exactly like a typo added here — a VM that does not
+start, found by whoever boots one. Each artefact has a path-triggered workflow of its own, because QEMU and the
 kernel are tens of minutes each and the base image is ~1.5 GB of apt: `qemu.yml`,
 `kernel.yml`, `image.yml`. Each ends in the verification that belongs to it, so a build
 that lost a device, a kernel that lost its PVH notes, or an image that grew an identity

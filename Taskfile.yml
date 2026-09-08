@@ -182,6 +182,29 @@ tasks:
         done
         echo "OK: the shell scripts parse"
 
+  verify:args:
+    desc: >-
+      Ask the QEMU in _output/ whether it accepts the command line the machine package
+      builds. Every interesting Spec is started under the TCG binary, stopped before its
+      first instruction, and required to answer on QMP.
+    cmds:
+      # It crosses two parts — the machine definition and the binary — so it is here rather
+      # than in qemu/Taskfile.yml, and it refuses rather than skipping: the test itself
+      # skips when there is no binary, which is right for `go test ./...` in a source
+      # checkout and would be a gate that passes for the wrong reason here.
+      - |
+        set -euo pipefail
+        test -x {{.OUTPUT_ABS}}/bin/qemu-system-x86_64-tcg || {
+          echo "no {{.OUTPUT_ABS}}/bin/qemu-system-x86_64-tcg to ask." >&2
+          echo "  task qemu:fetch   the published build of the pinned version, seconds" >&2
+          echo "  task qemu:build   from source, tens of minutes" >&2
+          exit 1; }
+      # -count=1 because the answer depends on a file the test cache does not know about:
+      # a rebuilt QEMU with a device removed would otherwise be met with a cached pass.
+      # -v because what was rewritten for the TCG binary, and what a host without
+      # /dev/vhost-vsock left unchecked, is the part a reader has to see.
+      - SPIN_MACHINE_OUTPUT={{.OUTPUT_ABS}} go test ./machine -run TestQEMUAcceptsEveryArgument -count=1 -v
+
   fingerprint:
     desc: >-
       Print this machine's identity: the hash of the QEMU binary, the kernel and the initrd
