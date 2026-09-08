@@ -134,8 +134,13 @@ func (c Cmdline) String() string {
 	// Timing shortcuts a KVM guest can take:
 	//   no_timer_check           skip the boot-time timer IRQ delivery probe,
 	//                            which exists for hardware that misroutes it.
+	//   tsc=reliable             trust the TSC and skip the clocksource watchdog.
+	//                            The watchdog exists for silicon whose TSC drifts
+	//                            or stops; this machine's TSC is the host's, which
+	//                            KVM advertises as invariant, and the guest is
+	//                            told so through CPUID.
 	//   rcupdate.rcu_expedited=1 expedite RCU grace periods during boot.
-	parts = append(parts, "no_timer_check", "rcupdate.rcu_expedited=1")
+	parts = append(parts, "no_timer_check", "tsc=reliable", "rcupdate.rcu_expedited=1")
 
 	parts = append(parts, c.Extra...)
 
