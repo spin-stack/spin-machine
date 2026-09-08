@@ -47,6 +47,14 @@ jobs:
       - name: Set up Task
         uses: go-task/setup-task@v2
 
+      # For the acceptance check at the end, which is a Go test. The runner's own Go is
+      # whatever the image happens to carry, and go.mod names the one this builds with.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -69,6 +77,29 @@ jobs:
             QEMU_CACHE_FROM=type=gha \
             QEMU_CACHE_TO=type=gha,mode=max \
             QEMU_JOBS=4
+
+      # vhost-vsock is a kernel module, and the machine's vsock device cannot be created
+      # without /dev/vhost-vsock. The runner has the node and gives the user no access to
+      # it, which is why the chmod is not decoration: without it QEMU says "Could not open
+      # '/dev/vhost-vsock': Permission denied" and the device goes unchecked. Loaded rather than stood in for: there is no backend that
+      # keeps the device line and drops the requirement, and a runner without it is told
+      # what went unchecked instead of being shown a pass.
+      - name: Load vhost_vsock
+        run: |
+          sudo modprobe vhost_vsock && sudo chmod 0666 /dev/vhost-vsock ||
+            echo "no vhost_vsock here; the check will name vhost-vsock-pci as unchecked"
+
+      # The other half of what a device allowlist decides. `task qemu:build` ends in
+      # qemu:verify, which asks this binary which accelerators and firmware files it has;
+      # this asks whether it accepts the command line the machine package builds, which is
+      # where a device removed from qemu/devices.mak actually surfaces — as a VM that does
+      # not start, weeks later, reading like a fault in whatever launched it.
+      #
+      # ci.yml runs the same check on every push, against the published binary. This is the
+      # lane that catches a change made on *this* side, before the binary it would break is
+      # published at all.
+      - name: Check the built QEMU accepts the machine's arguments
+        run: task verify:args
 
       - name: Upload the extracted binaries
         uses: actions/upload-artifact@v4

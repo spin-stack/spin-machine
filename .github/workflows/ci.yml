@@ -5,6 +5,10 @@ name: CI
 # apt. Each has its own workflow, triggered by the files that can change it. What is left
 # here is fast and is the half that catches most mistakes — the machine definition, and
 # whether the scripts and Taskfiles parse at all.
+#
+# It does pull one of them: the published QEMU of the pinned version, seconds rather than
+# minutes, so that the command line this repository builds can be handed to the binary that
+# has to accept it. See the step.
 
 # A branch is tested through its pull request, and main when something lands on it. Not
 # both: an unfiltered `push:` fires alongside `pull_request:` for every push to a branch
@@ -28,6 +32,8 @@ concurrency:
 
 permissions:
   contents: read
+  # To read back the QEMU this commit pins, rather than build it. See the step.
+  packages: read
 
 jobs:
   gate:
@@ -62,3 +68,51 @@ jobs:
       # boot first found itself with no /init.
       - name: Build the tools
         run: task tools
+
+      # `task test` proves the machine package agrees with itself. The steps below ask the
+      # QEMU binary, which is the half that can disagree: the device set is decided in
+      # qemu/devices.mak and the device and property names are written out by hand in
+      # machine/machine.go, and nothing connected the two. A dropped device, a property
+      # renamed at a version bump, or a typo all produced the same thing — a VM that does
+      # not start, found days later by whoever booted one.
+      #
+      # Here and not only in qemu.yml, which is the workflow that has a QEMU: qemu.yml
+      # fires on qemu/** alone, so a change to machine/machine.go — the likeliest way to
+      # get this wrong — never reaches it.
+      - name: Log in to GitHub Packages
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Seconds, against the tens of minutes this workflow deliberately does not spend:
+      # the runtime image qemu.yml published for the version qemu/Dockerfile pins, unpacked
+      # into the same _output/ tree a build would write.
+      #
+      # continue-on-error, for one case that is not a fault: a pull request that bumps the
+      # pin asks for a version no one has published yet, because publishing happens from
+      # main. That pull request changes qemu/**, so qemu.yml builds the binary and runs the
+      # very same check against it — which is why this may say so and stop, and the step
+      # after it is skipped rather than run against some other QEMU. Any other pull failure
+      # skips the check too, and shows as a failed step in the run.
+      - name: Fetch the pinned QEMU
+        id: qemu
+        continue-on-error: true
+        run: task qemu:fetch
+
+      # vhost-vsock is a kernel module, and the machine's vsock device cannot be created
+      # without /dev/vhost-vsock. The runner has the node and gives the user no access to
+      # it, which is why the chmod is not decoration: without it QEMU says "Could not open
+      # '/dev/vhost-vsock': Permission denied" and the device goes unchecked. Loaded here rather than stood in for: there is no backend
+      # that keeps the device line and drops the requirement, and a runner without it is
+      # told what went unchecked instead of being shown a pass.
+      - name: Load vhost_vsock
+        if: steps.qemu.outcome == 'success'
+        run: |
+          sudo modprobe vhost_vsock && sudo chmod 0666 /dev/vhost-vsock ||
+            echo "no vhost_vsock here; the check will name vhost-vsock-pci as unchecked"
+
+      - name: Check QEMU accepts the machine's arguments
+        if: steps.qemu.outcome == 'success'
+        run: task verify:args

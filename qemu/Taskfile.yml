@@ -11,6 +11,11 @@ vars:
   QEMU_VERSION:
     sh: sed -n 's/^ARG QEMU_VERSION=//p' qemu/Dockerfile
 
+  # Where the runtime image is published, which `fetch` below reads back. The tag is the
+  # pinned version, so asking for this repository's QEMU and asking for the one this commit
+  # says it runs are the same question.
+  QEMU_PUBLISHED_IMAGE: '{{.QEMU_PUBLISHED_IMAGE | default "ghcr.io/spin-stack/spin-machine/qemu"}}'
+
 tasks:
 
   build:
@@ -76,6 +81,34 @@ tasks:
           exit 1; }
         echo "OK: both qemu-system binaries run here, qemu-img runs, five firmware files,"
         echo "    and only the CI binary can emulate"
+
+  fetch:
+    desc: >-
+      Put the published QEMU of the pinned version into _output/, instead of building it.
+      Seconds against tens of minutes, and the same binaries — they are static, so the
+      image around them carries nothing they need.
+    cmds:
+      # The same tree `build` writes, so whatever reads _output/ cannot tell which of the
+      # two filled it. Emptied first for the reason build empties it: --output writes files
+      # and removes none, and a firmware blob left over from another version is
+      # indistinguishable from one this QEMU shipped.
+      - rm -rf {{.OUTPUT_ABS}}/bin/qemu-* {{.OUTPUT_ABS}}/qemu
+      - mkdir -p {{.OUTPUT_ABS}}/bin
+      - |
+        set -euo pipefail
+        image="{{.QEMU_PUBLISHED_IMAGE}}:{{.QEMU_VERSION}}"
+        docker pull --quiet --platform linux/amd64 "$image"
+        # create/cp and not `docker run cat`: the image's entrypoint is qemu-system-x86_64,
+        # and nothing has to start for a file to be copied out of a container that never ran.
+        cid=$(docker create --platform linux/amd64 "$image")
+        trap 'docker rm --force "$cid" > /dev/null' EXIT
+        for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
+          docker cp "$cid:/usr/local/bin/$b" {{.OUTPUT_ABS}}/bin/$b
+        done
+        docker cp "$cid:/usr/share/spin-stack/qemu" {{.OUTPUT_ABS}}/qemu
+      # Which asserts the fetched tree is whole and that both binaries run here — the same
+      # question asked of a built one, and worth asking of a downloaded one twice over.
+      - task: verify
 
   image:
     desc: >-
