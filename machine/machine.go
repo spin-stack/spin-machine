@@ -642,8 +642,6 @@ func (s Spec) Args() ([]string, error) {
 // every VM restored from one have their memory in a file whatever the spec being
 // asked was configured with.
 func (s Spec) Fingerprint() (string, error) {
-	shape := s.TemplateShape()
-
 	h := sha256.New()
 
 	// Length-prefixed, so that no two different machines can produce the same
@@ -675,6 +673,32 @@ func (s Spec) Fingerprint() (string, error) {
 		}
 		write(f.name, sum)
 	}
+	ident, err := s.Identity()
+	if err != nil {
+		return "", err
+	}
+	write("identity", ident)
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Identity is everything the fingerprint hashes except the contents of those
+// three files: the machine's shape, its device topology, and the host's own CPU
+// when the guest is being shown it.
+//
+// It is separate because reading the three files is the expensive half — 76 MB
+// of SHA-256, 29 ms on a machine measured — and a caller that memoises that half
+// needs the other half whole to key the memo on. Under-keying it is the failure
+// that has no symptom: a stale fingerprint is a template that matches a machine
+// it does not describe, and a restore into it is undefined rather than an error.
+// So there is no list here for a caller to keep in step; there is this.
+func (s Spec) Identity() (string, error) {
+	shape := s.TemplateShape()
+
+	var b strings.Builder
+	write := func(key, value string) {
+		_, _ = fmt.Fprintf(&b, "%s=%d:%s\n", key, len(value), value)
+	}
 	write("machine", shape.Machine)
 	write("cpu", shape.CPU)
 	write("smp", shape.SMP)
@@ -703,7 +727,7 @@ func (s Spec) Fingerprint() (string, error) {
 		write("host-cpu", cpu)
 	}
 
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return b.String(), nil
 }
 
 // topology is the machine's device list — which models, at which slots — with
