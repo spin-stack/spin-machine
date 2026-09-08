@@ -18,11 +18,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spin-stack/spin-machine/machine"
 )
@@ -39,6 +41,7 @@ func usage() {
 
 Usage:
   spin-machine boot        [flags]   start a VM and wait for it
+  spin-machine save        [flags]   stop a running VM and write its state to a file
   spin-machine args        [flags]   print the QEMU command line it would run
   spin-machine fingerprint [flags]   print the machine's identity
 
@@ -68,6 +71,8 @@ func run(argv []string) error {
 	switch cmd {
 	case "boot":
 		return boot(spec, &o)
+	case "save":
+		return save(&o)
 	case "args":
 		args, err := spec.Args()
 		if err != nil {
@@ -114,11 +119,13 @@ type options struct {
 	qmp      string
 	console  string
 
-	init    string
-	root    string
-	profile bool
-	extra   string
-	verbose bool
+	incoming string
+	saveTo   string
+	init     string
+	root     string
+	profile  bool
+	extra    string
+	verbose  bool
 }
 
 func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
@@ -142,7 +149,9 @@ func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
 	fs.BoolVar(&o.memShare, "memory-share", false, "map the memory file shared, which is what freezing a template needs")
 
 	fs.IntVar(&o.vsockCID, "vsock-cid", 0, "give the machine a vhost-vsock device with this context id")
-	fs.StringVar(&o.qmp, "qmp", "", "listen for QMP on this Unix socket")
+	fs.StringVar(&o.qmp, "qmp", "", "listen for QMP on this Unix socket; `save` connects to one")
+	fs.StringVar(&o.incoming, "incoming", "", "resume from a saved state instead of booting, e.g. file:/path/state")
+	fs.StringVar(&o.saveTo, "to", "", "save: where to write the state")
 	fs.StringVar(&o.console, "console", "mon:stdio", "QEMU chardev for the serial console, or empty for none")
 
 	fs.StringVar(&o.init, "init", "", "what the kernel runs as PID 1 inside the guest")
@@ -183,6 +192,7 @@ func (o *options) spec() (machine.Spec, error) {
 		},
 		VsockCID:  o.vsockCID,
 		QMPSocket: o.qmp,
+		Incoming:  o.incoming,
 		Serial:    o.console,
 	}
 
@@ -264,4 +274,113 @@ func fingerprint(s machine.Spec) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+// save stops a running VM and writes everything needed to resume it elsewhere.
+//
+// It is `migrate` to a file, which is the same mechanism a live migration uses
+// with the far end replaced by a path: memory, device state, CPU state. The VM is
+// left stopped, because a VM that kept running after its state was captured would
+// have written to its disk and the state would no longer describe it.
+//
+// Deliberately not `migrate -d` with x-ignore-shared, which leaves the memory in
+// whatever file backs it. That is right for many VMs on one host sharing a
+// template and wrong for the thing this is for: one file that can be copied to
+// another machine and resumed there.
+func save(o *options) error {
+	if o.qmp == "" {
+		return errors.New("-qmp is required: this asks a running VM to save itself")
+	}
+	if o.saveTo == "" {
+		return errors.New("-to is required")
+	}
+	to, err := filepath.Abs(o.saveTo)
+	if err != nil {
+		return err
+	}
+
+	c, err := dialQMP(o.qmp)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+
+	if _, err := c.run("migrate", map[string]any{"uri": "file:" + to}); err != nil {
+		return fmt.Errorf("starting the save: %w", err)
+	}
+
+	// Polled rather than waited on an event: migration reports progress through
+	// query-migrate, and the completion event is not delivered for every
+	// transport. A save that fails leaves a truncated file, so its status is
+	// asked for rather than assumed.
+	deadline := time.Now().Add(5 * time.Minute)
+	for {
+		r, err := c.run("query-migrate", nil)
+		if err != nil {
+			return err
+		}
+		switch status, _ := r["status"].(string); status {
+		case "completed":
+			fmt.Fprintf(os.Stderr, "saved to %s\n", to)
+			_, _ = c.run("quit", nil)
+			return nil
+		case "failed", "cancelled":
+			return fmt.Errorf("the save %s: %v", status, r["error-desc"])
+		}
+		if time.Now().After(deadline) {
+			return errors.New("the save did not finish within five minutes")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// qmpConn is the smallest QMP client that can drive a save: one command at a
+// time, events discarded.
+type qmpConn struct {
+	c   net.Conn
+	dec *json.Decoder
+	enc *json.Encoder
+}
+
+func dialQMP(socket string) (*qmpConn, error) {
+	c, err := net.Dial("unix", socket)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to QMP at %s: %w", socket, err)
+	}
+	q := &qmpConn{c: c, dec: json.NewDecoder(c), enc: json.NewEncoder(c)}
+
+	var greeting map[string]any
+	if err := q.dec.Decode(&greeting); err != nil {
+		return nil, fmt.Errorf("reading the QMP greeting: %w", err)
+	}
+	if _, err := q.run("qmp_capabilities", nil); err != nil {
+		return nil, err
+	}
+	return q, nil
+}
+
+func (q *qmpConn) Close() error { return q.c.Close() }
+
+func (q *qmpConn) run(cmd string, args map[string]any) (map[string]any, error) {
+	req := map[string]any{"execute": cmd}
+	if args != nil {
+		req["arguments"] = args
+	}
+	if err := q.enc.Encode(req); err != nil {
+		return nil, fmt.Errorf("sending %s: %w", cmd, err)
+	}
+	for {
+		var resp map[string]any
+		if err := q.dec.Decode(&resp); err != nil {
+			return nil, fmt.Errorf("reading the reply to %s: %w", cmd, err)
+		}
+		if _, isEvent := resp["event"]; isEvent {
+			continue
+		}
+		if e, bad := resp["error"]; bad {
+			return nil, fmt.Errorf("%s: %v", cmd, e)
+		}
+		ret, _ := resp["return"].(map[string]any)
+		return ret, nil
+	}
 }

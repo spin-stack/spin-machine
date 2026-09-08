@@ -290,6 +290,38 @@ func TestFingerprintCoversTheDeviceList(t *testing.T) {
 	}
 }
 
+// The serial port has state, so a machine saved with one cannot be resumed
+// without one — `Unknown section or instance 'serial'`. Where its bytes go is not
+// part of the machine; whether it exists is.
+func TestFingerprintCoversTheSerialPort(t *testing.T) {
+	with := spec(t)
+	with.Serial = "mon:stdio"
+	without := spec(t)
+	without.Serial = ""
+
+	a, err := with.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := without.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Error("a machine with a serial port and one without fingerprinted the same")
+	}
+
+	elsewhere := with
+	elsewhere.Serial = "file:/var/log/console.log"
+	c, err := elsewhere.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != a {
+		t.Error("where the console's bytes go made it a different machine")
+	}
+}
+
 // What is behind a device is not the machine. Two VMs with one disk each are the
 // same machine whether that disk holds a database or a scratch overlay — which is
 // the whole reason a template is worth having.

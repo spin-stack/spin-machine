@@ -104,6 +104,49 @@ Three things in it are load-bearing and invisible from outside:
 always is. Otherwise a VM that has not been given a memory file yet could never find the
 template it would itself produce.
 
+## Moving a VM to another machine
+
+Stop it here, resume it there — not boot it there:
+
+```
+spin-machine boot --cpu Broadwell-v4 --qmp /run/vm.sock …     # on the first host
+spin-machine save --qmp /run/vm.sock --to state              # stops the VM
+# copy state and the disk
+spin-machine boot --cpu Broadwell-v4 --incoming file:state … # on the second
+```
+
+Verified: the resumed VM printed **5 console lines and no kernel boot at all**, against 340
+lines and a full boot for the same machine started fresh, and QMP reported it running.
+
+**`--cpu` is the whole of it.** The default, `host`, shows the guest this host's own feature
+set through CPUID — which the guest reads once and never questions. Resume that somewhere
+without AVX-512 and it executes an instruction that is not there. So `Fingerprint` folds the
+host's CPU model in whenever the model derives from the host, and a template built here does
+not match a machine elsewhere.
+
+Naming a model — the oldest microarchitecture in the fleet — makes every host show the same
+CPU, and the host's own silicon drops out of the fingerprint. Restoring a state saved with
+`Broadwell-v4`:
+
+| CPU on the second host | |
+|---|---|
+| `Broadwell-v4` | resumes |
+| `Skylake-Client-v4` (richer) | resumes |
+| `Nehalem` (poorer) | refuses: `Failed to set special registers` |
+
+That is the rule in one table: save with the baseline, and any host that meets or exceeds it
+can take the VM.
+
+**A named model carries `enforce=on`**, and without it the whole thing is a lie. QEMU's
+default is to warn about features the host cannot provide and start anyway, having quietly
+removed them — so the same model name gives a different guest CPU on different machines.
+Measured: asking a Raptor Lake host for `Skylake-Server-v4` gives five warnings about missing
+AVX-512 and exit 0. With `enforce=on` it is `Host doesn't support requested features` and
+exit 1, before the VM exists.
+
+The device list has to match too, down to whether there is a serial port — restoring without
+one says `Unknown section or instance 'serial'`. All of it is in the fingerprint.
+
 ## Looking inside the image
 
 ```

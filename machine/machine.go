@@ -237,9 +237,18 @@ type Spec struct {
 	Cmdline string
 
 	// IncomingDefer starts QEMU with no machine state, waiting to be told where
-	// to load it from. Without it the source of a restore has to be known at
-	// exec time, which would mean re-execing QEMU to change templates.
+	// to load it from over QMP. Without it the source of a restore has to be
+	// known at exec time, which would mean re-execing QEMU to change templates.
 	IncomingDefer bool
+
+	// Incoming names that source at exec time instead — a migration URI, most
+	// usefully "file:/path/to/state". It is how a VM saved on one machine is
+	// resumed, rather than booted, on another.
+	//
+	// The guest does not know this happened: it continues from the instruction it
+	// was stopped at, with the memory, the devices and the clock it had. Which is
+	// why the CPU model matters more here than anywhere else — see Shape.
+	Incoming string
 }
 
 // Shape is the four arguments that decide what machine a guest sees: the chipset
@@ -298,6 +307,21 @@ func (s Spec) Shape() Shape {
 	// at start-up, in whichever lane first names a model.
 	if derivedFromHost(cpu) {
 		cpu += ",migratable=on"
+	} else {
+		// enforce=on, and without it naming a model does not mean what it says.
+		//
+		// QEMU's default is to warn about features the host cannot provide and
+		// start anyway, having quietly removed them — so the same model name
+		// yields a different guest CPU on different machines, which is the exact
+		// thing naming a model was supposed to prevent. Measured here, asking a
+		// Raptor Lake host for Skylake-Server-v4: five warnings about missing
+		// AVX-512 and exit 0. A VM saved on a host that had them and resumed on
+		// one that did not would fault on an instruction it had already been told
+		// it has, long after the warning scrolled past.
+		//
+		// With this, a host that cannot provide the model refuses to start it:
+		// "Host doesn't support requested features", exit 1, before the VM exists.
+		cpu += ",enforce=on"
 	}
 
 	return Shape{
@@ -383,6 +407,8 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("memory is %d MB", s.Memory.SizeMB)
 	case s.Memory.Shared && s.Memory.File == "":
 		return fmt.Errorf("Memory.Shared with no Memory.File to share")
+	case s.Incoming != "" && s.IncomingDefer:
+		return fmt.Errorf("both Incoming (%q) and IncomingDefer are set", s.Incoming)
 	case len(s.Disks) > MaxDisks:
 		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), MaxDisks)
 	case len(s.NICs) > MaxNICs:
@@ -588,7 +614,10 @@ func (s Spec) Args() ([]string, error) {
 			fmt.Sprintf("unix:%s,server=on,wait=off", s.QMPSocket))
 	}
 
-	if s.IncomingDefer {
+	switch {
+	case s.Incoming != "":
+		args = append(args, "-incoming", s.Incoming)
+	case s.IncomingDefer:
 		args = append(args, "-incoming", "defer")
 	}
 
@@ -698,6 +727,19 @@ func (s Spec) topology() string {
 	}
 	for i := range s.NICs {
 		fmt.Fprintf(&b, ";virtio-net-pci@%#x", SlotNICBase+i)
+	}
+	// Whether there is a serial port, though not what is attached to it. It has
+	// state, so a machine saved with one cannot be resumed without one:
+	//
+	//   load of migration failed: Invalid argument: Unknown section or instance
+	//   'serial'
+	//
+	// which is what restoring a saved VM with -serial none says, and it took a
+	// while to read that as "the console". Where the bytes go is not part of the
+	// machine — a log file on one host and a terminal on another are the same
+	// machine — but the port being there is.
+	if s.Serial != "" {
+		b.WriteString(";isa-serial")
 	}
 	return b.String()
 }
