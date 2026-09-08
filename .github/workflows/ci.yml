@@ -6,17 +6,25 @@ name: CI
 # here is fast and is the half that catches most mistakes — the machine definition, and
 # whether the scripts and Taskfiles parse at all.
 
+# A branch is tested through its pull request, and main when something lands on it. Not
+# both: an unfiltered `push:` fires alongside `pull_request:` for every push to a branch
+# that has one open, so every push started two identical runs and the concurrency group
+# below killed one of them. That worked and cost a run each time — both started, both took
+# a runner — and left a column of `cancelled` in the run list that reads like a fault.
+#
+# It is also what the other three workflows here have always done; this one was the
+# exception.
 on:
   push:
+    branches: [main]
   pull_request:
 
-# One run per branch, not one per event. A push to a branch with an open pull request fires
-# both triggers; keying on `head_ref || ref_name` gives both the same string, while
-# `github.ref` — the obvious choice — does not (`refs/pull/N/merge` against
-# `refs/heads/my-branch`, two groups, nothing de-duplicated).
+# A new push to a branch supersedes the run its predecessor started, because only the tip
+# is worth a verdict. Never on main: a cancelled run there is a commit nobody proved, and
+# two merges landing close together are two things to verify.
 concurrency:
   group: ci-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 permissions:
   contents: read
