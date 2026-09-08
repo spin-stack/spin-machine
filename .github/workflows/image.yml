@@ -60,8 +60,8 @@ jobs:
 
       - name: What this image is
         run: |
-          ls -la _output/base.qcow2
-          echo "sha256: $(sha256sum _output/base.qcow2 | cut -d' ' -f1)"
+          ls -la _output/image/rootfs.qcow2
+          echo "sha256: $(sha256sum _output/image/rootfs.qcow2 | cut -d' ' -f1)"
 
       # Not uploaded as an artifact: it is ~860 MB and the release workflow rebuilds it
       # from the same inputs. What this job is for is finding out that it still builds and

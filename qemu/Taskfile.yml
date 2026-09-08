@@ -20,7 +20,7 @@ tasks:
       # a firmware blob this build no longer produces stays on disk, indistinguishable from
       # one it does. That is how a 331 MB firmware tree outlived the build that stopped
       # shipping it, and how a qemu-nbd would outlive the decision to stop shipping one.
-      - rm -rf {{.OUTPUT_ABS}}/bin/qemu-* {{.OUTPUT_ABS}}/share/spin-stack/qemu
+      - rm -rf {{.OUTPUT_ABS}}/bin/qemu-* {{.OUTPUT_ABS}}/qemu
       - mkdir -p {{.OUTPUT_ABS}}
       - |
         docker buildx build \
@@ -56,7 +56,7 @@ tasks:
         # efi-virtio.rom is the option ROM of the one NIC this build keeps; a VM given a
         # virtio-net-pci without it does not start.
         for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
-          test -f {{.OUTPUT_ABS}}/share/spin-stack/qemu/$f || {
+          test -f {{.OUTPUT_ABS}}/qemu/$f || {
             echo "missing firmware $f — run: task qemu:build" >&2; exit 1; }
         done
         # Run, not just present. A binary that cannot start on the host that extracted it

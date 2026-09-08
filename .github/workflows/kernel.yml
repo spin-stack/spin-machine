@@ -59,15 +59,15 @@ jobs:
       # when somebody asks why their templates stopped matching.
       - name: What this kernel is
         run: |
-          echo "kernel sha256: $(sha256sum _output/vmlinux | cut -d' ' -f1)"
-          echo "config sha256: $(sha256sum _output/kernel-config | cut -d' ' -f1)"
+          echo "kernel sha256: $(sha256sum _output/kernel/vmlinux | cut -d' ' -f1)"
+          echo "config sha256: $(sha256sum _output/kernel/kernel-config | cut -d' ' -f1)"
 
       - name: Upload the kernel
         uses: actions/upload-artifact@v4
         with:
           name: vmlinux-${{ github.sha }}
           path: |
-            _output/vmlinux
-            _output/kernel-config
+            _output/kernel/vmlinux
+            _output/kernel/kernel-config
           retention-days: 30
           if-no-files-found: error

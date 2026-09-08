@@ -39,7 +39,7 @@ tasks:
     cmds:
       - |
         set -euo pipefail
-        k={{.OUTPUT_ABS}}/vmlinux
+        k={{.OUTPUT_ABS}}/kernel/vmlinux
         test -f "$k" || { echo "no kernel at $k — run: task kernel:build" >&2; exit 1; }
         # The PVH notes are the entry point: there is no bootloader and no UEFI here, and
         # QEMU enters this ELF through pvh.bin using them. The build strips the symbol

@@ -129,13 +129,13 @@ type options struct {
 }
 
 func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
-	fs.StringVar(&o.release, "release", "_output", "a release tree: bin/, share/spin-stack/qemu/, vmlinux, base.qcow2")
+	fs.StringVar(&o.release, "release", "_output", "an unpacked release tree; every path below defaults out of it")
 	fs.StringVar(&o.qemu, "qemu", "", "QEMU binary (default: <release>/bin/qemu-system-x86_64)")
 	fs.StringVar(&o.kernel, "kernel", "", "kernel image (default: <release>/vmlinux)")
 	fs.StringVar(&o.initrd, "initrd", "", "initrd (default: none)")
-	fs.StringVar(&o.firmware, "firmware", "", "firmware directory (default: <release>/share/spin-stack/qemu)")
+	fs.StringVar(&o.firmware, "firmware", "", "firmware directory (default: <release>/qemu)")
 
-	fs.StringVar(&o.disk, "disk", "", "disk image (default: <release>/base.qcow2)")
+	fs.StringVar(&o.disk, "disk", "", "disk image (default: <release>/rootfs.qcow2)")
 	fs.StringVar(&o.diskFormat, "disk-format", "qcow2", "format of the disk image; never guessed")
 	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only")
 	fs.StringVar(&o.serial, "disk-serial", "", "virtio-blk serial the guest can resolve the disk by")
@@ -164,8 +164,12 @@ func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
 
 // spec turns the flags into a machine, filling in every path from the release
 // tree so that the common case is one flag.
+//
+// The tree is opened rather than assumed, so a release missing a part says so
+// here, naming the file — and not three seconds later as a QEMU that exits for
+// want of an option ROM.
 func (o *options) spec() (machine.Spec, error) {
-	rel, err := filepath.Abs(o.release)
+	rel, err := machine.Open(o.release)
 	if err != nil {
 		return machine.Spec{}, err
 	}
@@ -176,27 +180,33 @@ func (o *options) spec() (machine.Spec, error) {
 		return fallback
 	}
 
-	s := machine.Spec{
-		QEMU:     or(o.qemu, filepath.Join(rel, "bin", "qemu-system-x86_64")),
-		Kernel:   or(o.kernel, filepath.Join(rel, "vmlinux")),
-		Initrd:   o.initrd,
-		Firmware: or(o.firmware, filepath.Join(rel, "share", "spin-stack", "qemu")),
-		CPU:      o.cpuModel,
-		BootCPUs: o.cpus,
-		MaxCPUs:  o.maxCPUs,
-		Memory: machine.Memory{
-			SizeMB: o.memoryMB,
-			MaxMB:  o.maxMemMB,
-			File:   o.memFile,
-			Shared: o.memShare,
-		},
-		VsockCID:  o.vsockCID,
-		QMPSocket: o.qmp,
-		Incoming:  o.incoming,
-		Serial:    o.console,
+	s := rel.Spec()
+	s.QEMU = or(o.qemu, s.QEMU)
+	s.Kernel = or(o.kernel, s.Kernel)
+	s.Firmware = or(o.firmware, s.Firmware)
+	s.Initrd = o.initrd
+	s.CPU = o.cpuModel
+	s.BootCPUs = o.cpus
+	s.MaxCPUs = o.maxCPUs
+	s.Memory = machine.Memory{
+		SizeMB: o.memoryMB,
+		MaxMB:  o.maxMemMB,
+		File:   o.memFile,
+		Shared: o.memShare,
 	}
+	s.VsockCID = o.vsockCID
+	s.QMPSocket = o.qmp
+	s.Incoming = o.incoming
+	s.Serial = o.console
 
-	disk := or(o.disk, filepath.Join(rel, "base.qcow2"))
+	// The base image is what this boots unless told otherwise, and "-" is how a
+	// caller asks for a machine with no disk at all.
+	disk := o.disk
+	if disk == "" {
+		if disk, err = rel.Rootfs(); err != nil {
+			return machine.Spec{}, err
+		}
+	}
 	if disk != "-" {
 		s.Disks = []machine.Disk{{
 			Path:     disk,

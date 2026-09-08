@@ -75,7 +75,7 @@ jobs:
           name: qemu-${{ steps.qemu.outputs.version }}-linux-amd64
           path: |
             _output/bin/
-            _output/share/
+            _output/qemu/
           retention-days: 30
           if-no-files-found: error
 
