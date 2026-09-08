@@ -27,7 +27,8 @@ permissions:
 
 concurrency:
   group: image-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  # Never on main: a cancelled run there is a commit nobody proved.
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
   build:
