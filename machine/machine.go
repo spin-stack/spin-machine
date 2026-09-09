@@ -893,6 +893,23 @@ func (s Spec) topology() string {
 	if s.HotplugPorts > 0 {
 		fmt.Fprintf(&b, ";pcie-root-port@%#x*%d", SlotHotplugBase, s.HotplugPorts)
 	}
+	// The NICs, by how many and where, and deliberately not by MAC or by descriptor.
+	//
+	// A NIC is on the command line when the machine starts, so it is present when state is
+	// loaded, and a template frozen from a machine without one cannot be loaded into a
+	// machine that has one. That is the same rule as the root ports above, and the reason
+	// disks are *not* here is the reverse of it: a disk is added after the restore, so a
+	// machine that will be given one looks exactly like the template it came from.
+	//
+	// What is left out matters as much. A descriptor number is not the machine's shape —
+	// it is which file the backend reads, the way a disk's path is — and the MAC is a
+	// property of the device rather than of the bus. Both are left out so that machines
+	// which differ only in those two share one template, which is what lets a host keep
+	// one and start every VM from it. A caller that wants distinct MACs pays for it in
+	// templates, and should not: give each machine a segment of its own instead.
+	if len(s.NICs) > 0 {
+		fmt.Fprintf(&b, ";virtio-net-pci@%#x*%d", SlotNICBase, len(s.NICs))
+	}
 	return b.String()
 }
 

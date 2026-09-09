@@ -272,19 +272,60 @@ func TestFingerprintCoversTheDevicesPresentAtRestore(t *testing.T) {
 		}
 	}
 
-	for name, mutate := range map[string]func(*Spec){
-		"a disk": func(s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw"}} },
-		"a NIC":  func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}} },
-	} {
-		changed := base
-		mutate(&changed)
-		got, err := changed.Fingerprint()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != want {
-			t.Errorf("%s changed the fingerprint; it is cold-plugged after a restore, so a VM would never find its template", name)
-		}
+	// A NIC is on the command line, so it is present when state is loaded and a machine
+	// with one cannot restore from a template frozen without one.
+	//
+	// This case said the opposite until 2026-09-09 — that a NIC must not change the
+	// fingerprint, because "it is cold-plugged after a restore, so a VM would never find
+	// its template". That was true of disks and asserted of both.
+	withNIC := base
+	withNIC.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
+	got, err := withNIC.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == want {
+		t.Error("a NIC did not change the fingerprint; a machine with one would restore from a template without one, into a device whose state is not in the stream")
+	}
+
+	// A disk does not, and that is the difference: it is added after the restore, so a
+	// machine that will be given one looks exactly like the template it came from.
+	withDisk := base
+	withDisk.Disks = []Disk{{Path: "/a", Format: "raw"}}
+	got, err = withDisk.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Error("a disk changed the fingerprint; it is attached after a restore, so a VM would never find its template")
+	}
+}
+
+// Two machines whose NICs differ only in the descriptor they read and the address they
+// answer to are one machine, and share a template.
+//
+// It is what makes a network possible at all under one template per host: a descriptor
+// number is which file the backend reads, the way a disk's path is, and a MAC is a property
+// of the device and not of the bus. A caller that wants distinct MACs pays for it in
+// templates; the answer is to give each machine a segment of its own instead, which is what
+// a namespace per machine is.
+func TestFingerprintIgnoresWhichTAPANICReads(t *testing.T) {
+	a := spec(t)
+	a.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
+
+	b := a
+	b.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:ff:ff:ff"}}
+
+	fa, err := a.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb, err := b.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fa != fb {
+		t.Errorf("two machines differing only in a descriptor and a MAC have different fingerprints (%s, %s); a host would keep one template per VM", fa, fb)
 	}
 }
 
