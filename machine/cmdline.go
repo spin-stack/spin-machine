@@ -127,9 +127,27 @@ func (c Cmdline) String() string {
 	// memory configuration is a second thing that has to agree with the first.
 	parts = append(parts, "memhp_default_state=online")
 
-	// A short-lived VM never amortises the tickless machinery's setup cost, and
-	// on a guest the timer interrupt it saves is cheap.
-	parts = append(parts, "nohz=off")
+	// The tick stops when a CPU has nothing to do, which is what CONFIG_NO_HZ_IDLE
+	// is compiled in for.
+	//
+	// It used to be turned off here, on the grounds that a short-lived VM never
+	// amortises the tickless machinery's setup cost and that the timer interrupt
+	// it saves is cheap on a guest. Both halves were wrong when measured
+	// (2026-09-09). The interrupt is not cheap: a guest kernel at CONFIG_HZ=1000
+	// with the tick forced on burns 1.7% of a core per vCPU doing nothing at all,
+	// because every one of those thousand wakeups a second is a vmexit. And the
+	// setup cost it was buying back does not show: with the tick left alone, a
+	// machine's boot and a workspace's restore both measured what they did before
+	// — 821-853 ms to boot and build a template, 113-221 ms to a usable workspace,
+	// against 843-846 ms and 124-216 ms with nohz=off.
+	//
+	// Not every VM is short-lived, either. A machine that is started before anyone
+	// asks for it and waits is the case this decides: at 1.7% a vCPU, a hundred of
+	// them cost two cores to sit still.
+	//
+	// A tickless *full* guest (nohz_full=) is a different trade and not this one:
+	// it needs the housekeeping CPU set apart and pays for it in latency when the
+	// guest does have work.
 
 	// Timing shortcuts a KVM guest can take:
 	//   no_timer_check           skip the boot-time timer IRQ delivery probe,
