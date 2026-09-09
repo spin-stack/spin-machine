@@ -208,6 +208,16 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			return s
 		},
 	}, {
+		// Two monitors, which is a machine whose lifecycle and whose disk are
+		// driven by different things. Both are required to answer: a socket that
+		// greets and never replies would look like a working monitor to whoever
+		// only dialled it, and the greeting is written by the chardev.
+		name: "two monitors",
+		spec: func(s Spec) Spec {
+			s.QMPSocket2 = qmpSocket(t)
+			return s
+		},
+	}, {
 		name: "nic",
 		spec: func(s Spec) Spec {
 			s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:12:34:56"}}
@@ -275,6 +285,10 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 
 			s := c.spec(base())
 			s.QMPSocket = qmpSocket(t)
+			sockets := []string{s.QMPSocket}
+			if s.QMPSocket2 != "" {
+				sockets = append(sockets, s.QMPSocket2)
+			}
 
 			args, err := s.Args()
 			if err != nil {
@@ -291,19 +305,19 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			// -S, and it is the only argument added: it stops the machine before
 			// the first instruction, so what is measured is device creation and
 			// not a guest booting under emulation.
-			start(t, qemu, append(args, "-S"), s.QMPSocket)
+			start(t, qemu, append(args, "-S"), sockets...)
 		})
 	}
 }
 
-// start runs QEMU and requires it to answer on its monitor.
+// start runs QEMU and requires it to answer on every monitor it was given.
 //
 // Every failure here has to name the argument that was rejected, because a check
 // whose failure says "exit status 1" costs more than it saves. QEMU names it
 // itself — "-device virtio-balloon-pci,...: Property '...' not found" — so its
 // stderr is reproduced whole, under the command line that produced it, one
 // argument per line.
-func start(t *testing.T, qemu string, args []string, socket string) {
+func start(t *testing.T, qemu string, args []string, sockets ...string) {
 	t.Helper()
 
 	var stderr strings.Builder
@@ -342,6 +356,23 @@ func start(t *testing.T, qemu string, args []string, socket string) {
 		<-done
 	}()
 
+	// Read after done is closed, which is the only ordering that reads it at all.
+	exited := func() error { <-done; return exit }
+
+	for _, socket := range sockets {
+		answers(t, socket, fail, done, exited)
+	}
+}
+
+// answers requires QEMU to greet and reply on one monitor.
+//
+// A monitor and not the process: a machine with two of them has to serve both, because
+// they exist so that two components can drive it without relaying through each other, and
+// a second socket that greets but never replies would look like a working one to whoever
+// only dialled it.
+func answers(t *testing.T, socket string, fail func(string, error), done <-chan struct{}, exited func() error) {
+	t.Helper()
+
 	// The socket exists as soon as the chardev is created, which is before the
 	// CPU is created and long before any device is realized, so its existence
 	// proves nothing — a machine whose CPU model the accelerator refused left a
@@ -352,7 +383,7 @@ func start(t *testing.T, qemu string, args []string, socket string) {
 		select {
 		case <-done:
 			// The usual failure: QEMU rejected an argument and exited.
-			fail("QEMU exited before answering on the monitor", exit)
+			fail("QEMU exited before answering on the monitor", exited())
 		default:
 		}
 		c, err := net.Dial("unix", socket)
@@ -404,7 +435,8 @@ func start(t *testing.T, qemu string, args []string, socket string) {
 			fail(command+" failed", fmt.Errorf("%s", reply.Error.Desc))
 		}
 		if command == "query-status" {
-			t.Logf("running, monitor answered query-status with %s", reply.Return)
+			t.Logf("running, monitor %s answered query-status with %s",
+				filepath.Base(socket), reply.Return)
 		}
 	}
 }

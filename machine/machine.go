@@ -262,6 +262,23 @@ type Spec struct {
 	// anything to a running machine, including shutting it down.
 	QMPSocket string
 
+	// QMPSocket2 is a second monitor, on its own socket, for a second thing that drives
+	// this machine.
+	//
+	// It exists because a QMP socket serves one client: QEMU's socket chardev accepts one
+	// connection and the next one waits, so two components cannot share a path. Two
+	// monitors are two chardevs, and QEMU serves both at once — each with its own
+	// greeting, its own capabilities handshake and its own command stream.
+	//
+	// The case it is for is a machine whose lifecycle and whose disk are owned by
+	// different things: whoever launched it holds the first monitor for as long as it
+	// runs, and whatever owns the storage under it has to be able to seal a layer without
+	// asking the launcher to relay commands it does not understand.
+	//
+	// Empty for a machine with one driver, which is every machine that does not have that
+	// split.
+	QMPSocket2 string
+
 	// Serial is a QEMU chardev spec for the console — "file:/path/console.log",
 	// "mon:stdio", or empty for no console at all. The kernel prints to the ISA
 	// 16550 the machine has; nothing else uses it.
@@ -696,9 +713,12 @@ func (s Spec) Args() ([]string, error) {
 		args = append(args, "-serial", "none")
 	}
 
-	if s.QMPSocket != "" {
+	for _, sock := range []string{s.QMPSocket, s.QMPSocket2} {
+		if sock == "" {
+			continue
+		}
 		args = append(args, "-qmp",
-			fmt.Sprintf("unix:%s,server=on,wait=off", s.QMPSocket))
+			fmt.Sprintf("unix:%s,server=on,wait=off", sock))
 	}
 
 	if s.IncomingDefer {
