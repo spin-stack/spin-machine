@@ -56,7 +56,13 @@ const (
 	SlotDiskMax  = 0x0f
 
 	SlotNICBase = 0x10
-	SlotNICMax  = 0x1d
+	SlotNICMax  = 0x19
+
+	// Root ports for devices that arrive while the machine runs. Taken off the
+	// top of the NIC range, the way SlotMem was: every slot below is where it
+	// was, and ten NICs is still more than anything asks for.
+	SlotHotplugBase = 0x1a
+	SlotHotplugMax  = 0x1d
 
 	// Taken off the top of the NIC range rather than inserted anywhere earlier:
 	// every slot below this one is where it was, so this did not renumber a
@@ -70,7 +76,17 @@ const (
 const (
 	MaxDisks = SlotDiskMax - SlotDiskBase + 1
 	MaxNICs  = SlotNICMax - SlotNICBase + 1
+
+	// MaxHotplugDiskPorts bounds Spec.HotplugDiskPorts.
+	MaxHotplugDiskPorts = SlotHotplugMax - SlotHotplugBase + 1
 )
+
+// HotplugPortID names the root port a device arriving at run time is attached to. Whoever
+// hotplugs the device passes it as the device's bus, and the numbering is the machine's:
+// port i is the i'th disk this machine can be given while it runs.
+func HotplugPortID(i int) string {
+	return fmt.Sprintf("rp%d", i)
+}
 
 // virtioModern forces virtio 1.0 (modern-only) on a PCI virtio device.
 //
@@ -219,6 +235,22 @@ type Spec struct {
 
 	Disks []Disk
 	NICs  []NIC
+
+	// HotplugDiskPorts is how many disks this machine can be given while it runs.
+	//
+	// A disk that arrives later cannot go where the disks on the command line go: those
+	// slots are on the q35 root complex, and QEMU refuses device_add there — "Bus 'pcie.0'
+	// does not support hotplugging". What accepts a device at run time is a PCIe root
+	// port, so this is that many empty root ports, each one a bus with a free slot.
+	//
+	// Zero by default, and a machine that asks for none is byte-for-byte the machine it
+	// was before this existed. It is not free: each port is a bridge the guest enumerates
+	// at boot and a bus it has to scan, and the ports are in the fingerprint, so a machine
+	// with them does not share a template with one without.
+	//
+	// What it buys is a machine that can exist before the workload does — started, resumed
+	// and waiting, and given its disk when one turns up.
+	HotplugDiskPorts int
 
 	// VsockCID, when non-zero, gives the machine a vhost-vsock device with that
 	// context id. It is how anything inside the guest is reached: this machine
@@ -455,6 +487,9 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), MaxDisks)
 	case len(s.NICs) > MaxNICs:
 		return fmt.Errorf("%d NICs, and the slot range holds %d", len(s.NICs), MaxNICs)
+	case s.HotplugDiskPorts < 0 || s.HotplugDiskPorts > MaxHotplugDiskPorts:
+		return fmt.Errorf("%d root ports for disks arriving later, and the slot range holds %d",
+			s.HotplugDiskPorts, MaxHotplugDiskPorts)
 	}
 	for i, d := range s.Disks {
 		if d.Path == "" {
@@ -596,6 +631,16 @@ func (s Spec) Args() ([]string, error) {
 			"-object", fmt.Sprintf("memory-backend-ram,id=%s,size=%dM", memGrowthID, growth),
 			"-device", fmt.Sprintf("virtio-mem-pci,id=vmem0,memdev=%s,requested-size=0,%s,addr=0x%x",
 				memGrowthID, virtioModern, SlotMem))
+	}
+
+	// Empty root ports, for disks this machine will be given while it runs. See
+	// Spec.HotplugDiskPorts: the root complex takes no device_add, and a root port does.
+	//
+	// chassis is the port's identity to the guest's ACPI and has to be unique; the slot
+	// number inside a root port is always 0, because a root port has exactly one.
+	for i := range s.HotplugDiskPorts {
+		args = append(args, "-device", fmt.Sprintf("pcie-root-port,id=%s,chassis=%d,addr=0x%x",
+			HotplugPortID(i), i+1, SlotHotplugBase+i))
 	}
 
 	for i, d := range s.Disks {
@@ -816,6 +861,12 @@ func (s Spec) topology() string {
 	}
 	if s.Serial != "" {
 		b.WriteString(";isa-serial")
+	}
+	// The empty root ports, which are devices present when the state is loaded even
+	// though what they are for is not. A machine restored into one with a different
+	// number of them is a machine whose bus does not match its own device state.
+	if s.HotplugDiskPorts > 0 {
+		fmt.Fprintf(&b, ";pcie-root-port@%#x*%d", SlotHotplugBase, s.HotplugDiskPorts)
 	}
 	return b.String()
 }
