@@ -77,13 +77,14 @@ const (
 	MaxDisks = SlotDiskMax - SlotDiskBase + 1
 	MaxNICs  = SlotNICMax - SlotNICBase + 1
 
-	// MaxHotplugDiskPorts bounds Spec.HotplugDiskPorts.
-	MaxHotplugDiskPorts = SlotHotplugMax - SlotHotplugBase + 1
+	// MaxHotplugPorts bounds Spec.HotplugPorts.
+	MaxHotplugPorts = SlotHotplugMax - SlotHotplugBase + 1
 )
 
 // HotplugPortID names the root port a device arriving at run time is attached to. Whoever
 // hotplugs the device passes it as the device's bus, and the numbering is the machine's:
-// port i is the i'th disk this machine can be given while it runs.
+// port i is the i'th device this machine can be given while it runs, whatever that device
+// turns out to be.
 func HotplugPortID(i int) string {
 	return fmt.Sprintf("rp%d", i)
 }
@@ -236,12 +237,16 @@ type Spec struct {
 	Disks []Disk
 	NICs  []NIC
 
-	// HotplugDiskPorts is how many disks this machine can be given while it runs.
+	// HotplugPorts is how many devices this machine can be given while it runs.
 	//
-	// A disk that arrives later cannot go where the disks on the command line go: those
+	// A device that arrives later cannot go where the ones on the command line go: those
 	// slots are on the q35 root complex, and QEMU refuses device_add there — "Bus 'pcie.0'
 	// does not support hotplugging". What accepts a device at run time is a PCIe root
 	// port, so this is that many empty root ports, each one a bus with a free slot.
+	//
+	// A root port takes any PCIe device, so a port is not a disk's or a NIC's: the caller
+	// decides what goes in which. It was named for disks when disks were the only thing
+	// that arrived late, and the name was a claim about the bus that was never true.
 	//
 	// Zero by default, and a machine that asks for none is byte-for-byte the machine it
 	// was before this existed. It is not free: each port is a bridge the guest enumerates
@@ -249,8 +254,8 @@ type Spec struct {
 	// with them does not share a template with one without.
 	//
 	// What it buys is a machine that can exist before the workload does — started, resumed
-	// and waiting, and given its disk when one turns up.
-	HotplugDiskPorts int
+	// and waiting, and given its disk and its NIC when they turn up.
+	HotplugPorts int
 
 	// VsockCID, when non-zero, gives the machine a vhost-vsock device with that
 	// context id. It is how anything inside the guest is reached: this machine
@@ -504,9 +509,9 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), MaxDisks)
 	case len(s.NICs) > MaxNICs:
 		return fmt.Errorf("%d NICs, and the slot range holds %d", len(s.NICs), MaxNICs)
-	case s.HotplugDiskPorts < 0 || s.HotplugDiskPorts > MaxHotplugDiskPorts:
-		return fmt.Errorf("%d root ports for disks arriving later, and the slot range holds %d",
-			s.HotplugDiskPorts, MaxHotplugDiskPorts)
+	case s.HotplugPorts < 0 || s.HotplugPorts > MaxHotplugPorts:
+		return fmt.Errorf("%d root ports for devices arriving later, and the slot range holds %d",
+			s.HotplugPorts, MaxHotplugPorts)
 	}
 	for i, d := range s.Disks {
 		if d.Path == "" {
@@ -650,12 +655,12 @@ func (s Spec) Args() ([]string, error) {
 				memGrowthID, virtioModern, SlotMem))
 	}
 
-	// Empty root ports, for disks this machine will be given while it runs. See
-	// Spec.HotplugDiskPorts: the root complex takes no device_add, and a root port does.
+	// Empty root ports, for devices this machine will be given while it runs. See
+	// Spec.HotplugPorts: the root complex takes no device_add, and a root port does.
 	//
 	// chassis is the port's identity to the guest's ACPI and has to be unique; the slot
 	// number inside a root port is always 0, because a root port has exactly one.
-	for i := range s.HotplugDiskPorts {
+	for i := range s.HotplugPorts {
 		args = append(args, "-device", fmt.Sprintf("pcie-root-port,id=%s,chassis=%d,addr=0x%x",
 			HotplugPortID(i), i+1, SlotHotplugBase+i))
 	}
@@ -885,8 +890,8 @@ func (s Spec) topology() string {
 	// The empty root ports, which are devices present when the state is loaded even
 	// though what they are for is not. A machine restored into one with a different
 	// number of them is a machine whose bus does not match its own device state.
-	if s.HotplugDiskPorts > 0 {
-		fmt.Fprintf(&b, ";pcie-root-port@%#x*%d", SlotHotplugBase, s.HotplugDiskPorts)
+	if s.HotplugPorts > 0 {
+		fmt.Fprintf(&b, ";pcie-root-port@%#x*%d", SlotHotplugBase, s.HotplugPorts)
 	}
 	return b.String()
 }

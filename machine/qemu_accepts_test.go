@@ -198,13 +198,13 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			return s
 		},
 	}, {
-		// Empty root ports, which is a machine that will be given disks while it
+		// Empty root ports, which is a machine that will be given devices while it
 		// runs. Only that the ports are accepted and realized is asked here; that
 		// a device can then be added to one is a question for a running machine
 		// and a QMP monitor, which is whoever drives that machine's.
 		name: "hotplug ports",
 		spec: func(s Spec) Spec {
-			s.HotplugDiskPorts = MaxHotplugDiskPorts
+			s.HotplugPorts = MaxHotplugPorts
 			return s
 		},
 	}, {
