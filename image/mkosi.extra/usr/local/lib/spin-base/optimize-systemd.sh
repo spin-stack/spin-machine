@@ -103,7 +103,6 @@ MASK_UNITS=(
     ldconfig.service
 
     # sysctl/sysusers - done at build time (25ms + 20ms)
-    systemd-sysctl.service
     systemd-sysusers.service
 
     # Modprobe services - not needed in VM (35ms + 31ms + 24ms)
