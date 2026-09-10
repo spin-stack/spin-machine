@@ -67,10 +67,23 @@ const (
 	//    ~27 ms    QEMU, exec to the guest's first instruction
 	//     ~7 ms    the guest, first instruction to first console byte
 	//
-	// and inside QEMU's 27: 2.8 ms of process floor (`-version`, 20 runs), ~8 ms to a QMP
-	// round trip under -S, ~5 ms copying the kernel's 34.6 MB of PT_LOAD (measured by
-	// removing -kernel: 27.5 against 22.6 ms), and ~14 ms between those and the first vCPU
-	// entering the guest.
+	// and inside QEMU's 27, from its own trace events (`-msg timestamp=on -trace
+	// enable=kvm_ioctl -trace enable=loader_write_rom …`, which the shipped binary supports
+	// without a rebuild):
+	//
+	//     ~2.5 ms   process start
+	//     ~5 ms     option parsing, backends, everything before KVM
+	//    ~12 ms     accel, memslots, vCPUs, device realize, reset, the ACPI build
+	//     ~6 ms     rom_reset copying the kernel's 36 MB, at ~6 GB/s
+	//     ~2 ms     cont to the first vCPU entering the guest
+	//
+	// There is no gap after machine init, and an earlier version of this comment said there
+	// was — it read "~8 ms to a QMP round trip" and put ~14 ms after it. The 8 ms was the QMP
+	// *greeting*, which the monitor emits from qemu_create_late_backends() at vl.c:3835,
+	// before qmp_x_exit_preconfig() builds the board at vl.c:3862. The reply to
+	// qmp_capabilities is 18-20 ms, and `-S` defers only the qmp_cont() at vl.c:2849 — reset,
+	// the ACPI tables and rom_reset all happen inside that window. A checkpoint that answers
+	// before the thing it is supposed to bracket has started is not a checkpoint.
 	//
 	// Trace it with `-e sched:sched_process_exec -e kvm:kvm_entry` and nothing else. Adding
 	// kvm:kvm_pio inflates the same interval from 27 to 49 ms, because that tracepoint fires
