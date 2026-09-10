@@ -19,6 +19,31 @@
 # Every boot writes to a throwaway overlay over the base image, and the base's digest is
 # checked afterwards: a run that modified it is a run whose numbers are worthless and whose
 # damage is permanent.
+#
+# WHERE THE TIME IS, measured 2026-09-10, so the next person does not look where it is not.
+#
+# The kernel is 62ms and mounts the root filesystem at 56ms. Everything else is userspace,
+# and dmesg locates it exactly:
+#
+#     [ 0.056141] EXT4-fs (vda): mounted filesystem r/w
+#     [ 0.058798] Run /sbin/init as init process
+#     [ 0.838756] systemd[1]: systemd 259.5 running in system mode
+#
+# 675ms between the kernel exec'ing systemd and systemd being ready to say so. After that
+# line everything is fast: units start appearing 50ms later and arrive in single-digit
+# milliseconds each, the heaviest service in `blame` is 37ms, and the whole of the rest of
+# the boot is about 115ms.
+#
+# So it is not the units, not the 13 generators, and not the services — pruning any of them
+# moves nothing. It is systemd's own start-up before it logs a word, on a guest page cache
+# that is empty by definition: every read of the binary, of libsystemd-core and
+# libsystemd-shared, and of the 263 unit files is a virtio round trip into a qcow2. The host
+# cache is already warm across these runs, so it is not host I/O either.
+#
+# Which is the thing worth knowing about it: this is what a *cold boot* costs, and a
+# workspace never pays it. A machine restored from a template resumes memory in which all of
+# this has already happened. The number matters when the template is built and for this
+# debugging boot, and nowhere else.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
