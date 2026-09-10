@@ -140,6 +140,17 @@ RUN <<EOT
     #                   attach with a message about the target.
     grep -q "CONFIG_BPF_JIT=y" .config || (echo "ERROR: CONFIG_BPF_JIT not enabled (every BPF program would run interpreted)!" ; exit 1)
     grep -q "CONFIG_DEBUG_INFO_BTF=y" .config || (echo "ERROR: CONFIG_DEBUG_INFO_BTF not enabled (no BTF means no CO-RE)!" ; exit 1)
+    # BTF costs 9 ms of every boot, and it is worth knowing where the bill arrives so that
+    # nobody spends a week trying to move it. Measured 2026-09-10, function_graph at depth 1:
+    # the *first* call to register_btf_kfunc_id_set takes 9302 us and the other fifty in the
+    # boot take between 0.3 and 7 us each. It is the one-time parse of the 4.35 MB .BTF
+    # section, charged to whichever kfunc set registers first.
+    #
+    # Today that is XFRM: xfrm_init measures 8.6-9.1 ms across three boots and
+    # register_xfrm_state_bpf is essentially all of it, which makes inet_init look like a
+    # 9 ms initcall and makes CONFIG_XFRM=n look like a 9 ms saving. It is not one. Turning
+    # XFRM off moves the bill to the next registrant and changes nothing, and the only knob
+    # that removes it is CONFIG_DEBUG_INFO_BTF=n, which is the line above.
     grep -q "CONFIG_FUNCTION_TRACER=y" .config || (echo "ERROR: CONFIG_FUNCTION_TRACER not enabled (fentry/fexit cannot attach)!" ; exit 1)
     # BPF_LSM is deliberately NOT enabled, and this is where the decision is written down
     # so it is not made again by accident. It depends on CONFIG_SECURITY, which is off here
