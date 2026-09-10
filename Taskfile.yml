@@ -151,6 +151,14 @@ tasks:
           | gzip -1 > {{.OUTPUT_ABS}}/debug-initramfs.cpio.gz
         echo "✓ {{.OUTPUT_ABS}}/debug-initramfs.cpio.gz"
 
+  boot:matrix:
+    desc: >-
+      Boot this machine every way it can be booted and print what each one costs. Needs
+      /dev/kvm, a built release, and sudo — one row unmasks udev in a throwaway overlay,
+      which means writing to it through qemu-nbd.
+    cmds:
+      - bash hack/boot-matrix.sh
+
   test:
     desc: Test the machine definition.
     cmds:
