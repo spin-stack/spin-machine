@@ -99,7 +99,15 @@ var variants = []variant{
 	// logind is the tail and the most expensive single unit; chrony is the other one that
 	// blame puts in the tens of milliseconds. Both are rows rather than deletions because a
 	// unit on the critical chain does not always give its time back when removed — something
-	// else becomes the tail.
+	// else becomes the tail. Which is exactly what happened, 15 boots each, p50/p95 to a
+	// usable machine:
+	//
+	//     baseline    262/296        sin logind   238/247
+	//     sin chrony  252/287        sin ambos    233/260
+	//
+	// logind is +63 ms on the chain and worth 24 ms to remove; chrony is 43 ms in blame and
+	// worth 10 ms; the two together are worth 29 ms and not 34, because they overlap. Read
+	// `systemd-analyze blame` as a list of suspects, never as a list of savings.
 	labelled("sin logind", without("systemd-logind.service")),
 	labelled("sin chrony", without("chrony.service")),
 	labelled("sin ambos", without("systemd-logind.service", "chrony.service")),
