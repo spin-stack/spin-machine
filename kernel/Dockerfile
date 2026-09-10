@@ -154,6 +154,24 @@ RUN <<EOT
     # the symbol is normally absent.)
     ! grep -q "CONFIG_RAID6_PQ_BENCHMARK=y" .config || (echo "ERROR: CONFIG_RAID6_PQ_BENCHMARK must not be enabled (boot perf)!" ; exit 1)
 
+    # Boot performance, the drivers this machine does not have: not worth it, measured.
+    #
+    # The standing suggestion is to trim the 8250 block, which carries PCI, EXAR, LPSS, MID
+    # and RSA support and 32 UARTs for a machine whose console is one 16550 ISA port.
+    # serial8250_init costs 154 us — measured 2026-09-10, initcall_debug with a *silent*
+    # console, `spin-machine boot --profile`, dmesg read back from the guest.
+    #
+    # The trap that makes candidates like this look worthwhile: with console output at
+    # loglevel 8 the same initcall reads 3.6 ms. That is the cost of the printk, not of the
+    # driver. Every initcall in the top twenty shrank by 3-20x once the console was silent
+    # and the total went from 103.9 ms to 42.8 ms, so any initcall_debug run with a console
+    # attached is measuring the serial port. For scale, the kernel reaches /sbin/init at
+    # 65 ms and acpi_init alone is 10 ms of it — and ACPI is what CPU and memory hotplug
+    # ride on, so the big one is not available either.
+    #
+    # Anything here also costs a fleet-wide template rebuild: machine.Spec.Fingerprint
+    # hashes this kernel by content. 154 us is not the price of the change.
+
     echo "Virtio configuration:"
     grep "CONFIG_VIRTIO" .config | grep -v "^#" || echo "No VIRTIO options enabled!"
 
