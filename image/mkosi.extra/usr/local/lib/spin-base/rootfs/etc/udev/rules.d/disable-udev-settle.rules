@@ -1,3 +1,0 @@
-# Minimal udev rules for VM - skip unnecessary processing
-ACTION=="add", SUBSYSTEM=="net", RUN+="/bin/true"
-ACTION=="remove", SUBSYSTEM=="net", RUN+="/bin/true"
