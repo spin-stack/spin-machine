@@ -68,7 +68,7 @@ EOF
 # What replaces it is one line that says how long this machine took to boot.
 #
 # It is there because a number nobody sees is a number nobody defends. A cold boot is 853ms
-# (measured 2026-09-10, `task boot:matrix`) and it took a harness to find that out. Printing
+# (measured 2026-09-10, `task boot:bench`) and it took a harness to find that out. Printing
 # it at every login means the next regression is noticed by whoever logs in next, rather
 # than by whoever thinks to measure.
 echo "Replacing the distribution MOTD..."

@@ -25,7 +25,7 @@ mask_unit() {
 MASK_UNITS=(
 
     # udev is NOT masked, and was, for six months. It was masked to save boot time and it
-    # does not cost any: measured 2026-09-10 with `task boot:matrix`, four boots of the real
+    # does not cost any: measured 2026-09-10 with `task boot:bench`, four boots of the real
     # release under KVM, udev masked against udev on —
     #
     #     with the debug initrd     200ms  /  163ms
@@ -119,12 +119,20 @@ MASK_UNITS=(
     # tmp.mount - already have /tmp (24ms)
     tmp.mount
 
-    # tmpfiles-setup - vminitd already creates /tmp, /run, /dev nodes (19ms + 13ms + 11ms)
+    # tmpfiles-setup (19ms + 13ms + 11ms). The directories it would create are already
+    # there: /tmp is in the image at mode 1777 (image/build.sh makes it), /run is a tmpfs
+    # systemd mounts itself before any unit runs, and /dev is devtmpfs with udev on top.
+    #
+    # The reason recorded here until 2026-09-10 was that an init outside this repository
+    # created them, which was both wrong — it named a consumer, and this machine now boots
+    # root=/dev/vda with no initrd at all — and unfalsifiable from inside this tree.
     systemd-tmpfiles-setup.service
     systemd-tmpfiles-setup-dev.service
     systemd-tmpfiles-setup-dev-early.service
 
-    # Mounts already handled by vminitd or not needed (15ms + 15ms + 12ms)
+    # Mounts for hardware and interfaces this machine does not have (15ms + 15ms + 12ms):
+    # no hugepages are configured, nothing uses POSIX message queues, and /run/lock has no
+    # user on a machine that runs one workload.
     dev-hugepages.mount
     dev-mqueue.mount
     run-lock.mount

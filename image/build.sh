@@ -172,7 +172,7 @@ mid_size=$(stat_in_image /etc/machine-id | sed -n 's/.*Size: \([0-9]\+\).*/\1/p'
 
 # udev runs, and the assertion is that nothing masks it again. It was masked here for six
 # months to save boot time and it costs none — 163ms against 200ms with the debug initrd,
-# measured 2026-09-10 with `task boot:matrix` — while a machine booted with root=/dev/vda
+# measured 2026-09-10 with `task boot:bench` — while a machine booted with root=/dev/vda
 # paid the full ten-second dev-ttyS0.device timeout without it and then had no login at all:
 # 207ms against 10.161s. Masking is a one-line edit that looks like an optimization, so the
 # numbers live here too, where such an edit is caught.

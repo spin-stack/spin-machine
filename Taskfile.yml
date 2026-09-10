@@ -141,13 +141,22 @@ tasks:
       - mkdir -p {{.OUTPUT_ABS}}/bin
       - CGO_ENABLED=0 go build -ldflags '-s -w' -o {{.OUTPUT_ABS}}/bin/spin-machine ./cmd/spin-machine
 
-  boot:matrix:
+  boot:bench:
     desc: >-
-      Boot this machine every way it can be booted and print what each one costs. Needs
-      /dev/kvm, a built release, and sudo — two rows mask udev in a throwaway overlay,
-      which means writing to it through qemu-nbd.
+      What a boot costs, measured from the host and repeated enough to believe. Needs
+      /dev/kvm, a built release, and sudo — variants that mask a unit write into a throwaway
+      overlay through qemu-nbd. REPS= to change the count, DEBUG=1 for kernel and systemd
+      logging (which inflates what it measures, equally in every variant).
     cmds:
-      - bash hack/boot-matrix.sh
+      - SPIN_BOOT_BENCH=1 go test ./boot/ -run TestBootCost -v -timeout 60m
+
+  boot:trace:
+    desc: >-
+      One boot's console printed against the host's clock, for finding a gap that belongs to
+      neither systemd nor the kernel. SPIN_GETTY_EXEC= replaces agetty to tell its own delays
+      apart from the tty's.
+    cmds:
+      - SPIN_BOOT_TRACE=1 go test ./boot/ -run TestBootTrace -v -timeout 10m
 
   test:
     desc: Test the machine definition.
