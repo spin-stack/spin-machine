@@ -63,6 +63,96 @@ unmask_udev() {
 	rmdir "$mnt"
 }
 
+# inject_analysis puts a timer in the overlay that writes systemd's own breakdown to a file
+# and powers the machine off.
+#
+# It is how this gets `systemd-analyze blame` out of a machine nobody can log into, which is
+# the whole difficulty: the console is what is being measured, so a harness that needs one to
+# read the numbers cannot measure the configurations where there is none.
+#
+# A timer and not a unit ordered after multi-user.target, because a unit that is part of the
+# boot transaction cannot ask whether the boot has finished — `systemd-analyze` answers
+# "Bootup is not yet finished" while its own job is still queued, and
+# `is-system-running --wait` deadlocks waiting for itself. OnBootSec puts it outside the
+# transaction, which is the only place the question has an answer.
+#
+# To a file and not the console, because by then agetty owns the console and the output goes
+# where nobody reads it. The harness mounts the overlay afterwards and reads it back.
+inject_analysis() {
+	local overlay=$1 dev=/dev/nbd0 mnt
+	mnt=$(mktemp -d)
+	sudo modprobe nbd max_part=8
+	sudo qemu-nbd --connect="$dev" -f qcow2 "$overlay"
+	for _ in $(seq 20); do sudo blkid "$dev" >/dev/null 2>&1 && break; sleep 0.2; done
+	sudo mount "$dev" "$mnt"
+	sudo tee "$mnt/etc/systemd/system/spin-boot-analysis.service" >/dev/null <<-'UNIT'
+		[Unit]
+		Description=Write the boot analysis and power off
+
+		[Service]
+		Type=oneshot
+		ExecStart=/bin/sh -c '{ systemd-analyze; echo "=== BLAME ==="; systemd-analyze blame; echo "=== CHAIN ==="; systemd-analyze critical-chain; } > /boot-analysis.txt 2>&1; sync'
+		ExecStart=/usr/bin/systemctl poweroff
+	UNIT
+	sudo tee "$mnt/etc/systemd/system/spin-boot-analysis.timer" >/dev/null <<-'TIMER'
+		[Unit]
+		Description=Analyse the boot once it is over
+
+		[Timer]
+		OnBootSec=6s
+		AccuracySec=100ms
+
+		[Install]
+		WantedBy=timers.target
+	TIMER
+	sudo mkdir -p "$mnt/etc/systemd/system/timers.target.wants"
+	sudo ln -sf /etc/systemd/system/spin-boot-analysis.timer \
+		"$mnt/etc/systemd/system/timers.target.wants/spin-boot-analysis.timer"
+	sudo umount "$mnt"
+	sudo qemu-nbd --disconnect "$dev" >/dev/null
+	rmdir "$mnt"
+}
+
+# read_analysis mounts an overlay a boot has finished with and prints what it wrote.
+read_analysis() {
+	local overlay=$1 dev=/dev/nbd0 mnt
+	mnt=$(mktemp -d)
+	sudo qemu-nbd --connect="$dev" -f qcow2 "$overlay"
+	for _ in $(seq 20); do sudo blkid "$dev" >/dev/null 2>&1 && break; sleep 0.2; done
+	sudo mount -o ro "$dev" "$mnt"
+	sudo cat "$mnt/boot-analysis.txt" 2>/dev/null || echo "  (the machine never got far enough to write one)"
+	sudo umount "$mnt"
+	sudo qemu-nbd --disconnect "$dev" >/dev/null
+	rmdir "$mnt"
+}
+
+# analyze boots one configuration with that timer in it and prints what it said.
+analyze() {
+	local label=$1 initrd=$2 udev=$3
+	local dir overlay log
+	dir=$(mktemp -d)
+	overlay="$dir/overlay.qcow2"
+	log="$dir/console.log"
+	"$OUT/bin/qemu-img" create -f qcow2 -F qcow2 -b "$OUT/image/rootfs.qcow2" "$overlay" >/dev/null
+	[ "$udev" = udev ] && unmask_udev "$overlay"
+	inject_analysis "$overlay"
+
+	local -a args=(boot --release "$OUT" --disk "$overlay" --memory 2048 --cpus 2 --console "file:$log")
+	if [ "$initrd" = initrd ]; then
+		args+=(--initrd "$OUT/debug-initramfs.cpio.gz"
+			--append "spinmachine.root=/dev/vda spinmachine.init=/sbin/init spinmachine.getty=1")
+	else
+		args+=(--append "root=/dev/vda rw init=/sbin/init")
+	fi
+
+	echo "==================== $label ===================="
+	# It powers itself off, so a run takes as long as the boot; hitting the cap means it
+	# never reached the point where the question could be asked.
+	timeout "$BOOT_TIMEOUT" "$OUT/bin/spin-machine" "${args[@]}" >/dev/null 2>&1 || true
+	read_analysis "$overlay"
+	echo
+}
+
 # run boots one configuration and records what it cost.
 #   $1 label · $2 "initrd"|"noinitrd" · $3 "udev"|"noudev" · $4 extra kernel arguments
 run() {
@@ -128,3 +218,12 @@ printf '%-34s %-9s %-11s %-10s %s\n' CONFIGURATION KERNEL USERSPACE TOTAL LOGIN
 awk -F'\t' '{printf "%-34s %-9s %-11s %-10s %s\n", $1, $2, $3, $4, $5}' "$RESULTS"
 echo
 echo "console logs are under the directories in $RESULTS"
+
+# And where the userspace time actually goes, for the two configurations that reach a
+# console. A total is a number to compare; blame is a list of things to delete.
+if [ "${ANALYZE:-1}" = 1 ]; then
+	echo
+	echo "==================== where the userspace time goes ===================="
+	analyze "initrd · udev masked"   initrd   noudev
+	analyze "no initrd · udev on"    noinitrd udev
+fi
