@@ -156,6 +156,17 @@ type NIC struct {
 	// TapFD is the descriptor number in the QEMU process, so 3 or above.
 	TapFD int
 	MAC   string
+
+	// MTU is the largest frame the guest may send, announced through
+	// VIRTIO_NET_F_MTU. Zero leaves the guest at its own default, 1500.
+	//
+	// Announced rather than configured, and that is the point of doing it here:
+	// virtnet_probe assigns it to both dev->mtu and dev->max_mtu, so the guest
+	// comes up with it before its init runs and the kernel refuses any attempt to
+	// raise it. A value delivered any other way — DHCP option 26, a command-line
+	// parameter the guest parses — is advice that root inside the machine can
+	// ignore, and the tenant is root.
+	MTU int
 }
 
 // Memory describes guest RAM.
@@ -706,10 +717,14 @@ func (s Spec) Args() ([]string, error) {
 		// no /dev/vhost-net fails at start-up rather than quietly running slowly,
 		// which is the right way round — a machine that cannot do this is a
 		// different machine.
+		dev := fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s,romfile=,%s,addr=0x%x",
+			i, n.MAC, virtioModern, SlotNICBase+i)
+		if n.MTU > 0 {
+			dev += fmt.Sprintf(",host_mtu=%d", n.MTU)
+		}
 		args = append(args,
 			"-netdev", fmt.Sprintf("tap,id=net%d,fd=%d,vhost=on", i, n.TapFD),
-			"-device", fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s,romfile=,%s,addr=0x%x",
-				i, n.MAC, virtioModern, SlotNICBase+i))
+			"-device", dev)
 	}
 
 	if s.Serial != "" {
@@ -907,8 +922,19 @@ func (s Spec) topology() string {
 	// which differ only in those two share one template, which is what lets a host keep
 	// one and start every VM from it. A caller that wants distinct MACs pays for it in
 	// templates, and should not: give each machine a segment of its own instead.
+	//
+	// The MTU is here, unlike those two, because it is not a setting on the backend: it
+	// is VIRTIO_NET_F_MTU, negotiated at probe and carried in the migration stream, so a
+	// template frozen with it announced cannot be loaded into a machine that does not
+	// announce it, or announces another value. It costs nothing to include — the MTU is
+	// the uplink's, one per node, and a node keeps its own templates — and including it
+	// turns "the operator changed the MTU" into a template that is rebuilt rather than a
+	// restore that fails.
 	if len(s.NICs) > 0 {
 		fmt.Fprintf(&b, ";virtio-net-pci@%#x*%d", SlotNICBase, len(s.NICs))
+		for _, n := range s.NICs {
+			fmt.Fprintf(&b, ",mtu=%d", n.MTU)
+		}
 	}
 	return b.String()
 }

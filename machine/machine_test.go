@@ -108,6 +108,37 @@ func TestDevicesSitOnTheirFixedSlots(t *testing.T) {
 	}
 }
 
+// host_mtu is how the guest is told what it may send, and the only way of telling
+// it that it cannot then ignore: virtnet_probe assigns the announced value to both
+// dev->mtu and dev->max_mtu, so the guest boots with it and the kernel refuses to
+// raise it. Root inside the machine can discard a DHCP option or a kernel
+// parameter; this it cannot.
+func TestTheGuestIsToldItsMTUOnTheDevice(t *testing.T) {
+	s := spec(t)
+	s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01", MTU: 1400}}
+
+	args, err := s.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01,romfile=,disable-legacy=on,addr=0x10,host_mtu=1400") {
+		t.Errorf("the NIC does not announce its MTU: %s", joined)
+	}
+
+	// And a machine with nothing to announce says nothing, rather than announcing
+	// zero — which QEMU takes as "no MTU" but only after the guest has read a
+	// config field the feature bit says is valid.
+	s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
+	args, err = s.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(args, " "); strings.Contains(joined, "host_mtu") {
+		t.Errorf("a NIC with no MTU still names one: %s", joined)
+	}
+}
+
 // A disk's format is stated, never guessed: a wrong guess is a guest that boots
 // and finds a disk full of nothing.
 func TestDiskFormatIsRequired(t *testing.T) {
@@ -326,6 +357,38 @@ func TestFingerprintIgnoresWhichTAPANICReads(t *testing.T) {
 	}
 	if fa != fb {
 		t.Errorf("two machines differing only in a descriptor and a MAC have different fingerprints (%s, %s); a host would keep one template per VM", fa, fb)
+	}
+}
+
+// The MTU is the exception to the rule above: it is not a setting on the backend
+// but VIRTIO_NET_F_MTU, negotiated at probe and written into the migration stream.
+// Two machines announcing different MTUs are two machines, and if they shared a
+// fingerprint a host would restore one into the other and QEMU would refuse the
+// feature set — an operator changing the uplink's MTU would break every workspace
+// on the node instead of costing one template build.
+func TestFingerprintSeparatesMachinesByTheMTUTheyAnnounce(t *testing.T) {
+	a := spec(t)
+	a.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01", MTU: 1500}}
+
+	b := a
+	b.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01", MTU: 1400}}
+
+	// And announcing nothing is a third machine: without the feature bit the guest
+	// picks its own default, which is a different negotiation from being told 1500.
+	none := a
+	none.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
+
+	seen := map[string]string{}
+	for name, s := range map[string]Spec{"1500": a, "1400": b, "unannounced": none} {
+		f, err := s.Fingerprint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other, dup := seen[f]; dup {
+			t.Errorf("a machine announcing %s and one announcing %s share fingerprint %s; "+
+				"a host would load one's template into the other", name, other, f)
+		}
+		seen[f] = name
 	}
 }
 
