@@ -59,12 +59,40 @@ spin ALL=(ALL) NOPASSWD: ALL
 EOF
 
 # -------------------------------------------------
-# 6. Disable MOTD
+# 6. Own the MOTD
 # -------------------------------------------------
-echo "Disabling MOTD..."
+# The distribution's goes, all of it: scripts that check for available updates, count
+# reboots and advertise a support subscription — network calls and package queries in a
+# machine that is restored from a template and thrown away.
+#
+# What replaces it is one line that says how long this machine took to boot.
+#
+# It is there because a number nobody sees is a number nobody defends. A cold boot is 853ms
+# (measured 2026-09-10, `task boot:matrix`) and it took a harness to find that out. Printing
+# it at every login means the next regression is noticed by whoever logs in next, rather
+# than by whoever thinks to measure.
+echo "Replacing the distribution MOTD..."
 rm -rf /etc/update-motd.d/*
 truncate -s 0 /etc/motd
-sed -i 's/^session.*pam_motd.so/#&/' /etc/pam.d/sshd
+
+install -d -m 0755 /etc/update-motd.d
+cat > /etc/update-motd.d/00-spin-boot <<'MOTD'
+#!/bin/sh
+# How long this machine took to boot, printed by pam_motd at every login.
+#
+# `|| true` and a silent exit: a motd script that fails prints its error to somebody's
+# terminal instead of a greeting, and this is a greeting. systemd-analyze answers "Bootup is
+# not yet finished" if a login somehow arrives before the boot does.
+analysis=$(systemd-analyze 2>/dev/null | head -1) || true
+case "$analysis" in
+	Startup*) printf '\n%s\n\n' "$analysis" ;;
+esac
+MOTD
+chmod 0755 /etc/update-motd.d/00-spin-boot
+
+# pam_motd stays enabled, including for ssh, where it had been commented out. There is
+# something worth printing now.
+sed -i 's/^#\(session.*pam_motd.so\)/\1/' /etc/pam.d/sshd
 
 
 # -------------------------------------------------

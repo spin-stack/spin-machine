@@ -23,11 +23,17 @@ mask_unit() {
 
 # Units to mask - safe for VM environment
 MASK_UNITS=(
-    # udev - not needed for static VM hardware
-    systemd-udev-trigger.service
-    systemd-udevd.service
-    systemd-udevd-control.socket
-    systemd-udevd-kernel.socket
+
+    # udev is NOT masked, and was, for six months. It was masked to save boot time and it
+    # saves none: measured 2026-09-10 with `task boot:matrix`, 826ms against 829ms — noise.
+    # What it cost instead was everything that needs a .device unit to exist.
+    #
+    #   * serial-getty@ttyS0 carries BindsTo=dev-%i.device and could not start, which is
+    #     why this image had to carry a getty unit of its own with the dependency removed.
+    #   * A machine booted with root=/dev/vda waited out the full ten-second timeout on
+    #     dev-ttyS0.device on every boot: 11.0s against 881ms with udev on.
+    #   * A hot-plugged CPU or memory block never produced an add event, so nothing could
+    #     act on one — see 40-spin-hotadd.rules, which is the thing that acts on it.
 
     # Time sync - handled by host
     systemd-timesyncd.service

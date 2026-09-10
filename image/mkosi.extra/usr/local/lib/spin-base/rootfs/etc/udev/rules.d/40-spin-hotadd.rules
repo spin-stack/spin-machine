@@ -1,0 +1,23 @@
+# Bring a hot-plugged CPU or memory block online, on this machine.
+#
+# The distribution ships a rule for exactly this, 40-vm-hotadd.rules, and it does nothing
+# here: it opens by checking the DMI vendor for Microsoft Hyper-V or Xen and jumps past
+# itself for anything else. This machine reports QEMU — the guest's own udev prints
+# `value '[dmi/id]sys_vendor' is 'QEMU'` — so on every machine this image ever runs on, that
+# rule is a no-op.
+#
+# Ungated, and not re-gated on QEMU, because a hypervisor test is exactly the mistake being
+# fixed. A CPU that was added and left offline is a core somebody paid for and cannot use,
+# and there is no arrangement in which the right answer is to leave it offline.
+#
+# Growing is what a workspace does: it starts at the smallest machine that can be restored
+# from a template and is grown to the size that was asked for. Without this the host has to
+# reach into the guest over RPC to online each core it just attached, which is a second
+# mechanism doing what the guest's own event handling does, and one that stops being
+# reachable the moment the guest's init hands over to something else.
+SUBSYSTEM=="cpu", ACTION=="add", DEVPATH=="/devices/system/cpu/cpu[0-9]*", TEST=="online", ATTR{online}!="1", ATTR{online}="1"
+
+# Memory arrives through virtio-mem rather than as ACPI DIMMs, and the kernel command line
+# already carries memhp_default_state=online — so this is the belt to that braces: a block
+# the kernel did not online for itself still gets onlined here.
+SUBSYSTEM=="memory", ACTION=="add", DEVPATH=="/devices/system/memory/memory[0-9]*", TEST=="state", ATTR{state}!="online", ATTR{state}="online"

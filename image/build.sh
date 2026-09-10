@@ -170,10 +170,30 @@ mid_size=$(stat_in_image /etc/machine-id | sed -n 's/.*Size: \([0-9]\+\).*/\1/p'
     echo "ERROR: /etc/machine-id is ${mid_size} bytes; every VM would share that identity" >&2
     exit 1; }
 
+# udev runs, and the assertion is that nothing masks it again. It was masked here for six
+# months to save boot time and it saves none — 826ms against 829ms, measured 2026-09-10 with
+# `task boot:matrix` — while a machine booted with root=/dev/vda paid the full ten-second
+# dev-ttyS0.device timeout without it: 11.0s against 881ms. Masking is a one-line edit that
+# looks like an optimization, so the number lives here too, where the edit is caught.
+for u in systemd-udevd.service systemd-udevd-kernel.socket systemd-udevd-control.socket \
+         systemd-udev-trigger.service; do
+    if stat_in_image "/etc/systemd/system/$u" | grep -q '/dev/null'; then
+        echo "ERROR: $u is masked - it costs 3ms and buys a getty and hot-plug events" >&2
+        exit 1
+    fi
+done
+
+# What udev is on for, other than the getty: an added CPU or memory block arrives as a
+# kernel event and nothing else is listening for one. Without the rules file the events are
+# delivered to no one, which is indistinguishable from udev being masked.
+in_image /etc/udev/rules.d/40-spin-hotadd.rules || {
+    echo "ERROR: the image has no 40-spin-hotadd.rules; a hot-plugged CPU stays offline" >&2
+    exit 1; }
+
 # A boot optimization that is invisible in a file listing and expensive when it regresses:
 # a masked unit is a symlink to /dev/null, and a package upgrade replacing one turns it
-# back on. Three of the ones optimize-systemd.sh masked for measured reasons.
-for u in systemd-udevd.service systemd-random-seed.service tmp.mount; do
+# back on. Two of the ones optimize-systemd.sh masked for measured reasons.
+for u in systemd-random-seed.service tmp.mount; do
     stat_in_image "/etc/systemd/system/$u" | grep -q '/dev/null' || {
         echo "ERROR: $u is not masked - optimize-systemd.sh masked it and something put it back" >&2
         exit 1; }
@@ -187,6 +207,21 @@ for u in apt-daily.timer apt-daily-upgrade.timer motd-news.timer dpkg-db-backup.
     stat_in_image "/etc/systemd/system/$u" | grep -q '/dev/null' || {
         echo "ERROR: $u is not masked - configure-system.sh masked it and something put it back" >&2
         exit 1; }
+done
+
+# The login banner is this image's own, and pam_motd is enabled for ssh to print it — so
+# whatever is in /etc/update-motd.d now runs on every login. That is the reason to assert
+# both halves rather than only the one that was added: the distribution's scripts reach the
+# network (50-motd-news), print an advertisement, and were deleted, and a package upgrade
+# that restores one restores it into a path that is now read.
+in_image /etc/update-motd.d/00-spin-boot || {
+    echo "ERROR: the image has no /etc/update-motd.d/00-spin-boot to print the boot time" >&2
+    exit 1; }
+for f in /etc/update-motd.d/10-help-text /etc/update-motd.d/50-motd-news; do
+    if in_image "$f"; then
+        echo "ERROR: $f is back, and pam_motd now runs it at every login" >&2
+        exit 1
+    fi
 done
 
 # --- qcow2 ------------------------------------------------------------------------------
