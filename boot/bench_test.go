@@ -74,14 +74,36 @@ func gettyDropin(body string) map[string]string {
 // would run two gettys on the one line.
 const gettyEcho = "ExecStart=\nExecStart=-/bin/sh -c 'echo SPIN-READY-login: ; sleep infinity'\n"
 
+// Everything below replaces agetty with an echo, because its unconditional sleep(1) is
+// larger than everything being compared and would hide all of it. `as shipped` is the one
+// row that keeps agetty, so the difference between it and `baseline` is that second.
+func without(units ...string) variant {
+	return variant{cpus: "2", memory: "2048", mask: units, files: gettyDropin(gettyEcho)}
+}
+
+func labelled(l string, v variant) variant { v.label = l; return v }
+
 var variants = []variant{
 	{label: "as shipped", cpus: "2", memory: "2048"},
-	// The same machine with agetty's sleep taken out of the answer, which is the closest
-	// this can get to "when could something have used it".
-	{label: "sin agetty", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho)},
-	{label: "udev masked", cpus: "2", memory: "2048", mask: udevUnits},
-	{label: "1 vCPU", cpus: "1", memory: "2048"},
-	{label: "512 MiB", cpus: "2", memory: "512"},
+	{label: "baseline", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho)},
+	// The critical chain into multi-user.target, measured 2026-09-10:
+	//
+	//   multi-user.target @175ms
+	//   └─systemd-logind.service @111ms +63ms
+	//     └─basic.target @102ms
+	//       └─dbus-broker.service @151ms +7ms
+	//         └─sysinit.target @96ms
+	//           └─systemd-udev-trigger.service @60ms +35ms
+	//             └─system.slice @34ms
+	//
+	// logind is the tail and the most expensive single unit; chrony is the other one that
+	// blame puts in the tens of milliseconds. Both are rows rather than deletions because a
+	// unit on the critical chain does not always give its time back when removed — something
+	// else becomes the tail.
+	labelled("sin logind", without("systemd-logind.service")),
+	labelled("sin chrony", without("chrony.service")),
+	labelled("sin ambos", without("systemd-logind.service", "chrony.service")),
+	labelled("udev masked", without(udevUnits...)),
 }
 
 // TestBootCost boots each variant many times, interleaved, and prints what each phase cost.

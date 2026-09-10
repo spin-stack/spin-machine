@@ -217,20 +217,25 @@ type Spec struct {
 
 	BootCPUs int
 
-	// MaxCPUs is the hotplug ceiling, and it is not free at rest: QEMU declares one ACPI
-	// object per vCPU slot in the DSDT whether or not the slot is ever filled, and the guest
-	// walks all of them at boot. Measured 2026-09-10, function_graph at depth 1 on
-	// acpi_bus_scan, `--cpus 2`:
+	// MaxCPUs is the hotplug ceiling, and it is not free at rest. QEMU declares one ACPI
+	// object per vCPU slot in the DSDT whether or not the slot is ever filled, the guest
+	// walks all of them, and nr_cpu_ids rises so every subsystem that allocates per
+	// *possible* CPU allocates for the ceiling. Measured 2026-09-10 with `--cpus 2`, two
+	// boots each, from the kernel's own clock to `Run /sbin/init`:
 	//
-	//     no ceiling      8.4 ms      maxcpus=16      8.7 ms      maxcpus=64     13.2 ms
+	//     no ceiling      63.0 ms        maxcpus=16      68.1 ms        maxcpus=64   72.1 ms
+	//     initcalls       38.6 ms                        43.1 ms                     44.2 ms
 	//
-	// — so 62 slots that hold nothing cost 4.8 ms of every boot, and acpi_init goes from
-	// 11 ms to 16 ms. (A virtio-mem ceiling is cheaper for the same reason it is a different
-	// mechanism: `--max-memory 16384` costs 1.0 ms, not a slot per block.)
+	// So a ceiling of 16 costs 5 ms of kernel and 64 costs 9 ms. Only part of that is the
+	// namespace walk — function_graph at depth 1 on acpi_bus_scan puts 8.4 / 8.7 / 13.2 ms
+	// there — and the rest is everything else sized by the ceiling. A virtio-mem memory
+	// ceiling is cheaper because it is a different mechanism, one device rather than a slot
+	// per block: `--max-memory 16384` costs 1.0 ms.
 	//
 	// Worth knowing rather than worth avoiding: this is paid when a template is built, and a
 	// restored machine pays none of it. It is the number to reach for when somebody proposes
-	// a generous ceiling "since it costs nothing when unused".
+	// a generous ceiling "since it costs nothing when unused" — it does cost something, and
+	// here is what.
 	MaxCPUs int
 
 	Memory Memory
