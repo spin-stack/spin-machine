@@ -538,3 +538,95 @@ func TestProfilingSilencesTheConsole(t *testing.T) {
 		t.Errorf("missing the profiling flags: %s", got)
 	}
 }
+
+// Validate is the boundary, and every case in it is something that otherwise
+// fails as a guest that boots and finds the world subtly wrong. There was one
+// test for one of them; a case added without a test is a check nobody notices
+// stopped firing.
+func TestValidateRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		what   string
+		breaks func(*Spec)
+	}{
+		{"no QEMU", func(s *Spec) { s.QEMU = "" }},
+		{"no kernel", func(s *Spec) { s.Kernel = "" }},
+		{"no firmware", func(s *Spec) { s.Firmware = "" }},
+		{"no boot CPUs", func(s *Spec) { s.BootCPUs = 0 }},
+		{"a vCPU ceiling below the boot count", func(s *Spec) { s.BootCPUs, s.MaxCPUs = 4, 2 }},
+		{"no memory", func(s *Spec) { s.Memory.SizeMB = 0 }},
+		// A ceiling below the boot size: memoryArg drops it, so without this the
+		// caller gets a machine that cannot grow having asked for one that can.
+		{"a memory ceiling below the boot size", func(s *Spec) { s.Memory.SizeMB, s.Memory.MaxMB = 2048, 512 }},
+		{"shared memory with no file to share", func(s *Spec) { s.Memory.Shared = true }},
+		{"more disks than the slot range holds", func(s *Spec) {
+			s.Disks = make([]Disk, MaxDisks+1)
+			for i := range s.Disks {
+				s.Disks[i] = Disk{Path: "/a.qcow2", Format: "qcow2"}
+			}
+		}},
+		{"more NICs than the slot range holds", func(s *Spec) { s.NICs = make([]NIC, MaxNICs+1) }},
+		{"more root ports than the slot range holds", func(s *Spec) { s.HotplugPorts = MaxHotplugPorts + 1 }},
+		{"a negative number of root ports", func(s *Spec) { s.HotplugPorts = -1 }},
+		{"a disk with no path", func(s *Spec) { s.Disks = []Disk{{Format: "qcow2"}} }},
+		{"a disk with no format", func(s *Spec) { s.Disks = []Disk{{Path: "/a.qcow2"}} }},
+		// Both forms of -incoming: QEMU takes the flag once, and which source a VM
+		// restores from is not something to guess at on the caller's behalf.
+		{"both forms of -incoming", func(s *Spec) { s.IncomingDefer, s.Incoming = true, "file:/state" }},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			s := spec(t)
+			tc.breaks(&s)
+			if err := s.Validate(); err == nil {
+				t.Fatalf("Validate accepted %s", tc.what)
+			}
+			if _, err := s.Args(); err == nil {
+				t.Fatalf("Args built a command line for %s", tc.what)
+			}
+		})
+	}
+
+	// And the spec the cases above are made from has to pass, or every one of them
+	// would pass for the wrong reason.
+	if err := spec(t).Validate(); err != nil {
+		t.Fatalf("the minimal spec does not validate: %v", err)
+	}
+}
+
+// Resuming a VM rather than booting one. The URI form was declared in Spec and
+// never emitted, so `boot -incoming file:/path/state` started a fresh guest and
+// reported success — a restore that silently is not one.
+func TestIncomingNamesTheSourceOnTheCommandLine(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		set  func(*Spec)
+		want string
+	}{
+		{"a URI at exec time", func(s *Spec) { s.Incoming = "file:/state" }, "file:/state"},
+		{"deferred to QMP", func(s *Spec) { s.IncomingDefer = true }, "defer"},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			s := spec(t)
+			tc.set(&s)
+			args, err := s.Args()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := argValue(args, "-incoming"); got != tc.want {
+				t.Errorf("-incoming = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// A machine that was asked for neither must not carry the flag at all: an
+	// -incoming with an empty value is a QEMU that waits for a migration nobody
+	// is going to send.
+	args, err := spec(t).Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range args {
+		if a == "-incoming" {
+			t.Fatal("a machine asked to boot carries -incoming")
+		}
+	}
+}

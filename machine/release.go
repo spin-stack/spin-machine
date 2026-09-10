@@ -150,7 +150,7 @@ func readEnv(path string) (map[string]string, error) {
 		}
 		return nil, fmt.Errorf("reading the release manifest: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	env := map[string]string{}
 	sc := bufio.NewScanner(f)

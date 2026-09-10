@@ -362,7 +362,7 @@ RUN help=$(/opt/qemu/bin/qemu-img --help 2>&1 | tr '\n' ' ') && \
             *) echo "ERROR: this qemu-img cannot open $f images"; exit 1 ;; \
         esac; \
     done && \
-    echo "OK: qemu-img opens qcow2, vmdk and raw" 
+    echo "OK: qemu-img opens qcow2, vmdk and raw"
 
 # Static, asserted rather than assumed. `--static` is a request, and a build that silently
 # fell back to dynamic linking produces a binary that works perfectly here and dies on the

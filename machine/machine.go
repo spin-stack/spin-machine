@@ -512,6 +512,19 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("BootCPUs is %d", s.BootCPUs)
 	case s.MaxCPUs != 0 && s.MaxCPUs < s.BootCPUs:
 		return fmt.Errorf("MaxCPUs %d is below BootCPUs %d", s.MaxCPUs, s.BootCPUs)
+	// The same check as the one above it, and it was missing: memoryArg only writes
+	// maxmem= when the ceiling is above the boot size, so a spec asking for 2048 MB with
+	// a ceiling of 512 got -m 2048, no virtio-mem device and no complaint — a caller that
+	// asked for a machine that can grow was handed one that cannot. Equal is not an error:
+	// it is how a machine says it has no room to grow.
+	case s.Memory.MaxMB != 0 && s.Memory.MaxMB < s.Memory.SizeMB:
+		return fmt.Errorf("Memory.MaxMB %d is below Memory.SizeMB %d",
+			s.Memory.MaxMB, s.Memory.SizeMB)
+	// The two forms of -incoming are one flag, and QEMU takes it once. A spec carrying
+	// both is a caller that has not decided whether the source is named at exec time or
+	// over QMP afterwards, and guessing for them is how a VM restores from the wrong one.
+	case s.IncomingDefer && s.Incoming != "":
+		return fmt.Errorf("both IncomingDefer and Incoming %q: -incoming takes one form", s.Incoming)
 	case s.Memory.SizeMB < 1:
 		return fmt.Errorf("memory is %d MB", s.Memory.SizeMB)
 	case s.Memory.Shared && s.Memory.File == "":
@@ -741,8 +754,17 @@ func (s Spec) Args() ([]string, error) {
 			fmt.Sprintf("unix:%s,server=on,wait=off", sock))
 	}
 
+	// -incoming, in whichever of its two forms this machine was given. Validate has
+	// already refused a spec carrying both.
+	//
+	// The URI form was declared and never emitted: Spec.Incoming was read by nobody, so
+	// `boot -incoming file:/path/state` started a machine with no state and said nothing
+	// about it. A resume that silently boots a fresh guest is the failure this package is
+	// otherwise built to make impossible.
 	if s.IncomingDefer {
 		args = append(args, "-incoming", "defer")
+	} else if s.Incoming != "" {
+		args = append(args, "-incoming", s.Incoming)
 	}
 
 	return args, nil

@@ -80,9 +80,9 @@ Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
-apt update
+apt-get update
 
-apt install -y \
+apt-get install -y \
     docker-ce \
     docker-ce-cli \
     containerd.io \
