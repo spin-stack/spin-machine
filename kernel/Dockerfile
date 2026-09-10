@@ -172,6 +172,37 @@ RUN <<EOT
     # Anything here also costs a fleet-wide template rebuild: machine.Spec.Fingerprint
     # hashes this kernel by content. 154 us is not the price of the change.
 
+    # The same question in its more reasonable form — keep virtio and ext4 built in, move
+    # what this machine cannot use to modules in the base image — was measured on
+    # 2026-09-10 and buys 0.57 ms. Every candidate, summed from initcall_debug with a
+    # silent console:
+    #
+    #     SCSI / ATA / libata   0.00 ms      IPVS                     0.02 ms
+    #     USB                   0.00 ms      IPv6                     0.10 ms
+    #     HID / input           0.02 ms      bridge/vxlan/veth/tun    0.19 ms
+    #     DRM / framebuffer     0.00 ms      netfilter, all of it     0.24 ms
+    #     ethernet, non-virtio  0.00 ms
+    #
+    # against 38.6 ms of initcalls in total, of which acpi_init is 10.1 ms and ksm_init
+    # plus kcompactd_init are 6.0 ms — none of them modularisable, all of them bool.
+    #
+    # The reason it is so cheap is worth keeping: a built-in driver whose hardware is not
+    # present costs its *registration*, not a probe. There is nothing on the bus for it to
+    # find. What a driver like that costs is bytes, not time — 14.5 MB of .text in a
+    # 33.8 MB vmlinux — and those bytes are read once from the host's page cache (a warm
+    # read of the whole file is under 10 ms, inside a 35 ms launch phase) and then live in
+    # guest RAM that a restored machine maps copy-on-write from one shared memory file per
+    # template. Kernel text is never written, so it stays shared: the cost is once per
+    # host, not once per VM.
+    #
+    # And the price: CONFIG_MODULES is off entirely today — 1379 symbols =y and 0 =m.
+    # Turning it on is a kernel change, so it invalidates every template once. Then it
+    # leaves a standing hazard, because the fingerprint hashes this kernel by content and
+    # modules would live in the image, which it does not hash: two machines could carry the
+    # same fingerprint and different modules, and "a release is one machine" would stop
+    # being true. systemd-modules-load.service and the modprobe@ units are also masked in
+    # optimize-systemd.sh, so udev-driven loading needs those reconsidered first.
+
     echo "Virtio configuration:"
     grep "CONFIG_VIRTIO" .config | grep -v "^#" || echo "No VIRTIO options enabled!"
 
