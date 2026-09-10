@@ -96,18 +96,20 @@ var variants = []variant{
 	//           └─systemd-udev-trigger.service @60ms +35ms
 	//             └─system.slice @34ms
 	//
-	// logind is the tail and the most expensive single unit; chrony is the other one that
-	// blame puts in the tens of milliseconds. Both are rows rather than deletions because a
-	// unit on the critical chain does not always give its time back when removed — something
-	// else becomes the tail. Which is exactly what happened, 15 boots each, p50/p95 to a
-	// usable machine:
+	// logind is the tail and the most expensive single unit. It is a row rather than a
+	// deletion because a unit on the critical chain does not always give its time back when
+	// removed — something else becomes the tail. Which is exactly what happened, 15 boots
+	// each, p50/p95 to a usable machine:
 	//
 	//     baseline    262/296        sin logind   238/247
 	//     sin chrony  252/287        sin ambos    233/260
 	//
-	// logind is +63 ms on the chain and worth 24 ms to remove; chrony is 43 ms in blame and
-	// worth 10 ms; the two together are worth 29 ms and not 34, because they overlap. Read
+	// logind is +63 ms on the chain and worth 24 ms to remove; chrony was 43 ms in blame and
+	// worth 10 ms; the two together were worth 29 and not 34, because they overlap. Read
 	// `systemd-analyze blame` as a list of suspects, never as a list of savings.
+	//
+	// The chrony rows are kept as the record of what removing it bought, and cannot be run
+	// again: there is no time daemon in the image since 2026-09-10 (see image/mkosi.conf).
 	labelled("sin logind", without("systemd-logind.service")),
 	// serial-getty is Type=idle, which holds the service until systemd's job queue is quiet.
 	// If that dominates, `usable` has been measuring the queue draining rather than the
