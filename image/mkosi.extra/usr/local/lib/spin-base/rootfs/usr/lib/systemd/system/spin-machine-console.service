@@ -12,12 +12,26 @@
 # own log stream, and on a guest given no serial port at all it would fail and retry until
 # systemd gave up.
 #
-# Why this and not the distribution's serial-getty@.service, which does the same job: that
-# unit carries `BindsTo=dev-%i.device`, a .device unit exists only if udev announced it, and
-# this image masks systemd-udevd — a VM's hardware is fixed and known, and udev is boot time
-# spent discovering it. Enabling serial-getty here gets
+# Why this and not the distribution's serial-getty@.service: it carries
+# `BindsTo=dev-%i.device`, a .device unit exists only if udev announced it, and this image
+# used to mask systemd-udevd. Enabling serial-getty then got
 # `[DEPEND] Dependency failed for serial-getty@ttyS0.service`, and a drop-in clearing
-# BindsTo does not lift it either. This unit has no device dependency to fail.
+# BindsTo did not lift it either. This unit has no device dependency to fail.
+#
+# THAT REASON EXPIRED ON 2026-09-10 and left a hole this file is the wrong place to close.
+# udev runs now, so serial-getty@ttyS0 works — and systemd-getty-generator instantiates it
+# on its own from console=ttyS0, with nothing in optimize-systemd.sh disabling that
+# generator. So the split this file is built around no longer exists: production gets a
+# login prompt on the console it prints its kernel log to, which is what the paragraph above
+# says production must not have, and it gets it without anybody enabling anything.
+#
+# The exposure is a prompt and not a way in — configure-system.sh runs `passwd --lock` on
+# both accounts — so what it costs is the console competing with the log stream, not access.
+# Closing it is a decision, not a cleanup: either mask serial-getty@ttyS0 in the image and
+# keep this unit for debug boots, or drop this unit and accept the distribution's on the
+# console. Whoever decides should also know that whichever unit runs, agetty sleeps one
+# second before its prompt (see machine/cmdline.go) and that Type=idle below holds it until
+# systemd's job queue drains, measured at 25 ms.
 #
 # The port is fixed at ttyS0 rather than templated, because that is the only serial port
 # this machine has (see the QEMU device set).

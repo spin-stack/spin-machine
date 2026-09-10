@@ -109,9 +109,12 @@ var variants = []variant{
 	// worth 10 ms; the two together are worth 29 ms and not 34, because they overlap. Read
 	// `systemd-analyze blame` as a list of suspects, never as a list of savings.
 	labelled("sin logind", without("systemd-logind.service")),
-	labelled("sin chrony", without("chrony.service")),
-	labelled("sin ambos", without("systemd-logind.service", "chrony.service")),
-	labelled("udev masked", without(udevUnits...)),
+	// serial-getty is Type=idle, which holds the service until systemd's job queue is quiet.
+	// If that dominates, `usable` has been measuring the queue draining rather than the
+	// machine being ready — and it would have been invisible earlier, because the first test
+	// of Type=simple was run against a real agetty whose sleep(1) buried it.
+	{label: "getty no idle", cpus: "2", memory: "2048",
+		files: gettyDropin("Type=simple\n" + gettyEcho)},
 }
 
 // TestBootCost boots each variant many times, interleaved, and prints what each phase cost.
