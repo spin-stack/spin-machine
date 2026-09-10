@@ -63,9 +63,8 @@ jobs:
       - name: Test the machine definition
         run: task test
 
-      # The debug initramfs is a static Go binary in a cpio, and the only thing that can
-      # break it is the Go build — which is worth catching here rather than in whichever
-      # boot first found itself with no /init.
+      # The steps below run spin-machine, so it has to exist. `task test` exercises the
+      # machine package; only a build catches what the command around it does with it.
       - name: Build the tools
         run: task tools
 

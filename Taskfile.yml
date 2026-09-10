@@ -20,8 +20,10 @@
 # qemu/Dockerfile and nobody reads three hundred lines to change one flag.
 #
 # What is deliberately NOT here: the software that runs inside a guest. This repository
-# builds a machine and knows nothing about what boots on it. `cmd/spin-machine-init` is the
-# one exception and is a debugging tool, not a release artefact.
+# builds a machine and knows nothing about what boots on it, and there is no longer an
+# exception to that — the debug initramfs that used to be one was a second init, doing what
+# the init a consumer already brings does, and the machine boots straight into /sbin/init
+# without it.
 
 version: '3'
 
@@ -135,26 +137,14 @@ tasks:
       - go.mod
     generates:
       - '{{.OUTPUT_ABS}}/bin/spin-machine'
-      - '{{.OUTPUT_ABS}}/debug-initramfs.cpio.gz'
     cmds:
       - mkdir -p {{.OUTPUT_ABS}}/bin
       - CGO_ENABLED=0 go build -ldflags '-s -w' -o {{.OUTPUT_ABS}}/bin/spin-machine ./cmd/spin-machine
-      # The initramfs is one static binary called /init and nothing else. It mounts the
-      # four filesystems a userland cannot run without and hands the machine over — see
-      # cmd/spin-machine-init. It is a debugging artefact and is deliberately not in the
-      # release: what runs inside a guest is not this repository's business.
-      - |
-        set -euo pipefail
-        staging=$(mktemp -d); trap 'rm -rf "$staging"' EXIT
-        CGO_ENABLED=0 go build -ldflags '-s -w' -o "$staging/init" ./cmd/spin-machine-init
-        (cd "$staging" && find . -print0 | cpio --null -H newc -o --quiet) \
-          | gzip -1 > {{.OUTPUT_ABS}}/debug-initramfs.cpio.gz
-        echo "✓ {{.OUTPUT_ABS}}/debug-initramfs.cpio.gz"
 
   boot:matrix:
     desc: >-
       Boot this machine every way it can be booted and print what each one costs. Needs
-      /dev/kvm, a built release, and sudo — one row unmasks udev in a throwaway overlay,
+      /dev/kvm, a built release, and sudo — two rows mask udev in a throwaway overlay,
       which means writing to it through qemu-nbd.
     cmds:
       - bash hack/boot-matrix.sh

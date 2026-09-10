@@ -61,7 +61,7 @@ tasks:
         set -euo pipefail
         out={{.OUTPUT_ABS}}
         for f in "$out/bin/spin-machine" "$out/bin/qemu-system-x86_64" "$out/kernel/vmlinux" \
-                 "$out/image/rootfs.qcow2" "$out/debug-initramfs.cpio.gz"; do
+                 "$out/image/rootfs.qcow2"; do
           test -f "$f" || { echo "missing $f — run: task build" >&2; exit 1; }
         done
 
@@ -84,20 +84,19 @@ tasks:
         echo "  leave with: 'poweroff -f', or Ctrl-A then X"
         echo
 
-        # -initrd, and not `root=/dev/vda init=…` straight into the image.
+        # root=/dev/vda straight into the image, with no initrd at all. The kernel has
+        # virtio-blk and ext4 built in and build.sh writes a partitionless filesystem, so
+        # there is nothing for one to do: mounting root is the kernel's job here and
+        # systemd mounts the rest.
         #
-        # A kernel handed a root filesystem and a shell mounts neither /proc nor /sys, so
-        # `df` warns, `free` fails and `poweroff` answers "Running in chroot, ignoring
-        # request". That is what PID 1 gets before an init has run — not a fault in the
-        # image, and in production it is the guest's own init that fixes it. Here it is
-        # cmd/spin-machine-init: mount the four, find the disk, move onto it, exec.
-        #
-        # spinmachine.getty=1 enables the login unit the image already carries and does
-        # not start. systemd gives no serial login on its own here — it starts getty@tty1,
-        # a virtual console on a machine whose QEMU has no display adapter compiled in at
-        # all. The unit is in the image; the symlink that turns it on is written into this
-        # VM's throwaway overlay, because a login prompt on the console the machine prints
-        # its kernel log to is a debugging convenience production must not get.
+        # This used to boot a debug initramfs, for two reasons that were both real and are
+        # both gone. It mounted /proc, /sys, devtmpfs and devpts, which systemd does itself
+        # and only a bare `init=/bin/sh` ever needed. And it wrote a symlink enabling a
+        # serial login, because this image masked systemd-udevd, so no dev-ttyS0.device
+        # unit existed and serial-getty@ttyS0's BindsTo could never be satisfied. udev
+        # runs now; the getty starts on its own. Measured 2026-09-10: 207ms to a login
+        # prompt this way, against 163ms through the initramfs — 44ms for a second init
+        # doing what the first one does.
         #
         # accel=kvm with no fallback, from the machine package: the binary in _output/bin
         # cannot emulate, on purpose. A host with no /dev/kvm gets an error here rather
@@ -105,9 +104,8 @@ tasks:
         "$out/bin/spin-machine" boot \
           --release "$out" \
           --disk "$scratch" \
-          --initrd "$out/debug-initramfs.cpio.gz" \
           --memory {{.MEMORY}} --cpus {{.CPUS}} \
-          --append "spinmachine.root=/dev/vda spinmachine.init={{.INIT}} spinmachine.getty=1" || true
+          --append "root=/dev/vda rw init={{.INIT}}" || true
 
         echo
         after=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)

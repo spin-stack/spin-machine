@@ -7,14 +7,15 @@
 # console when show_status is on, so nothing here has to log in to read it. That is what
 # makes this measurable at all — the login is one of the things being measured.
 #
-# Two dimensions:
+# One dimension, udev: the image runs systemd-udevd, and the rows that mask it again are
+# what say whether masking was ever worth anything. Masks are symlinks in /etc, so a row
+# writes to its throwaway overlay before the boot.
 #
-#   initrd   with, the debug initramfs mounts the API filesystems and hands over; without,
-#            the kernel mounts root itself, which it can do because virtio-blk and ext4 are
-#            built in and build.sh writes a partitionless filesystem.
-#   udev     the image runs systemd-udevd. It used to mask it to save boot time; the row
-#            that masks it again is what says whether that was ever worth anything. Masks
-#            are symlinks in /etc, so the row writes to the overlay before the boot.
+# It used to have a second, initrd, and losing it is the point rather than a reduction:
+# every boot here now goes root=/dev/vda straight into the image, which the kernel can do
+# because virtio-blk and ext4 are built in and build.sh writes a partitionless filesystem.
+# The debug initramfs the other half of the matrix booted was a second init, and this
+# repository does not ship an init.
 #
 # Every boot writes to a throwaway overlay over the base image, and the base's digest is
 # checked afterwards: a run that modified it is a run whose numbers are worthless and whose
@@ -168,7 +169,7 @@ read_analysis() {
 
 # analyze boots one configuration with that timer in it and prints what it said.
 analyze() {
-	local label=$1 initrd=$2 udev=$3
+	local label=$1 udev=$2
 	local dir overlay log
 	dir=$(mktemp -d)
 	overlay="$dir/overlay.qcow2"
@@ -177,13 +178,8 @@ analyze() {
 	[ "$udev" = noudev ] && mask_udev "$overlay"
 	inject_analysis "$overlay"
 
-	local -a args=(boot --release "$OUT" --disk "$overlay" --memory 2048 --cpus 2 --console "file:$log")
-	if [ "$initrd" = initrd ]; then
-		args+=(--initrd "$OUT/debug-initramfs.cpio.gz"
-			--append "spinmachine.root=/dev/vda spinmachine.init=/sbin/init spinmachine.getty=1")
-	else
-		args+=(--append "root=/dev/vda rw init=/sbin/init")
-	fi
+	local -a args=(boot --release "$OUT" --disk "$overlay" --memory 2048 --cpus 2 --console "file:$log"
+		--append "root=/dev/vda rw init=/sbin/init")
 
 	echo "==================== $label ===================="
 	# It powers itself off, so a run takes as long as the boot; hitting the cap means it
@@ -194,9 +190,9 @@ analyze() {
 }
 
 # run boots one configuration and records what it cost.
-#   $1 label · $2 "initrd"|"noinitrd" · $3 "udev"|"noudev" · $4 extra kernel arguments
+#   $1 label · $2 "udev"|"noudev" · $3 extra kernel arguments
 run() {
-	local label=$1 initrd=$2 udev=$3 extra=${4:-}
+	local label=$1 udev=$2 extra=${3:-}
 	local dir overlay log
 	dir=$(mktemp -d)
 	overlay="$dir/overlay.qcow2"
@@ -210,14 +206,8 @@ run() {
 	# line these numbers come from. It costs a little of what it measures — every message is
 	# a write to a serial port — but it costs the same in every row, so the comparison holds
 	# and only the absolute is inflated.
-	local append="systemd.show_status=true systemd.log_level=info systemd.log_target=console $extra"
-	if [ "$initrd" = initrd ]; then
-		args+=(--initrd "$OUT/debug-initramfs.cpio.gz")
-		append="spinmachine.root=/dev/vda spinmachine.init=/sbin/init spinmachine.getty=1 $append"
-	else
-		append="root=/dev/vda rw init=/sbin/init $append"
-	fi
-	args+=(--append "$append")
+	args+=(--append "root=/dev/vda rw init=/sbin/init \
+systemd.show_status=true systemd.log_level=info systemd.log_target=console $extra")
 
 	timeout "$BOOT_TIMEOUT" "$OUT/bin/spin-machine" "${args[@]}" >/dev/null 2>&1 || true
 
@@ -241,11 +231,20 @@ run() {
 }
 
 echo "==> booting each configuration under KVM (${BOOT_TIMEOUT}s cap each)"
-run "initrd    · udev masked"   initrd   noudev
-run "no initrd · udev masked"   noinitrd noudev
-run "no initrd · no serial-getty" noinitrd noudev "systemd.mask=serial-getty@ttyS0.service"
-run "no initrd · udev on"       noinitrd udev
-run "initrd    · udev on"       initrd   udev
+run "as shipped"                udev
+run "udev masked"               noudev
+# The third row asks whether the ten seconds the second one spends are the getty's to give
+# back, and the answer is no: masking serial-getty@ttyS0 leaves the boot waiting out
+# `Job dev-ttyS0.device/start running (10s)` exactly as before — 10.300s against 10.299s,
+# measured 2026-09-10. So the dependency on that device is not only the getty's, and the
+# cheap-looking fix for a masked-udev boot is not a fix. Kept as a row because it is the
+# obvious thing to try.
+run "udev masked, no getty"     noudev "systemd.mask=serial-getty@ttyS0.service"
+
+# There is no row for TERM, and it cannot be one: --append lands in Cmdline.Extra, which is
+# rendered after the TERM=dumb the machine package puts there, so both reach init's
+# environment and getenv answers with the first. TestCmdlineTellsSystemdTheConsoleWillNot-
+# Answer guards that decision instead, and the measurement is at the line that makes it.
 
 echo
 if [ "$(sha256sum "$OUT/image/rootfs.qcow2" | cut -d' ' -f1)" != "$BASE_DIGEST" ]; then
@@ -259,11 +258,10 @@ awk -F'\t' '{printf "%-34s %-9s %-11s %-10s %s\n", $1, $2, $3, $4, $5}' "$RESULT
 echo
 echo "console logs are under the directories in $RESULTS"
 
-# And where the userspace time actually goes, for the two configurations that reach a
-# console. A total is a number to compare; blame is a list of things to delete.
+# And where the userspace time actually goes, for the configuration that ships. A total is a
+# number to compare; blame is a list of things to delete.
 if [ "${ANALYZE:-1}" = 1 ]; then
 	echo
 	echo "==================== where the userspace time goes ===================="
-	analyze "initrd · udev masked"   initrd   noudev
-	analyze "no initrd · udev on"    noinitrd udev
+	analyze "as shipped" udev
 fi

@@ -45,8 +45,7 @@ Each part's targets live beside what they build — `qemu/Taskfile.yml`, `kernel
 
 **What is deliberately not here: the software that runs inside a guest.** This repository
 builds a machine. It knows nothing about what boots on it, and a release is not bootable on
-its own by design — whoever runs guests brings the initrd. `cmd/spin-machine-init` is the
-one exception and is a debugging tool, not a release artefact.
+its own by design — whoever runs guests brings the initrd. There is no exception to that.
 
 ## What it publishes
 
@@ -171,36 +170,35 @@ true and useless.
 It boots this QEMU and this kernel over a throwaway qcow2 overlay on `rootfs.qcow2`, through
 `spin-machine boot`, with the serial console on stdio.
 
-The initrd it boots is `cmd/spin-machine-init`: static Go that mounts `/proc`, `/sys`,
-devtmpfs and devpts, finds the root disk, moves onto it and execs. That is deliberately
-where it stops — everything past it, an RPC channel to the host or a container lifecycle,
-belongs to whatever software runs guests. What is here is the part that is the same
-whoever that is, which is also why it resolves a disk by virtio-blk serial as well as by
-`/dev` node: a node depends on the order the guest probed the bus in, and a serial does
-not.
+It boots with no initrd at all: `root=/dev/vda rw init=/sbin/init`, which the kernel can
+serve because virtio-blk and ext4 are built in and `image/build.sh` writes a partitionless
+filesystem. There was a debug initramfs here until 2026-09-10 — static Go that mounted the
+API filesystems, found the root disk and exec'd — and it was a second init, doing what the
+init a consumer brings already does. What removed the need for it was turning `systemd-udevd`
+back on.
 
-Three things the shell has already found, all of them true of the image and none of them
-visible from outside:
+Three things the shell has found, all of them true of the image and none of them visible
+from outside:
 
-- **systemd starts no login on the serial port.** It starts `getty@tty1`, a virtual console
-  on a machine whose QEMU has no display adapter compiled in. Enabling the distribution's
-  `serial-getty@ttyS0` does not help either: it carries `BindsTo=dev-ttyS0.device`, and a
-  `.device` unit exists only if udev announced it — and this image masks `systemd-udevd`,
-  because a VM's hardware is fixed and udev is boot time spent discovering it. A drop-in
-  clearing `BindsTo` does not lift it either. So the image ships
-  `spin-machine-console.service`, an agetty unit with no device dependency, **and does not
-  enable it**; the debug boot writes the one symlink that turns it on, into the throwaway
-  overlay. Production must not get a login prompt on the console the machine prints its
-  kernel log to.
+- **The serial login exists because udev does.** `serial-getty@ttyS0` carries
+  `BindsTo=dev-ttyS0.device`, and a `.device` unit exists only if udev announced it. While
+  this image masked `systemd-udevd` — on the theory that a VM's hardware is fixed and
+  discovering it is boot time spent — there was no login on the serial port at all, a
+  drop-in clearing `BindsTo` did not lift it, and the image had to carry an agetty unit of
+  its own with the dependency removed. Masking bought nothing measurable and cost a
+  ten-second `dev-ttyS0.device` timeout on every boot that had no initrd; the numbers are in
+  `optimize-systemd.sh`, where the decision is.
 - **`ssh.service` used to fail five times and give up.** The image ships no host keys — they
   are identity — and the distribution's `sshd-keygen.service` carries
   `ConditionFirstBoot=yes`, so it did not run before `sshd` was asked to validate a
   configuration with no keys. Fixed by generating them at boot instead
   (`spin-machine-sshd-keygen.service`): every boot here *is* a first boot, since the root
   filesystem is a fresh overlay, so the keys live exactly as long as the VM does.
-- **Nothing mounts `/proc` before an init runs**, so a machine booted straight to a shell
-  has `df` warning, `free` failing and `poweroff` answering *"Running in chroot, ignoring
-  request"*. That is what PID 1 gets before an init has run, not a fault in the image.
+- **Two thirds of the boot was systemd asking the console questions.** The kernel execs
+  `/sbin/init` at 59 ms and systemd's first log line arrived at 852, with nothing running in
+  between. It was a terminfo query and a terminal reset, 334 ms of timeout each, waiting for
+  a serial port with a file behind it to answer. `TERM=dumb` on the command line stops it
+  asking: 855 ms to 163–207 ms for the whole boot. See `machine/cmdline.go`.
 
 ## The parts
 

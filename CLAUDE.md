@@ -6,9 +6,11 @@ A virtual machine: QEMU, a guest kernel, a base image, and the definition of the
 they make. Four artefacts and one version.
 
 **What it is not: anything that runs inside a guest.** No container runtime, no agent, no
-supervisor, no RPC. A release is not bootable on its own and that is deliberate — whoever
-runs guests brings the init. `cmd/spin-machine-init` is the single exception, is a
-debugging tool, and is not in a release.
+supervisor, no RPC, and no init. A release is not bootable on its own and that is deliberate
+— whoever runs guests brings the init. There is no exception; there was one, a debug
+initramfs, and it was a second init doing what the consumer's already does. It went on
+2026-09-10, when udev was turned back on and the machine reached a login prompt through
+`root=/dev/vda init=/sbin/init` without it.
 
 **It does not know about the projects that consume it.** No repository names, no file paths
 into other trees, no ADR numbers. If a rationale can only be stated by naming a consumer,
