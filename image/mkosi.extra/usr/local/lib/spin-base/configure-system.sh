@@ -66,4 +66,42 @@ rm -rf /etc/update-motd.d/*
 truncate -s 0 /etc/motd
 sed -i 's/^session.*pam_motd.so/#&/' /etc/pam.d/sshd
 
+
+# -------------------------------------------------
+# 7. The distribution's background maintenance
+# -------------------------------------------------
+# Ubuntu ships five timers enabled. Four of them have no business in a machine that is
+# restored from a template, does one piece of work and is thrown away.
+#
+# apt-daily and apt-daily-upgrade are the two that produce a failure rather than merely
+# spending time: they run `apt.systemd.daily update` and `install`, which take the apt and
+# dpkg locks. A workload that installs a package of its own then gets
+# `Could not get lock /var/lib/dpkg/lock-frontend` at a moment nothing in its own logs
+# explains. They also reach the archive, which is egress this machine never asked for.
+#
+# motd-news is the other half of the job section 6 above started. Its ExecStart is
+# /etc/update-motd.d/50-motd-news, and that directory was emptied there — so the unit can
+# only fail 203/EXEC, twice a day, leaving a permanent entry in `systemctl --failed` for
+# whoever looks at the machine next.
+#
+# dpkg-db-backup copies the dpkg database daily, in an image whose database is already
+# written beside the release as packages.txt and whose root filesystem is read-only.
+#
+# fstrim is deliberately NOT masked. The drives are opened discard=unmap, so the guest's
+# TRIM reaches the qcow2 overlay and gives its blocks back to the host: it is the one of
+# the five that returns something.
+#
+# All five carry Persistent=true, and that is what makes this a restore problem rather
+# than only a boot-time one. The stamps live in /var/lib/systemd/timers, so they are the
+# template's; a VM restored from a template that sat on disk for a week is a machine with
+# a week of missed runs to catch up on, and it catches up at the moment it is handed a
+# workload.
+#
+# Masked and not merely disabled: a symlink to /dev/null survives a package upgrade
+# putting the unit's own [Install] symlink back. image/build.sh asserts each one.
+echo "Masking the distribution's background maintenance timers..."
+for unit in apt-daily.timer apt-daily-upgrade.timer motd-news.timer dpkg-db-backup.timer; do
+    ln -sf /dev/null "/etc/systemd/system/$unit"
+done
+
 echo "✅ System configuration complete"

@@ -179,6 +179,16 @@ for u in systemd-udevd.service systemd-random-seed.service tmp.mount; do
         exit 1; }
 done
 
+# The distribution's background maintenance, masked by configure-system.sh for reasons
+# that are written there. Asserted separately from the three above because the cause is a
+# different script: these come back if a package upgrade re-runs a unit's [Install], and
+# what they cost is an apt lock taken under a workload that is doing its own install.
+for u in apt-daily.timer apt-daily-upgrade.timer motd-news.timer dpkg-db-backup.timer; do
+    stat_in_image "/etc/systemd/system/$u" | grep -q '/dev/null' || {
+        echo "ERROR: $u is not masked - configure-system.sh masked it and something put it back" >&2
+        exit 1; }
+done
+
 # --- qcow2 ------------------------------------------------------------------------------
 #
 # No compression: the base is read by every VM on every boot and a compressed cluster is
