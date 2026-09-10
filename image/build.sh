@@ -171,14 +171,15 @@ mid_size=$(stat_in_image /etc/machine-id | sed -n 's/.*Size: \([0-9]\+\).*/\1/p'
     exit 1; }
 
 # udev runs, and the assertion is that nothing masks it again. It was masked here for six
-# months to save boot time and it saves none — 826ms against 829ms, measured 2026-09-10 with
-# `task boot:matrix` — while a machine booted with root=/dev/vda paid the full ten-second
-# dev-ttyS0.device timeout without it: 11.0s against 881ms. Masking is a one-line edit that
-# looks like an optimization, so the number lives here too, where the edit is caught.
+# months to save boot time and it costs none — 163ms against 200ms with the debug initrd,
+# measured 2026-09-10 with `task boot:matrix` — while a machine booted with root=/dev/vda
+# paid the full ten-second dev-ttyS0.device timeout without it and then had no login at all:
+# 207ms against 10.161s. Masking is a one-line edit that looks like an optimization, so the
+# numbers live here too, where such an edit is caught.
 for u in systemd-udevd.service systemd-udevd-kernel.socket systemd-udevd-control.socket \
          systemd-udev-trigger.service; do
     if stat_in_image "/etc/systemd/system/$u" | grep -q '/dev/null'; then
-        echo "ERROR: $u is masked - it costs 3ms and buys a getty and hot-plug events" >&2
+        echo "ERROR: $u is masked - it is free and it buys a getty and hot-plug events" >&2
         exit 1
     fi
 done
@@ -189,6 +190,16 @@ done
 in_image /etc/udev/rules.d/40-spin-hotadd.rules || {
     echo "ERROR: the image has no 40-spin-hotadd.rules; a hot-plugged CPU stays offline" >&2
     exit 1; }
+
+# The kernel command line carries TERM=dumb, to stop systemd waiting 334ms twice for a serial
+# port to answer a terminfo query. agetty is invoked as `- ${TERM}` and its unit sets none,
+# so without these drop-ins PID1's `dumb` is what a human's login shell gets: no colour, no
+# clear, no cursor addressing. The two files are 687ms of boot and a usable terminal, and
+# they only work together — which is why the absence of one is an error and not a warning.
+for f in /etc/systemd/system/serial-getty@.service.d/term.conf \
+         /etc/systemd/system/getty@.service.d/term.conf; do
+    in_image "$f" || { echo "ERROR: the image has no $f; a login would inherit TERM=dumb" >&2; exit 1; }
+done
 
 # A boot optimization that is invisible in a file listing and expensive when it regresses:
 # a masked unit is a symlink to /dev/null, and a package upgrade replacing one turns it

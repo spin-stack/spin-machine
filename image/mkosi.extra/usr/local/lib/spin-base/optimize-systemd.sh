@@ -25,13 +25,19 @@ mask_unit() {
 MASK_UNITS=(
 
     # udev is NOT masked, and was, for six months. It was masked to save boot time and it
-    # saves none: measured 2026-09-10 with `task boot:matrix`, 826ms against 829ms — noise.
-    # What it cost instead was everything that needs a .device unit to exist.
+    # does not cost any: measured 2026-09-10 with `task boot:matrix`, four boots of the real
+    # release under KVM, udev masked against udev on —
+    #
+    #     with the debug initrd     200ms  /  163ms
+    #     with root=/dev/vda      10.161s  /  207ms
+    #
+    # — so it is free in the configuration it was masked for and catastrophic in the other
+    # one. What it cost instead was everything that needs a .device unit to exist.
     #
     #   * serial-getty@ttyS0 carries BindsTo=dev-%i.device and could not start, which is
     #     why this image had to carry a getty unit of its own with the dependency removed.
     #   * A machine booted with root=/dev/vda waited out the full ten-second timeout on
-    #     dev-ttyS0.device on every boot: 11.0s against 881ms with udev on.
+    #     dev-ttyS0.device and then had no login at all: the 10.161s row above.
     #   * A hot-plugged CPU or memory block never produced an add event, so nothing could
     #     act on one — see 40-spin-hotadd.rules, which is the thing that acts on it.
 

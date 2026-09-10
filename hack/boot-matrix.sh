@@ -12,9 +12,9 @@
 #   initrd   with, the debug initramfs mounts the API filesystems and hands over; without,
 #            the kernel mounts root itself, which it can do because virtio-blk and ext4 are
 #            built in and build.sh writes a partitionless filesystem.
-#   udev     the image masks systemd-udevd, deliberately, to save boot time. Masks are
-#            symlinks in /etc, so unmasking means writing to the overlay before the boot —
-#            which is what --unmask-udev does, through qemu-nbd.
+#   udev     the image runs systemd-udevd. It used to mask it to save boot time; the row
+#            that masks it again is what says whether that was ever worth anything. Masks
+#            are symlinks in /etc, so the row writes to the overlay before the boot.
 #
 # Every boot writes to a throwaway overlay over the base image, and the base's digest is
 # checked afterwards: a run that modified it is a run whose numbers are worthless and whose
@@ -35,15 +35,24 @@
 # the boot is about 115ms.
 #
 # So it is not the units, not the 13 generators, and not the services — pruning any of them
-# moves nothing. It is systemd's own start-up before it logs a word, on a guest page cache
-# that is empty by definition: every read of the binary, of libsystemd-core and
-# libsystemd-shared, and of the 263 unit files is a virtio round trip into a qcow2. The host
-# cache is already warm across these runs, so it is not host I/O either.
+# moves nothing. It was two timeouts. `systemd.log_level=debug systemd.log_target=kmsg`
+# gives every one of systemd's own lines a kernel timestamp, and the gap has two stalls of
+# 334ms each in it, both waiting for a serial port to answer a question:
 #
-# Which is the thing worth knowing about it: this is what a *cold boot* costs, and a
-# workspace never pays it. A machine restored from a template resumes memory in which all of
-# this has already happened. The number matters when the template is built and for this
-# debugging boot, and nowhere else.
+#     [0.172] IPE support is disabled in the kernel, ignoring
+#     [0.506] Failed to query /dev/console for terminfo: Operation not supported
+#     [0.518] ProtectSystem=auto selected, but not running in an initrd, skipping
+#     [0.852] systemd 259.5 running in system mode
+#
+# TERM=dumb on the kernel command line removes both — 687ms to 19ms — and the reasoning,
+# the alternatives that did not work and what it costs are at the line that sets it, in
+# machine/cmdline.go. Keep this harness pointed at the same gap: `Run /sbin/init` to the
+# version banner is the measurement, and a change that claims to move it should move that.
+#
+# The guess this replaced, recorded because it was plausible and wrong: that it was a cold
+# guest page cache faulting in the binary, libsystemd-shared and 263 unit files over virtio.
+# Every part of that is true and none of it was the cost. Debug logging with timestamps
+# found in one boot what a week of reasoning about I/O would not have.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -59,13 +68,21 @@ test -e /dev/kvm || { echo "no /dev/kvm: these numbers are only meaningful under
 
 BASE_DIGEST=$(sha256sum "$OUT/image/rootfs.qcow2" | cut -d' ' -f1)
 
-# unmask_udev removes the three mask symlinks from an overlay, so the boot that follows
-# discovers its hardware the way an ordinary Linux system does.
+# mask_udev puts the mask symlinks into an overlay, so the boot that follows discovers no
+# hardware — the configuration this image shipped for six months, kept here as the thing the
+# current one is measured against.
+#
+# It masks rather than unmasking because the image now ships udev on. The first version of
+# this harness unmasked, and once the image changed that was a no-op applied to every row:
+# the run still printed "udev masked" against "udev on" and both rows had udev. The lesson is
+# in which direction a harness should push — towards the configuration that is *not* shipped,
+# so a row that stops doing anything stops being a comparison rather than quietly becoming
+# one against itself.
 #
 # Through qemu-nbd because the overlay is qcow2 and the masks are files: there is no way to
-# ask a kernel command line to unmask a unit, and /etc is the highest-priority place a mask
-# can live, so nothing in the boot itself can override one.
-unmask_udev() {
+# ask a kernel command line to mask a unit, and /etc is the highest-priority place a mask
+# can live.
+mask_udev() {
 	local overlay=$1 dev=/dev/nbd0 mnt
 	mnt=$(mktemp -d)
 	sudo modprobe nbd max_part=8
@@ -74,15 +91,13 @@ unmask_udev() {
 	# partitionless, so the device itself is the filesystem.
 	for _ in $(seq 20); do sudo blkid "$dev" >/dev/null 2>&1 && break; sleep 0.2; done
 	sudo mount "$dev" "$mnt"
-	# All four, and the trigger is the one that is easy to miss: without it udevd runs and
-	# nothing ever asks the kernel to re-announce the devices that already existed, so no
-	# .device unit appears and the boot behaves exactly as if udev were still masked. The
-	# first version of this function removed three and produced a row that looked like
-	# "udev changes nothing".
-	sudo rm -f "$mnt/etc/systemd/system/systemd-udevd.service" \
-		"$mnt/etc/systemd/system/systemd-udevd-control.socket" \
-		"$mnt/etc/systemd/system/systemd-udevd-kernel.socket" \
-		"$mnt/etc/systemd/system/systemd-udev-trigger.service"
+	# All four, and the trigger is the one that is easy to miss: leave it out and udevd is
+	# off but the kernel is still asked to re-announce its devices, so the row measures
+	# neither configuration. Its mirror image cost this harness a run once.
+	for u in systemd-udevd.service systemd-udevd-control.socket \
+		systemd-udevd-kernel.socket systemd-udev-trigger.service; do
+		sudo ln -sf /dev/null "$mnt/etc/systemd/system/$u"
+	done
 	sudo umount "$mnt"
 	sudo qemu-nbd --disconnect "$dev" >/dev/null
 	rmdir "$mnt"
@@ -159,7 +174,7 @@ analyze() {
 	overlay="$dir/overlay.qcow2"
 	log="$dir/console.log"
 	"$OUT/bin/qemu-img" create -f qcow2 -F qcow2 -b "$OUT/image/rootfs.qcow2" "$overlay" >/dev/null
-	[ "$udev" = udev ] && unmask_udev "$overlay"
+	[ "$udev" = noudev ] && mask_udev "$overlay"
 	inject_analysis "$overlay"
 
 	local -a args=(boot --release "$OUT" --disk "$overlay" --memory 2048 --cpus 2 --console "file:$log")
@@ -188,7 +203,7 @@ run() {
 	log="$dir/console.log"
 	"$OUT/bin/qemu-img" create -f qcow2 -F qcow2 -b "$OUT/image/rootfs.qcow2" "$overlay" >/dev/null
 
-	[ "$udev" = udev ] && unmask_udev "$overlay"
+	[ "$udev" = noudev ] && mask_udev "$overlay"
 
 	local -a args=(boot --release "$OUT" --disk "$overlay" --memory 2048 --cpus 2 --console "file:$log")
 	# log_target=console as well as show_status: the status lines alone do not carry the one

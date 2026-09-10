@@ -517,6 +517,19 @@ func TestCmdlineOnlinesMemoryAsItArrives(t *testing.T) {
 	}
 }
 
+// Two thirds of this machine's boot was systemd asking a serial port that nobody was
+// listening to two questions and waiting 334ms for each answer. TERM=dumb is what makes it
+// not ask: 687ms to 19ms between the kernel exec'ing init and systemd's first log line.
+//
+// Worth a test because it does not look like a boot flag. It looks like a terminal
+// preference, and the one thing it must not be mistaken for is decoration somebody can drop
+// while tidying — nothing fails if it goes, the machine just takes five times as long.
+func TestCmdlineTellsSystemdTheConsoleWillNotAnswer(t *testing.T) {
+	if got := DefaultCmdline().String(); !strings.Contains(got, "TERM=dumb") {
+		t.Errorf("systemd would spend 668ms waiting out two terminal queries: %s", got)
+	}
+}
+
 func TestCmdlineInitAndArgs(t *testing.T) {
 	c := DefaultCmdline()
 	c.Init = "/sbin/vminitd"

@@ -160,6 +160,37 @@ func (c Cmdline) String() string {
 	//   rcupdate.rcu_expedited=1 expedite RCU grace periods during boot.
 	parts = append(parts, "no_timer_check", "tsc=reliable", "rcupdate.rcu_expedited=1")
 
+	// The single largest thing in this machine's boot, and it is not the kernel's.
+	//
+	// The kernel execs /sbin/init at 59 ms and systemd's first log line arrives at 852.
+	// Nothing runs in between: no generator, no unit, no disk. systemd asks the console two
+	// questions and waits 334 ms for each answer — measured 2026-09-10, `systemd.log_level=
+	// debug systemd.log_target=kmsg`, the gap visible as a stall after the raw escape
+	// sequence appears on the console:
+	//
+	//   0.172 -> 0.506  DCS + q 6E616D65 ST   XTGETTCAP, "Failed to query /dev/console
+	//                                         for terminfo: Operation not supported"
+	//   0.518 -> 0.852  CSI ! p, OSC 104      the defensive terminal reset
+	//
+	// The other end is a serial port with a file behind it. Nobody is ever going to answer,
+	// and systemd cannot know that, so it spends its timeout twice. An unset TERM does not
+	// help and neither does SYSTEMD_COLORS=0 or SYSTEMD_TINT_BACKGROUND=0 (0 ms of the 687,
+	// each). TERM=vt220 removes the first question and not the second: 353 ms. Only
+	// terminal_is_dumb() short-circuits both.
+	//
+	// It is an environment variable and not `systemd.setenv=`, which sets the environment
+	// systemd gives to *services* and never reaches PID1's own getenv — that mistake is why
+	// the two knobs above looked like they did nothing when they had not been set at all.
+	// The kernel puts an unrecognised KEY=value into init's environment, which is the
+	// channel that works.
+	//
+	// What it costs: PID1's own console output loses colour. It does not reach a human's
+	// login shell — the getty declares its own TERM in the image, because agetty is invoked
+	// as `- ${TERM}` and would otherwise inherit this one.
+	//
+	// 687 ms to 19 ms.
+	parts = append(parts, "TERM=dumb")
+
 	parts = append(parts, c.Extra...)
 
 	if c.Init != "" {
