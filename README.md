@@ -21,7 +21,7 @@ One repository, one version, one generation of templates.
 
 ```
 machine/    what the machine is: PCI slot map, shape, memory backing, kernel command line
-cmd/        spin-machine (boot one, print its fingerprint) and the debug init it boots
+cmd/        spin-machine: boot one, print its fingerprint
 CLAUDE.md   how to work in here
 qemu/       Dockerfile + devices.mak
 kernel/     Dockerfile + config-<version>-<arch>
@@ -226,12 +226,6 @@ asserts both halves, since neither is visible in a file listing.
 is a qcow2 overlay created by running it, so a release with the emulator and without it
 cannot give a container anywhere to write. `qemu-nbd` comes out of the same flag and is
 deliberately not shipped — it exports a disk over NBD, which nothing here does.
-
-`vmdk` is kept, and nothing in this repository reads one. It is here because the format a
-disk is opened as is stated by whoever attaches it, so the set of formats this binary can
-open is a promise to whoever runs guests rather than a description of what the machine does.
-Dropping it is a one-line change, and it invalidates every template in existence — as any
-change to this binary does.
 
 **PVH, not BIOS.** The kernel is an ELF `vmlinux` with Xen PVH notes and QEMU enters it
 through `pvh.bin`. There is no bootloader and no UEFI: the same guest under UEFI + Secure

@@ -59,8 +59,8 @@ CONFIG_CAN_CTUCANFD=n
 CONFIG_CAN_CTUCANFD_PCI=n
 
 # --- disks: one controller ---------------------------------------------------------------
-# (The *formats* that disk carries are a configure flag and not a device — see the vmdk
-# note in qemu/Dockerfile, which is the one flag still held open for a consumer.)
+# (The *formats* that disk carries are a configure flag and not a device — see the format
+# note in qemu/Dockerfile. qcow2 and raw are built in)
 # virtio-blk, which is what every mount becomes (internal/shim/platform/mounts). The HBAs
 # below emulate 1990s hardware. AHCI is not in the list because Q35 selects AHCI_ICH9 —
 # the ICH9 southbridge has SATA whether or not anything is plugged into it.

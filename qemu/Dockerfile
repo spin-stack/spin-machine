@@ -42,11 +42,6 @@
 #                    qemu-img.
 #   TCG              built twice, below. A host serving tenants must refuse to run without
 #                    /dev/kvm rather than emulate; a CI runner has no /dev/kvm and must.
-#   vmdk             kept, and it is the one format held open for a consumer that has not
-#                    moved to the qcow2 base image: a caller still handing this binary a
-#                    .vmdk gets `Unknown driver 'vmdk'` at start-up without it. Dropping it
-#                    is a one-line change here, and it invalidates every template in
-#                    existence — as any change to this binary does.
 #   git              not a build dependency of QEMU. meson wants to fetch dtc as a
 #                    subproject when no libfdt is installed, and Alpine ships no static
 #                    libfdt, so the subproject is how fdt gets built — and MICROVM depends
@@ -85,7 +80,7 @@ ARG JOBS=8
 # configured under the old base, skipped configure, relinked, and produced a dynamically
 # linked binary from a Dockerfile that says --static on every other line. The assertion
 # below is what caught it.
-ARG QEMU_CONFIG_REV=3
+ARG QEMU_CONFIG_REV=4
 
 SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 
@@ -145,6 +140,7 @@ ENV QEMU_FLAGS="\
     --disable-debug-info \
     --disable-werror \
     --disable-plugins \
+    --disable-vmdk \
     --disable-xen \
     --disable-xen-pci-passthrough \
     --disable-whpx \
@@ -225,7 +221,7 @@ ENV QEMU_FLAGS="\
 #   fdt                          — MICROVM depends on it (hw/i386/Kconfig).
 #   CONFIG_CXL                   — not offered as optional by upstream; turning it off
 #                                  broke the 11.0.2 link (pxb_cxl_realize, acpi_build).
-#   --disable-vmdk               — see the header; a consumer may still hand this a .vmdk.
+
 
 # Two guards, and the second was learned the hard way.
 #
@@ -346,23 +342,23 @@ RUN Q=/opt/qemu/bin/qemu-system-x86_64 && \
     ! $Q -accel help | grep -qx tcg && \
     /opt/qemu-tcg/bin/qemu-system-x86_64 -accel help | grep -qx tcg
 
-# qcow2 is the base image's format and the overlay's, and vmdk is the format a consumer
-# may still hand this. Both are configure flags with no device to hold them up,
+# qcow2 is the base image's format and the overlay's, and raw is the extras disk's.
+# Both are configure flags with no device to hold them up,
 # so a build that dropped one produces a VM that dies at start-up with
 # `Unknown driver` — after the machine is created, in a lane a long way from here.
 #
 # The whole help text is flattened before it is searched, and not grepped line by line:
-# qemu-img wraps the format list across several lines, so `grep 'Supported formats:.*vmdk'`
-# matches only if vmdk happens to land on the first one. It did not, and this check failed
-# a build whose every other assertion had passed (2026-09-07).
+# qemu-img wraps the format list across several lines, so a `grep` for one format
+# matches only if that format happens to land on the first line. vmdk did not, and this
+# check failed a build whose every other assertion had passed (2026-09-07).
 RUN help=$(/opt/qemu/bin/qemu-img --help 2>&1 | tr '\n' ' ') && \
-    for f in qcow2 vmdk raw; do \
+    for f in qcow2 raw; do \
         case " $help " in \
             *" $f "*) ;; \
             *) echo "ERROR: this qemu-img cannot open $f images"; exit 1 ;; \
         esac; \
     done && \
-    echo "OK: qemu-img opens qcow2, vmdk and raw"
+    echo "OK: qemu-img opens qcow2 and raw"
 
 # Static, asserted rather than assumed. `--static` is a request, and a build that silently
 # fell back to dynamic linking produces a binary that works perfectly here and dies on the

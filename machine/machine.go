@@ -117,7 +117,7 @@ const memGrowthID = "mem.growth"
 type Disk struct {
 	// Path to the image file.
 	Path string
-	// Format as QEMU names it: qcow2, raw, vmdk. Required — it is not guessed
+	// Format as QEMU names it: qcow2 or raw. Required — it is not guessed
 	// from the file name, because a wrong guess is a guest that boots and finds
 	// a disk full of nothing, and because letting QEMU probe the format of a
 	// file the guest can write is how an image is talked into being read as
