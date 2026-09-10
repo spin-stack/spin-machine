@@ -532,10 +532,10 @@ func TestCmdlineTellsSystemdTheConsoleWillNotAnswer(t *testing.T) {
 
 func TestCmdlineInitAndArgs(t *testing.T) {
 	c := DefaultCmdline()
-	c.Init = "/sbin/vminitd"
+	c.Init = "/sbin/custom-init"
 	c.InitArgs = []string{"-vsock-rpc-port=1025"}
 	got := c.String()
-	if !strings.HasSuffix(got, "init=/sbin/vminitd -- -vsock-rpc-port=1025") {
+	if !strings.HasSuffix(got, "init=/sbin/custom-init -- -vsock-rpc-port=1025") {
 		t.Errorf("init must come last, with its args after --: %s", got)
 	}
 }

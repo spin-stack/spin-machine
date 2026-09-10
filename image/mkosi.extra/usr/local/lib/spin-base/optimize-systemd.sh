@@ -24,22 +24,23 @@ mask_unit() {
 # Units to mask - safe for VM environment
 MASK_UNITS=(
 
-    # udev is NOT masked, and was, for six months. It was masked to save boot time and it
-    # does not cost any: measured 2026-09-10 with `task boot:bench`, four boots of the real
-    # release under KVM, udev masked against udev on —
+    # udev is NOT masked, and was, for six months, to save boot time it does not cost.
+    # Measured 2026-09-10 with `task boot:bench`, 15 boots of each on the real release under
+    # KVM: as shipped, every boot reaches a login prompt; with these four units masked,
+    # **fifteen out of fifteen never reach one at all**. The machine spends the full
+    # ten-second dev-ttyS0.device timeout and then has no login.
     #
-    #     with the debug initrd     200ms  /  163ms
-    #     with root=/dev/vda      10.161s  /  207ms
-    #
-    # — so it is free in the configuration it was masked for and catastrophic in the other
-    # one. What it cost instead was everything that needs a .device unit to exist.
+    # What masking cost was everything that needs a .device unit to exist.
     #
     #   * serial-getty@ttyS0 carries BindsTo=dev-%i.device and could not start, which is
-    #     why this image had to carry a getty unit of its own with the dependency removed.
-    #   * A machine booted with root=/dev/vda waited out the full ten-second timeout on
-    #     dev-ttyS0.device and then had no login at all: the 10.161s row above.
+    #     why this image carries a getty unit of its own with the dependency removed — see
+    #     spin-machine-console.service, and the decision left open there.
     #   * A hot-plugged CPU or memory block never produced an add event, so nothing could
     #     act on one — see 40-spin-hotadd.rules, which is the thing that acts on it.
+    #
+    # The numbers here used to compare a boot with the debug initramfs against one without.
+    # That initramfs was deleted the same day, so the comparison it made cannot be re-run;
+    # what is above is the one the harness measures now.
 
     # Time sync - handled by host
     systemd-timesyncd.service
@@ -98,24 +99,41 @@ MASK_UNITS=(
     getty@tty5.service
     getty@tty6.service
 
-    # === Services from systemd-analyze blame ===
-    # ldconfig - already pre-warmed at build time (99ms)
+    # === Services that appeared in systemd-analyze blame ===
+    #
+    # READ THE NUMBERS BELOW AS SUSPICION, NOT AS SAVINGS. They are blame figures, and blame
+    # is what a unit took to start, not what removing it gives back — something else becomes
+    # the tail. Measured 2026-09-10 with `task boot:bench`, 15 boots of each: systemd-logind
+    # is 63 ms in blame and worth 24 ms to remove; chrony was 43 ms and worth 10; the two
+    # together were worth 29 and not 34, because they overlap.
+    #
+    # The arithmetic here says the same thing more bluntly. The figures on these lines sum to
+    # roughly 380 ms, and the whole of this machine's userspace is 175 ms. They cannot all be
+    # real, and they were never re-measured after the units were masked. They are kept
+    # because they say which units were once worth looking at, which is all a blame number
+    # ever says. Nothing here should be un-masked or masked on the strength of one.
+    #
+    # ldconfig, already pre-warmed at build time (99ms).
     ldconfig.service
 
-    # sysctl/sysusers - done at build time (25ms + 20ms)
+    # sysusers, done at build time (20ms). systemd-sysctl was masked here too and was
+    # removed from this list, because the same script writes /etc/sysctl.d/99-quiet-boot.conf
+    # and masking the unit that applies it left the file inert.
     systemd-sysusers.service
 
-    # Modprobe services - not needed in VM (35ms + 31ms + 24ms)
+    # Modprobe services: this kernel has CONFIG_MODULES off entirely, so there is nothing to
+    # load and these can only fail (35ms + 31ms + 24ms).
     modprobe@configfs.service
     modprobe@drm.service
     modprobe@fuse.service
     modprobe@efi_pstore.service
 
-    # Debug/tracing mounts - not needed (32ms + 26ms)
+    # Debug and tracing mounts (32ms + 26ms). Masked, not absent: `task boot:trace` mounts
+    # tracefs by hand when it needs it, which is the only thing here that ever does.
     sys-kernel-debug.mount
     sys-kernel-tracing.mount
 
-    # tmp.mount - already have /tmp (24ms)
+    # tmp.mount: /tmp is already in the image at mode 1777 (24ms).
     tmp.mount
 
     # tmpfiles-setup (19ms + 13ms + 11ms). The directories it would create are already

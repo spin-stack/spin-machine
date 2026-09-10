@@ -5,10 +5,8 @@
 # What it produces: a partitionless ext4 filesystem holding the workload's userland,
 # wrapped in a read-only qcow2 that every VM maps as a backing file.
 #
-# What it replaces: two disks per container produced by containerd's erofs-snapshotter — an
-# erofs inside a VMDK for the image, a raw ext4 for the writable layer — stacked with
-# overlayfs in the guest. Copy-on-write was done by the filesystem. Here it moves to the
-# block layer, where QEMU does it:
+# One filesystem and not a stack of layers, so copy-on-write happens in the block layer
+# where QEMU does it rather than in a union filesystem inside the guest:
 #
 #     qemu-img create -f qcow2 -F qcow2 -b rootfs.qcow2 overlay.qcow2
 #
@@ -138,8 +136,8 @@ e2fsck -fn /work/base.raw
 stat_in_image() { debugfs -R "stat $1" /work/base.raw 2>&1; }
 in_image() { stat_in_image "$1" | grep -q '^Inode:'; }
 
-# /sbin/init is what the containerd lane starts and what `ENTRYPOINT ["/sbin/init"]` meant;
-# /bin/sh is what the smoke test in the README runs.
+# /sbin/init is what this image is: a userland whose first process is systemd, and what a
+# boot with `init=/sbin/init` lands on. /bin/sh is what the smoke test in the README runs.
 for f in /sbin/init /bin/sh /bin/bash /usr/bin/docker /usr/local/bin/task; do
     in_image "$f" || { echo "ERROR: the image has no $f" >&2; exit 1; }
 done
@@ -179,11 +177,11 @@ mid_size=$(stat_in_image /etc/machine-id | sed -n 's/.*Size: \([0-9]\+\).*/\1/p'
     exit 1; }
 
 # udev runs, and the assertion is that nothing masks it again. It was masked here for six
-# months to save boot time and it costs none — 163ms against 200ms with the debug initrd,
-# measured 2026-09-10 with `task boot:bench` — while a machine booted with root=/dev/vda
-# paid the full ten-second dev-ttyS0.device timeout without it and then had no login at all:
-# 207ms against 10.161s. Masking is a one-line edit that looks like an optimization, so the
-# numbers live here too, where such an edit is caught.
+# months to save boot time it does not cost: 15 boots of each with `task boot:bench` on
+# 2026-09-10, and with these four masked, fifteen out of fifteen never reached a login at
+# all — the machine waits out the full ten-second dev-ttyS0.device timeout and then offers
+# nothing. Masking is a one-line edit that looks like an optimization, so the result lives
+# here too, where such an edit is caught.
 for u in systemd-udevd.service systemd-udevd-kernel.socket systemd-udevd-control.socket \
          systemd-udev-trigger.service; do
     if stat_in_image "/etc/systemd/system/$u" | grep -q '/dev/null'; then
