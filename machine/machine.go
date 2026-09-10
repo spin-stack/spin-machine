@@ -216,8 +216,24 @@ type Spec struct {
 	Firmware string
 
 	BootCPUs int
-	MaxCPUs  int
-	Memory   Memory
+
+	// MaxCPUs is the hotplug ceiling, and it is not free at rest: QEMU declares one ACPI
+	// object per vCPU slot in the DSDT whether or not the slot is ever filled, and the guest
+	// walks all of them at boot. Measured 2026-09-10, function_graph at depth 1 on
+	// acpi_bus_scan, `--cpus 2`:
+	//
+	//     no ceiling      8.4 ms      maxcpus=16      8.7 ms      maxcpus=64     13.2 ms
+	//
+	// — so 62 slots that hold nothing cost 4.8 ms of every boot, and acpi_init goes from
+	// 11 ms to 16 ms. (A virtio-mem ceiling is cheaper for the same reason it is a different
+	// mechanism: `--max-memory 16384` costs 1.0 ms, not a slot per block.)
+	//
+	// Worth knowing rather than worth avoiding: this is paid when a template is built, and a
+	// restored machine pays none of it. It is the number to reach for when somebody proposes
+	// a generous ceiling "since it costs nothing when unused".
+	MaxCPUs int
+
+	Memory Memory
 
 	// CPU is the model the guest is shown. Empty means "host", and that is a
 	// decision about whether VMs may move between machines.

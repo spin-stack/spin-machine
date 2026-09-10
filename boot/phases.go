@@ -10,6 +10,32 @@
 // The package is split so that the part that can be wrong is testable without a VM: Watch
 // turns a stream of console bytes into phase timings, and Percentile turns a set of runs
 // into a number. Booting is the part that needs KVM, and it is in the test that needs KVM.
+//
+// # Going below a phase, into the kernel
+//
+// These phases stop at the kernel's edge. To go inside it, boot with `--profile` (silent
+// console, initcall_debug, full ring buffer), have a systemd timer mount tracefs, write
+// `dmesg` and `/sys/kernel/tracing/trace` to a file, and power the machine off; then read
+// the overlay back. That is how acpi_init's 10 ms was taken apart on 2026-09-10:
+//
+//	--append "… ftrace=function_graph ftrace_graph_filter=acpi_bus_scan ftrace_graph_max_depth=1"
+//
+// Two things about it are worth carrying, because both cost a wrong answer here first.
+//
+// The checked-in kernel config is not the kernel's config. CONFIG_FUNCTION_GRAPH_TRACER and
+// CONFIG_DYNAMIC_FTRACE are absent from kernel/config-*, and the running kernel has both —
+// olddefconfig selects them. Ask the guest (`cat /sys/kernel/tracing/available_tracers`),
+// which is this repository's rule about asserting what came out rather than what went in,
+// applied to a question about what is possible.
+//
+// And **keep the filter narrow and the depth at 1**. A function_graph duration is wall
+// clock, so a function that sleeps is credited with everything that ran while it slept, and
+// a wide filter also pays tracing overhead on every call in the subtree. Same boot, same
+// function, two filters: acpi_purge_cached_objects read 5.83 ms under a filter on all of
+// acpi_init at depth 6, and 223 us on its own — the first number is 26x wrong and led to a
+// confident, false conclusion about where ACPI's time goes. The check that catches it is
+// free: initcall_debug prints acpi_init's own cost in the same boot, so if that number has
+// moved from its untraced baseline, the trace is measuring itself.
 package boot
 
 import (
