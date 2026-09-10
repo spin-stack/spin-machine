@@ -57,6 +57,25 @@ const (
 	// to boot. The kernel here is an ELF carrying the PVH note (XEN_ELFNOTE_PHYS32_ENTRY,
 	// CONFIG_PVH=y), so QEMU direct-boots it — but that decides which option ROM SeaBIOS
 	// jumps through, not whether SeaBIOS runs. Only a machine type with no firmware skips it.
+	//
+	// The name is a warning as much as a label: almost none of this phase is firmware.
+	// SeaBIOS prints that banner as the second statement of handle_post(), before any
+	// hardware init, so reaching it says the guest started, not what starting cost. Split
+	// with KVM tracepoints and measured 2026-09-10, the ~35 ms breaks down as
+	//
+	//     1.4 ms   the launcher, before it exec's QEMU
+	//    ~27 ms    QEMU, exec to the guest's first instruction
+	//     ~7 ms    the guest, first instruction to first console byte
+	//
+	// and inside QEMU's 27: 2.8 ms of process floor (`-version`, 20 runs), ~8 ms to a QMP
+	// round trip under -S, ~5 ms copying the kernel's 34.6 MB of PT_LOAD (measured by
+	// removing -kernel: 27.5 against 22.6 ms), and ~14 ms between those and the first vCPU
+	// entering the guest.
+	//
+	// Trace it with `-e sched:sched_process_exec -e kvm:kvm_entry` and nothing else. Adding
+	// kvm:kvm_pio inflates the same interval from 27 to 49 ms, because that tracepoint fires
+	// thousands of times: the harness that measures the VMM must not be one of the things
+	// the VMM is doing.
 	Firmware Phase = iota
 	// Kernel is the kernel's own first line, so the gap from Firmware is what the firmware
 	// costs. It needs loglevel 7 to appear.
