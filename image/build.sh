@@ -144,6 +144,14 @@ for f in /sbin/init /bin/sh /bin/bash /usr/bin/docker /usr/local/bin/task; do
     in_image "$f" || { echo "ERROR: the image has no $f" >&2; exit 1; }
 done
 
+# hwclock comes from util-linux-extra, not from util-linux and not from a package called
+# hwclock — Ubuntu split the two. Asked of the finished image rather than of the package
+# list because the package that provides it has moved once already, and the failure this
+# catches is a rename that still installs cleanly.
+in_image /usr/sbin/hwclock || {
+    echo "ERROR: the image has no /usr/sbin/hwclock; check util-linux-extra" >&2
+    exit 1; }
+
 for d in /etc /tmp /proc /sys /dev /run; do
     in_image "$d" || { echo "ERROR: the image has no $d for the guest to mount over" >&2; exit 1; }
 done
