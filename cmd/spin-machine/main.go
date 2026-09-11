@@ -106,6 +106,9 @@ type options struct {
 	diskFormat string
 	readonly   bool
 	serial     string
+	// diskCache and directOverBacking are machine.Disk's Cache and DirectOverBacking.
+	diskCache         string
+	directOverBacking bool
 
 	memoryMB int
 	maxMemMB int
@@ -139,6 +142,9 @@ func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
 	fs.StringVar(&o.diskFormat, "disk-format", "qcow2", "format of the disk image; never guessed")
 	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only")
 	fs.StringVar(&o.serial, "disk-serial", "", "virtio-blk serial the guest can resolve the disk by")
+	fs.StringVar(&o.diskCache, "disk-cache", "", "QEMU cache mode for the disk (default: QEMU's, which is writeback)")
+	fs.BoolVar(&o.directOverBacking, "disk-direct-over-backing", false,
+		"open the disk O_DIRECT and its backing chain through the host page cache (the disk must have a backing file)")
 
 	fs.IntVar(&o.memoryMB, "memory", 2048, "guest memory in MiB")
 	fs.IntVar(&o.maxMemMB, "max-memory", 0, "ceiling this VM may grow to and shrink back from, in MiB, through virtio-mem (0: fixed memory)")
@@ -209,10 +215,12 @@ func (o *options) spec() (machine.Spec, error) {
 	}
 	if disk != "-" {
 		s.Disks = []machine.Disk{{
-			Path:     disk,
-			Format:   o.diskFormat,
-			Readonly: o.readonly,
-			Serial:   o.serial,
+			Path:              disk,
+			Format:            o.diskFormat,
+			Readonly:          o.readonly,
+			Serial:            o.serial,
+			Cache:             o.diskCache,
+			DirectOverBacking: o.directOverBacking,
 		}}
 	}
 

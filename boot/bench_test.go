@@ -25,6 +25,7 @@ type variant struct {
 	extra  string            // appended to the kernel command line
 	mask   []string          // units masked by writing into this boot's own overlay
 	files  map[string]string // written into the overlay: path under / -> content
+	links  map[string]string // symbolic links made in the overlay: path under / -> target
 }
 
 // Masks are written into the overlay and never passed as `systemd.mask=`. That parameter is
@@ -398,6 +399,11 @@ func editOverlay(t *testing.T, overlay string, v variant) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("writing %s: %v\n%s", path, err, out)
 		}
+	}
+	for path, target := range v.links {
+		dst := filepath.Join(mnt, path)
+		mustRun(t, "sudo", "mkdir", "-p", filepath.Dir(dst))
+		mustRun(t, "sudo", "ln", "-sfn", target, dst)
 	}
 }
 

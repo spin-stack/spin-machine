@@ -148,6 +148,17 @@ type Disk struct {
 	// cache=none also fails outright on a filesystem with no O_DIRECT — tmpfs,
 	// which is where a scratch overlay usually lands.
 	Cache string
+	// DirectOverBacking opens this image with O_DIRECT and leaves every image
+	// under it in its backing chain on the host page cache: cache.direct=on for
+	// this node, and backing.cache.direct=off, which the deeper backing files
+	// inherit. The writable overlay is the one file no other VM reads, so caching
+	// it on the host only holds its blocks twice — once in the guest — while the
+	// chain under it is shared by every VM on the host and is worth the one copy.
+	//
+	// Only for an image that has a backing file: QEMU refuses backing options on
+	// one that does not ("Could not open backing file"). And, like cache=none,
+	// not on tmpfs, which has no O_DIRECT.
+	DirectOverBacking bool
 }
 
 // NIC is one virtio-net device, backed by a TAP file descriptor the caller has
@@ -725,6 +736,9 @@ func (s Spec) Args() ([]string, error) {
 			d.Path, i, d.Format)
 		if d.Cache != "" {
 			drive += ",cache=" + d.Cache
+		}
+		if d.DirectOverBacking {
+			drive += ",cache.direct=on,backing.cache.direct=off"
 		}
 		if d.Readonly {
 			drive += ",readonly=on"

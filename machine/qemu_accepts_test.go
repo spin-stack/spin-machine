@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -195,6 +196,18 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 				{Path: qcow2Disk(t, qemu, "overlay.qcow2"), Format: "qcow2",
 					Serial: "overlay", Locking: true, Cache: "writeback"},
 			}
+			return s
+		},
+	}, {
+		// A writable overlay opened O_DIRECT over a chain the host caches: the options
+		// name a node that exists only because the image has a backing file, so it
+		// is asked of a real one.
+		name: "direct over backing",
+		spec: func(s Spec) Spec {
+			dir := diskDir(t)
+			base := qcow2In(t, qemu, dir, "base.qcow2", "")
+			s.Disks = []Disk{{Path: qcow2In(t, qemu, dir, "overlay.qcow2", base), Format: "qcow2",
+				Serial: "overlay", Locking: true, DirectOverBacking: true}}
 			return s
 		},
 	}, {
@@ -555,6 +568,52 @@ func qcow2Disk(t *testing.T, qemu, name string) string {
 	cmd := exec.Command(img, "create", "-f", "qcow2", path, "16M") // #nosec G204 -- beside the binary under test
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s create: %v\n%s", img, err, out)
+	}
+	return path
+}
+
+// diskDir is a directory that supports O_DIRECT. The test's temporary directory does
+// not when it is on tmpfs, which it is on hosts that mount /tmp that way, and QEMU then
+// refuses cache.direct=on with EINVAL — a failure about the host, not the options. So a
+// tmpfs one is swapped for one under this module's _output, which is on disk.
+func diskDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		t.Fatal(err)
+	}
+	const tmpfsMagic = 0x01021994
+	if st.Type != tmpfsMagic {
+		return dir
+	}
+	if err := os.MkdirAll(filepath.Join("..", "_output"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(filepath.Join("..", "_output"), "direct-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
+}
+
+// qcow2In creates a qcow2 in dir, over backing when it is not empty.
+func qcow2In(t *testing.T, qemu, dir, name, backing string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	args := []string{"create", "-q", "-f", "qcow2"}
+	if backing != "" {
+		args = append(args, "-F", "qcow2", "-b", backing)
+	}
+	args = append(args, path, "16M")
+	img := filepath.Join(filepath.Dir(qemu), "qemu-img")
+	if out, err := exec.Command(img, args...).CombinedOutput(); err != nil { // #nosec G204 -- beside the binary under test
+		t.Fatalf("%s %v: %v\n%s", img, args, err, out)
 	}
 	return path
 }
