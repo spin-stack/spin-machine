@@ -21,6 +21,32 @@ sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd
 sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
+# Trust the certificate authority of whichever host this workspace ends up on.
+#
+# The path is named here and the file arrives later: TrustedUserCAKeys takes a path, and at
+# image build time there is no host to ask. The supervisor writes it from the registration
+# response, which is where it learns which host it is running on. sshd re-reads the file per
+# authentication, so a workspace on a host with no CA simply has no file here and accepts no
+# certificates — reachable by the keys in authorized_keys, which is the failure that locks
+# people out rather than in.
+#
+# Without this line the control plane signs five-minute certificates that nothing on earth
+# accepts, and every login quietly falls back to a long-lived key in authorized_keys that
+# nothing ever rewrites. That was the state of things until 2026-09-11, and it was invisible
+# because logins kept working.
+mkdir -p /etc/ssh/sshd_config.d
+cat <<'EOF' > /etc/ssh/sshd_config.d/10-spin-user-ca.conf
+TrustedUserCAKeys /etc/ssh/spin_user_ca.pub
+EOF
+
+# The drop-in only counts if sshd_config includes the directory. Asserted rather than
+# assumed, because the way this fails is silent: sshd starts, key logins keep working, and
+# only certificate authentication is dead.
+grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config || {
+    echo "ERROR: sshd_config does not include sshd_config.d; the user CA would be ignored" >&2
+    exit 1
+}
+
 # -------------------------------------------------
 # 4. Configure network interface naming
 # -------------------------------------------------
