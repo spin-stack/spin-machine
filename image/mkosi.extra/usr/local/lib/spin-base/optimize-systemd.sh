@@ -281,6 +281,20 @@ rm -f /etc/systemd/system/multi-user.target.wants/ssh.service 2>/dev/null || tru
 mkdir -p /etc/systemd/system/sockets.target.wants
 ln -sf /lib/systemd/system/ssh.socket /etc/systemd/system/sockets.target.wants/ssh.socket
 
+# logind out of the boot transaction, worth 24 ms. Not masked: masked means never started,
+# and a login needs it. It stays enabled in every other sense and is started by the first
+# thing that asks for a session over its Varlink socket — see the 10-seats.conf drop-in
+# shipped beside it, which is what makes pam_systemd get as far as asking.
+#
+# A symlink to /dev/null and not `rm`, because the want is not in /etc to begin with: the
+# package ships it at /usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service.
+# An `rm` of the /etc path is what this said first, and it removed nothing at all — the
+# build passed, the image shipped, and logind started at boot exactly as before (2026-09-12).
+# The /dev/null symlink in /etc overrides the want in /usr and nothing else: the unit itself
+# is untouched, which is why it can still be activated on demand.
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /dev/null /etc/systemd/system/multi-user.target.wants/systemd-logind.service
+
 log "Setting default target to multi-user..."
 ln -sf /lib/systemd/system/multi-user.target /etc/systemd/system/default.target
 
