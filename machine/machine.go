@@ -277,6 +277,24 @@ type Spec struct {
 	// fleet — which is what libvirt and every cluster manager do.
 	CPU string
 
+	// Accel is what executes the guest's instructions. Empty is "kvm".
+	//
+	// "tcg" is software emulation, for a machine with no /dev/kvm: a CI runner, a laptop
+	// outside the kvm group. It runs the same guest perhaps fifty times slower, which is
+	// the whole reason it is stated rather than fallen back to — a host that quietly
+	// emulated would present as a fleet that is inexplicably slow, not as one that failed.
+	//
+	// It has to be set together with QEMUTCG: the ordinary build has no TCG compiled in and
+	// refuses accel=tcg outright, which is the good failure. And "host" is not a CPU model
+	// TCG can present — QEMU refuses it with "CPU model 'host' requires KVM or HVF" — so
+	// the default below is "max" here and "host" under KVM.
+	//
+	// Templates do not cross the two, and nothing extra is needed to keep them apart: the
+	// fingerprint hashes the QEMU binary by content, and the TCG build is a different file.
+	// This lands in the shape as well, which makes the separation visible in an argument
+	// rather than only in a hash.
+	Accel string
+
 	Disks []Disk
 	NICs  []NIC
 
@@ -423,14 +441,27 @@ func (s Spec) Shape() Shape {
 	//   - i8042=off, 62.5 ms. It does remove the PS/2 controller, its two ports
 	//     and port92 — 92 bytes off the DSDT is the whole visible effect — and
 	//     the kernel has no CONFIG_SERIO_I8042 to probe any of it with.
+	accel := s.Accel
+	if accel == "" {
+		accel = "kvm"
+	}
+	// kernel-irqchip=on stays under either. It names KVM's in-kernel interrupt controller
+	// and TCG has none, but QEMU accepts the option and ignores it rather than refusing —
+	// measured against 11.1.1 — so the shape is one string and not two.
 	machine := strings.Join(nonEmpty(
-		"q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on",
+		"q35", "accel="+accel, "kernel-irqchip=on", "hpet=off", "acpi=on",
 		"sata=off", "smbus=off", backend,
 	), ",")
 
 	cpu := s.CPU
 	if cpu == "" {
+		// "host" is the silicon underneath, which TCG does not have: it refuses the model
+		// outright. "max" is the same idea for an emulator — every feature this QEMU can
+		// emulate — and is derived the same way, so migratable=on applies to it too.
 		cpu = "host"
+		if accel != "kvm" {
+			cpu = "max"
+		}
 	}
 	// migratable=on drops features QEMU cannot save and reload, which is what a
 	// restore does. It is not what makes a CPU portable between machines — a

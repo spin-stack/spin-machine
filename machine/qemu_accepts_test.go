@@ -75,6 +75,13 @@ func tcgOnly(args []string) ([]string, []string, error) {
 		value := out[i+1]
 		switch out[i] {
 		case "-machine":
+			if strings.Contains(value, "accel=tcg") {
+				// Already emulated, because the spec asked to be. Nothing to stand
+				// in for, and the check below is satisfied: what it guards against
+				// is running a KVM machine while believing this is emulation.
+				accel = true
+				continue
+			}
 			if !strings.Contains(value, "accel=kvm") {
 				continue
 			}
@@ -110,7 +117,7 @@ func tcgOnly(args []string) ([]string, []string, error) {
 	// stops saying accel=kvm, this check has been quietly answering a different
 	// question.
 	if !accel {
-		return nil, nil, fmt.Errorf("no accel=kvm in the machine string, so there is nothing for the TCG binary to stand in for")
+		return nil, nil, fmt.Errorf("the machine string names neither accel=kvm nor accel=tcg, so this check cannot say which accelerator it just exercised")
 	}
 	return out, rewrites, nil
 }
@@ -208,6 +215,22 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			base := qcow2In(t, qemu, dir, "base.qcow2", "")
 			s.Disks = []Disk{{Path: qcow2In(t, qemu, dir, "overlay.qcow2", base), Format: "qcow2",
 				Serial: "overlay", Locking: true, DirectOverBacking: true}}
+			return s
+		},
+	}, {
+		// The same machine emulated: no /dev/kvm required, and the guest's
+		// instructions executed by QEMU itself.
+		//
+		// Worth starting and not only rendering, because the two arguments it
+		// changes are ones QEMU refuses rather than ignores. accel=tcg is absent
+		// from the ordinary build — "invalid accelerator tcg" — which is why this
+		// names the TCG one; and "host" is not a model an emulator can present,
+		// so a shape that kept the KVM default would die with "CPU model 'host'
+		// requires KVM or HVF". Everything else about the machine is unchanged,
+		// which is the claim.
+		name: "emulated",
+		spec: func(s Spec) Spec {
+			s.Accel = "tcg"
 			return s
 		},
 	}, {

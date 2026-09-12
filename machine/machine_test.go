@@ -256,6 +256,15 @@ func TestFingerprintChangesWithTheMachine(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		// Emulation is a different machine, and this is the assertion that keeps the two
+		// apart. A guest's state under TCG is not a guest's state under KVM, so a restore
+		// across them is undefined — and a shared fingerprint is exactly how one would
+		// happen, silently, on a host that has both binaries.
+		//
+		// The binary's own hash would separate them in practice, since TCG needs the build
+		// that has it compiled in. This holds the shape to it as well, so the separation
+		// does not rest on a caller remembering to change two things at once.
+		"emulation": func(s *Spec) { s.Accel = "tcg" },
 	} {
 		changed := base
 		mutate(&changed)
