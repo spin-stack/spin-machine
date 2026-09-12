@@ -150,6 +150,16 @@ tasks:
     cmds:
       - SPIN_BOOT_BENCH=1 go test ./boot/ -run TestBootCost -v -timeout 60m
 
+  boot:logind:
+    desc: >-
+      Check first SSH login, reconnect, user services and logout in a disposable guest.
+      Needs a built release and debugfs; uses KVM when available, otherwise TCG.
+      The image does not start logind at boot, so this checks the thing that makes that
+      safe: that the first login activates it and gets a real session. SPIN_LOGIND_NO_SEATS=1
+      removes the drop-in that allows it and is expected to fail, not to measure anything.
+    cmds:
+      - SPIN_LOGIND_TEST=1 go test ./boot/ -run '^TestLogindSessions$' -count=1 -v -timeout 5m
+
   boot:trace:
     desc: >-
       One boot's console printed against the host's clock, for finding a gap that belongs to
@@ -170,7 +180,7 @@ tasks:
     cmds:
       - |
         set -euo pipefail
-        unformatted=$(gofmt -l machine cmd)
+        unformatted=$(gofmt -l machine cmd boot)
         if [ -n "$unformatted" ]; then
           echo "not gofmt'd:"; echo "$unformatted"; exit 1
         fi
@@ -184,7 +194,7 @@ tasks:
       - |
         set -euo pipefail
         for f in hack/release image/build.sh image/mkosi.postinst.chroot \
-                 image/mkosi.extra/usr/local/lib/spin-base/*.sh; do
+                 image/mkosi.extra/usr/local/lib/spin-base/*.sh boot/testdata/*.sh; do
           bash -n "$f" || { echo "$f does not parse" >&2; exit 1; }
         done
         echo "OK: the shell scripts parse"

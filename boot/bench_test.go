@@ -84,6 +84,11 @@ func without(units ...string) variant {
 
 func labelled(l string, v variant) variant { v.label = l; return v }
 
+func withFile(m map[string]string, path, content string) map[string]string {
+	m[path] = content
+	return m
+}
+
 var variants = []variant{
 	{label: "as shipped", cpus: "2", memory: "2048"},
 	{label: "baseline", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho)},
@@ -112,6 +117,51 @@ var variants = []variant{
 	// The chrony rows are kept as the record of what removing it bought, and cannot be run
 	// again: there is no time daemon in the image since 2026-09-10 (see image/mkosi.conf).
 	labelled("sin logind", without("systemd-logind.service")),
+	// The inverse of what the image ships: logind put back into the boot transaction, which
+	// is the configuration this replaced. Since 2026-09-12 the want is overridden with a
+	// /dev/null symlink and the first login starts logind over its Varlink socket instead.
+	// 25 boots of each, same run, measured that day:
+	//
+	//     as shipped, deferred      248/275      logind at boot (this row)   272/294
+	//     deferred, no drop-in      244/264      at boot, with the drop-in   282/322
+	//     masked outright           241/265
+	//
+	// So deferring it is worth 24 ms, of which the drop-in gives 4 back for its fork, and
+	// masking it outright — which breaks every login — would be worth 7 more.
+	//
+	// This row neutralises the drop-in as well, and that is the whole reason it is written
+	// the long way instead of just restoring the want. With the drop-in left in place the
+	// same comparison reads 43 ms, because a service is implicitly ordered after the socket
+	// that triggers it: logind starting at boot then waits for an ExecStartPre fork that the
+	// shipped machine never puts on any path, and the row flatters the change by 19 ms.
+	//
+	// What makes the deferral possible is that drop-in rather than anything here:
+	// pam_systemd decides whether to register a session by calling logind_running(), which
+	// is access("/run/systemd/seats/") — a test for "is this a logind system", not "is
+	// logind up" — and on a false answer it logs "Skipping logind registration as logind is
+	// not running" and returns PAM_SUCCESS. Creating that directory on the Varlink socket,
+	// which carries Service=systemd-logind.service, is what gets pam_systemd as far as the
+	// connection that starts logind.
+	//
+	// Two dead ends on the way, both of which measure well *here* and leave a machine whose
+	// logins have no session, because the echo marker this row watches needs none:
+	//
+	//   - Ordering sshd after logind instead repairs SSH and only SSH, with `su -l` and the
+	//     console getty still landing with XDG_RUNTIME_DIR unset. Ordering the getty after
+	//     logind too repairs those and hands the saving straight back.
+	//   - RuntimeDirectory=systemd/seats on the socket, to make the directory without a
+	//     fork, creates nothing: a unit with no Exec* line never applies its execution
+	//     context. It benchmarked as the fastest row here because it *was* the masked
+	//     machine. ExecStartPre=/bin/true makes the directory appear, which is both the
+	//     proof and the reason the drop-in does not bother avoiding the fork.
+	//
+	// `task boot:logind` is what holds the half of this that a boot time cannot show.
+	{label: "logind at boot", cpus: "2", memory: "2048",
+		files: withFile(gettyDropin(gettyEcho),
+			"/etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf", "[Socket]\n"),
+		links: map[string]string{
+			"/etc/systemd/system/multi-user.target.wants/systemd-logind.service": "/lib/systemd/system/systemd-logind.service",
+		}},
 	// serial-getty is Type=idle, which holds the service until systemd's job queue is quiet.
 	// If that dominates, `usable` has been measuring the queue draining rather than the
 	// machine being ready — and it would have been invisible earlier, because the first test

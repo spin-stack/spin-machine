@@ -216,6 +216,32 @@ for u in systemd-random-seed.service tmp.mount; do
         exit 1; }
 done
 
+# logind is deferred rather than masked, and the two halves of that only work together.
+# The drop-in makes pam_systemd's guard — access("/run/systemd/seats/") — true before
+# logind has run, so the first login activates it over Varlink instead of being handed a
+# session with no XDG_RUNTIME_DIR and no user manager. The overridden want is what keeps
+# the 24 ms. Either half alone is a silent failure: without the drop-in every login comes
+# up session-less and nothing logs an error, and a re-enabled want costs the boot time back
+# while everything still works, so neither shows up anywhere but here.
+in_image /etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf || {
+    echo "ERROR: the image has no logind seats drop-in; every login would lose its session" >&2
+    exit 1; }
+# The want is overridden, not deleted: the package ships it in /usr, so the /etc path must
+# hold a symlink to /dev/null. Asserting its *absence* is the version of this check that
+# passed while the image still started logind at boot, because the /etc path was never
+# there to remove (2026-09-12).
+if ! stat_in_image /etc/systemd/system/multi-user.target.wants/systemd-logind.service |
+        grep -q '/dev/null'; then
+    echo "ERROR: the want for systemd-logind is not overridden; the package ships one in" \
+         "/usr and logind is back in the boot transaction" >&2
+    exit 1
+fi
+if stat_in_image /etc/systemd/system/systemd-logind.service | grep -q '/dev/null'; then
+    echo "ERROR: systemd-logind.service is masked - deferring it means it still starts" \
+         "on demand, and masked means it never starts at all" >&2
+    exit 1
+fi
+
 # The distribution's background maintenance, masked by configure-system.sh for reasons
 # that are written there. Asserted separately from the three above because the cause is a
 # different script: these come back if a package upgrade re-runs a unit's [Install], and
