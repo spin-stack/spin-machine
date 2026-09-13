@@ -89,9 +89,40 @@ const (
 	// kvm:kvm_pio inflates the same interval from 27 to 49 ms, because that tracepoint fires
 	// thousands of times: the harness that measures the VMM must not be one of the things
 	// the VMM is doing.
+	//
+	// None of that says the firmware is cheap, and it is not: its work comes after the
+	// banner, and it had never been measured until 2026-09-13. QEMU exec to the kernel's PVH
+	// entry is 43.9 and 45.1 ms, 40 boots in each of two runs, against 34.6 to the banner —
+	// so SeaBIOS's POST (PCI enumeration, SMM and MTRR setup, the ACPI table loader, a scan of
+	// storage and input the machine does not have, then pvh.bin) is ~10 ms. Two ways of
+	// spending less on it, and what each came to:
+	//
+	//   - qboot boots this kernel on q35 in 37.4–39.3 ms, 7–8 ms under SeaBIOS, and cannot
+	//     run this machine. Its table loader implements ALLOCATE, ADD_POINTER and
+	//     ADD_CHECKSUM and panics on anything else, and vmgenid needs WRITE_POINTER to tell
+	//     QEMU where the GUID is. The symptom is a vCPU halted inside qboot and not one byte
+	//     on the console, not even earlyprintk.
+	//   - SeaBIOS rel-1.17.0 rebuilt with 34 of its 68 options — no USB, PS/2, storage
+	//     drivers, sercon, TPM or boot menu, and everything the guest can see left alone —
+	//     reaches the kernel 3 ms sooner (41.2 and 41.4 ms) and keeps vmgenid: through a save
+	//     and restore the guest still logs "crng reseeded due to virtual machine fork". At a
+	//     login the 3 ms cannot be seen. Over 80 boots it read 232.2 against 237.1 for the
+	//     stock binary and 233.6 for QEMU's own config rebuilt here, so two builds of the
+	//     same firmware differ by as much as the change does. Not worth a firmware build of
+	//     our own.
+	//
+	// Measuring it. The SeaBIOS debug log cannot be read from this QEMU, which has no
+	// isa-debugcon in its device list; read from another, every byte of it is a VM exit and
+	// the POST reads 28 ms. On a busy host the wall clock cannot resolve a few ms — two
+	// builds of the same firmware differed by 27 — so count vCPU 0's on-CPU time instead,
+	// with the guest held by a hardware breakpoint at the PVH entry
+	// (XEN_ELFNOTE_PHYS32_ENTRY): 11.85 ms for SeaBIOS as shipped, 8.57 minimal, 4.40 qboot.
+	// Firmware runs on vCPU 0 alone, so that is its work and not the host's.
 	Firmware Phase = iota
-	// Kernel is the kernel's own first line, so the gap from Firmware is what the firmware
-	// costs. It needs loglevel 7 to appear.
+	// Kernel is the kernel's own first line, and the gap from Firmware is not the firmware
+	// alone: it holds SeaBIOS's POST, pvh.bin and the kernel's setup until its console
+	// registers, which is when a quiet boot's buffered first line is written out. It needs
+	// loglevel 7 to appear; earlyprintk=ttyS0 writes it within the kernel's first steps.
 	Kernel
 	// PID1 is the kernel handing over. The kernel must be printing at loglevel 7 for this
 	// to appear at all, so it is absent from a quiet boot rather than zero.
