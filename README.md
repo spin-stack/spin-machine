@@ -277,9 +277,15 @@ The config is not stable furniture. In one week it gained `CONFIG_VMGENID` and
 its symbol table stripped (−11.8 ms). Every one of those changes invalidates every template
 in the fleet, which is the design — they should not be quiet.
 
-`kernel/Dockerfile` builds on `debian:bookworm` deliberately: a different compiler is a
-different `vmlinux`, which is a different fingerprint. Worth doing on purpose, not while
-moving a file.
+`kernel/Dockerfile` pins its toolchain — Debian trixie by image digest, its packages from
+snapshot.debian.org at a fixed date — because a different compiler is a different `vmlinux`,
+which is a different fingerprint. It moves on purpose, not when Debian publishes a point
+release.
+
+And the build is reproducible: two builds from the same inputs produce the same `vmlinux`,
+byte for byte. It was not until 2026-09-14: bookworm's pahole 1.24 encoded `.BTF` with make's
+`-j` in whatever order its threads finished, and every release had a new fingerprint whether
+or not the kernel had changed. trixie's 1.30 is deterministic with `-j`.
 
 ### Base image
 

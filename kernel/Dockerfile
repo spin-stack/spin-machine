@@ -15,15 +15,47 @@
 # and every one of those changes invalidates every template in the fleet. That is the
 # design, and it makes a change here a fleet-wide event rather than a tidy-up.
 #
-# Base image: debian bookworm, and deliberately not something newer. A different compiler
-# is a different vmlinux, which is a different machine fingerprint, which is every template
-# invalidated. That may be a change worth making; it is not one to make by accident.
+# The toolchain is pinned, by the base image's digest and by the date of the Debian archive
+# its packages come from. A different compiler, assembler or pahole is a different vmlinux,
+# which is a different machine fingerprint, which is every template invalidated — so it
+# changes when this file says so, and not when Debian publishes a point release. A tag and
+# the live archive gave no such promise: `debian:bookworm` and whatever gcc-12 was current.
+#
+# Debian trixie: gcc 14.2, binutils 2.44, pahole 1.30. Moved from bookworm (gcc 12.2, binutils
+# 2.40, pahole 1.24) on 2026-09-14, in the same release that made the build reproducible, so
+# the fleet paid for one fingerprint change rather than two.
+#
+# To move it: a new digest (`docker buildx imagetools inspect debian:trixie`) and a new
+# snapshot date, together, and the boot measured again (`task boot:bench`).
+ARG DEBIAN_IMAGE=debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+ARG DEBIAN_SNAPSHOT=20260914T000000Z
 
-FROM debian:bookworm AS kernel-build-base
+FROM ${DEBIAN_IMAGE} AS kernel-build-base
 
+ARG DEBIAN_SNAPSHOT
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# The archive as it stood on DEBIAN_SNAPSHOT, instead of the image's live mirrors. Valid-Until
+# is not checked because a snapshot's Release files expire by design; the signatures still are,
+# and they are what makes plain http enough — and it has to be http, since the image carries no
+# CA certificates until ca-certificates is installed from this very archive.
+RUN rm -f /etc/apt/sources.list.d/debian.sources && cat > /etc/apt/sources.list.d/snapshot.sources <<EOF
+Types: deb
+URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}
+Suites: trixie trixie-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
+
+Types: deb
+URIs: http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}
+Suites: trixie-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
+EOF
 
 RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=kernel-aptcache,target=/var/cache/apt \
@@ -230,7 +262,28 @@ ARG KERNEL_NPROC
 
 # No cache mount: kernel compilation is not incremental between builds, so Docker's layer
 # cache is the effective one.
-RUN cd linux && make ARCH=${KERNEL_ARCH} -j${KERNEL_NPROC} all
+#
+# Reproducible: the same inputs give the same vmlinux, so a release whose kernel did not
+# change keeps its fingerprint. v20260914.01 and .02, same source and config, differed in
+# 3,525,384 bytes, for two reasons:
+#
+#   The build's date, user and host, which the kernel writes into its banner (uname -v) unless
+#   told otherwise. Fixed here: the date is the snapshot's, the day the toolchain is pinned to.
+#
+#   .BTF — 3,524,411 of those bytes. The kernel runs pahole with make's -j
+#   (scripts/Makefile.btf), and bookworm's pahole 1.24 encoded in parallel in whatever order
+#   its threads finished. trixie's 1.30 does not: five links of one tree, three with -j16 and
+#   two without, gave one .BTF (measured 2026-09-14). With 1.24, taking -j away fixed it, with
+#   a wrapper passed as PAHOLE — if a pahole bump brings it back, that is the fix.
+#
+# Two builds compared is how to find out, and they have to be built with --no-cache: with
+# only the make step uncached, buildkit took the step that copies vmlinux out from the
+# first build's cache, and the comparison compared a file with itself.
+ARG DEBIAN_SNAPSHOT
+RUN cd linux && make ARCH=${KERNEL_ARCH} -j${KERNEL_NPROC} \
+        KBUILD_BUILD_TIMESTAMP="$(date -u -d "$(echo "${DEBIAN_SNAPSHOT}" | cut -c1-8)")" \
+        KBUILD_BUILD_USER=spin-machine KBUILD_BUILD_HOST=build \
+        all
 
 RUN <<EOT
     set -e
