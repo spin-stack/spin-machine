@@ -131,6 +131,12 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 # The margin is for a machine booted from this image with nothing grown — `task shell`, the
 # boot benchmarks — whose writes at boot land in whatever the image has free.
 #
+# -b 4096, stated rather than left to the profile. mke2fs picks a "small" profile under
+# 512 MiB, and upstream's mke2fs.conf — the one this build uses — gives it 1024-byte blocks,
+# where Debian's and Ubuntu's give 4096. The image is over that size today, so it gets 4096
+# either way; a tree that shrank under it would quietly get the other (measured on a 64 MiB
+# filesystem, 2026-09-14).
+#
 # -m 0: no blocks reserved for root. ext4 keeps 5% by default so root can still write when a
 # filesystem is full, and the reservation is a proportion: a filesystem grown from this one to
 # fill a larger disk keeps the same 5% of the larger size — 0.55 GiB of an 11 GiB disk
@@ -149,7 +155,7 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 # qcow2 overlay, which is a different file with a different filesystem on it.
 mkbase() {
     rm -f /work/base.raw
-    "$bin/mkfs.ext4" -q -F -L "" -U clear -O ^has_journal -m 0 -E root_owner=0:0 \
+    "$bin/mkfs.ext4" -q -F -L "" -U clear -O ^has_journal -m 0 -b 4096 -E root_owner=0:0 \
         -d "$tree" /work/base.raw "$1"
 }
 # used_kb is what the filesystem holds, metadata included: blocks less free blocks.
