@@ -98,9 +98,24 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 
 # --- filesystem -------------------------------------------------------------------------
 #
-# Sized from the tree, not fixed: a hardcoded size is either wasted space or a build that
-# fails the day docker-ce grows. The slack covers ext4's own overhead — inode tables and
-# the directory structure are charged before a single file is written.
+# Sized to what the tree needs, plus a small margin, and nothing else. The size of this
+# filesystem is part of every workspace's disk: a workspace asks for `disk_gb` of free space
+# and is given a disk of this image's size plus that, so free space the image carries is
+# space nobody asked for, and a request that is only approximately honoured. It carried
+# 317 MiB of it (2026-09-14).
+#
+# Two passes, because the answer to "how much does this tree take as ext4" includes ext4's
+# own overhead — inode tables and the directory structure are charged before a single file
+# is written — and that overhead scales with the filesystem's size. The first pass is
+# generous enough to always fit and is only measured; the second is built at what the first
+# used plus the margin. It cannot be shrunk afterwards instead: `resize2fs -M` estimates its
+# minimum from the inode tables mkfs laid out for the larger size, and on this image that
+# estimate was the size it already had.
+#
+# The margin is for a machine booted from this image with nothing grown — `task shell`, the
+# boot benchmarks, a handoff older than the grow — whose writes at boot land in whatever the
+# image has free. A workspace does not rely on it: its root is grown to the disk it was
+# given before its init runs.
 #
 # mkfs.ext4 -d writes the tree in directly: no loop device and no mount, so the filesystem
 # is built with no privilege beyond what mkosi already needed.
@@ -113,11 +128,29 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 # -O ^has_journal: this file is opened read-only by every VM for its whole life. A journal
 # is megabytes describing writes that cannot happen. The container's writes go to its own
 # qcow2 overlay, which is a different file with a different filesystem on it.
+mkbase() {
+    rm -f /work/base.raw
+    mkfs.ext4 -q -F -L "" -U clear -O ^has_journal -E root_owner=0:0 \
+        -d "$tree" /work/base.raw "$1"
+}
+# used_kb is what the filesystem holds, metadata included: blocks less free blocks.
+used_kb() {
+    dumpe2fs -h /work/base.raw 2>/dev/null | awk -F: '
+        /^Block count:/ { blocks = $2 }
+        /^Free blocks:/ { free = $2 }
+        /^Block size:/  { bs = $2 }
+        END { printf "%d\n", (blocks - free) * bs / 1024 }'
+}
+margin_kb=131072
 kb=$(du -sk "$tree" | cut -f1)
-size_kb=$(( kb + kb / 10 + 262144 ))
-echo "==> mkfs.ext4: ${size_kb} KiB from a ${kb} KiB tree"
-mkfs.ext4 -q -F -L "" -U clear -O ^has_journal -E root_owner=0:0 \
-    -d "$tree" /work/base.raw "${size_kb}"
+first_kb=$(( kb + kb / 10 + 262144 ))
+mkbase "$first_kb"
+used=$(used_kb)
+# Rounded up to a whole MiB, so the device is aligned and its size is a number a person can
+# read in `qemu-img info`.
+size_kb=$(( (used + margin_kb + 1023) / 1024 * 1024 ))
+echo "==> mkfs.ext4: ${size_kb} KiB (${used} KiB used at ${first_kb} KiB, plus ${margin_kb} KiB) from a ${kb} KiB tree"
+mkbase "$size_kb"
 
 # --- checks -----------------------------------------------------------------------------
 #
