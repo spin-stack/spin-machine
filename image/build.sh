@@ -30,6 +30,23 @@ SHARE="${SHARE:-$(dirname "$(dirname "$OUT")")}"
 # release actually contains is the checksum in machine.env.
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 
+# The filesystem is made and read by this machine's own e2fsprogs, from the same _output the
+# image is written into, and not the build container's. What an ext4 is made with — its
+# features, its block and inode sizes — is what mke2fs's version and mke2fs.conf default to,
+# and the distribution's copy is whatever it shipped the day the container was built: 1.47.0
+# made orphan_file a default, for one. So the build container carries no e2fsprogs, and a
+# build that finds these missing stops here rather than falling back to one.
+#
+# qemu-img is still the container's; image/Dockerfile says why that is a different case.
+bin=/out/bin
+for tool in mkfs.ext4 e2fsck dumpe2fs debugfs; do
+    test -x "$bin/$tool" || {
+        echo "ERROR: $bin/$tool is missing — task e2fsprogs:build" >&2
+        exit 1; }
+done
+export MKE2FS_CONFIG=/out/e2fsprogs/mke2fs.conf
+test -f "$MKE2FS_CONFIG" || { echo "ERROR: $MKE2FS_CONFIG is missing — task e2fsprogs:build" >&2; exit 1; }
+
 mkdir -p "$(dirname "$OUT")" "$SHARE" /work/out /cache
 cd /work
 
@@ -98,11 +115,10 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 
 # --- filesystem -------------------------------------------------------------------------
 #
-# Sized to what the tree needs, plus a small margin, and nothing else. The size of this
-# filesystem is part of every workspace's disk: a workspace asks for `disk_gb` of free space
-# and is given a disk of this image's size plus that, so free space the image carries is
-# space nobody asked for, and a request that is only approximately honoured. It carried
-# 317 MiB of it (2026-09-14).
+# Sized to what the tree needs, plus a small margin, and nothing else. Free space in the base
+# is free space in every overlay built on it, whether or not that overlay's disk was meant to
+# have it: a disk larger than the image, with the filesystem grown to fill it, has the space it
+# was given plus whatever the image carried. It carried 317 MiB (2026-09-14).
 #
 # Two passes, because the answer to "how much does this tree take as ext4" includes ext4's
 # own overhead — inode tables and the directory structure are charged before a single file
@@ -113,9 +129,12 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 # estimate was the size it already had.
 #
 # The margin is for a machine booted from this image with nothing grown — `task shell`, the
-# boot benchmarks, a handoff older than the grow — whose writes at boot land in whatever the
-# image has free. A workspace does not rely on it: its root is grown to the disk it was
-# given before its init runs.
+# boot benchmarks — whose writes at boot land in whatever the image has free.
+#
+# -m 0: no blocks reserved for root. ext4 keeps 5% by default so root can still write when a
+# filesystem is full, and the reservation is a proportion: a filesystem grown from this one to
+# fill a larger disk keeps the same 5% of the larger size — 0.55 GiB of an 11 GiB disk
+# (measured 2026-09-14) that a user who is not root cannot write to.
 #
 # mkfs.ext4 -d writes the tree in directly: no loop device and no mount, so the filesystem
 # is built with no privilege beyond what mkosi already needed.
@@ -130,12 +149,12 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 # qcow2 overlay, which is a different file with a different filesystem on it.
 mkbase() {
     rm -f /work/base.raw
-    mkfs.ext4 -q -F -L "" -U clear -O ^has_journal -E root_owner=0:0 \
+    "$bin/mkfs.ext4" -q -F -L "" -U clear -O ^has_journal -m 0 -E root_owner=0:0 \
         -d "$tree" /work/base.raw "$1"
 }
 # used_kb is what the filesystem holds, metadata included: blocks less free blocks.
 used_kb() {
-    dumpe2fs -h /work/base.raw 2>/dev/null | awk -F: '
+    "$bin/dumpe2fs" -h /work/base.raw 2>/dev/null | awk -F: '
         /^Block count:/ { blocks = $2 }
         /^Free blocks:/ { free = $2 }
         /^Block size:/  { bs = $2 }
@@ -158,7 +177,11 @@ mkbase "$size_kb"
 # failed to copy in produces a perfectly valid empty ext4, and the failure would then be a
 # VM that boots and finds nothing to run.
 echo "==> checking the filesystem"
-e2fsck -fn /work/base.raw
+"$bin/e2fsck" -fn /work/base.raw
+# And that it is made the way it was asked to be. mke2fs takes -m and never says whether it
+# honoured it; the reservation is only visible on the filesystem.
+reserved=$("$bin/dumpe2fs" -h /work/base.raw 2>/dev/null | awk -F: '/^Reserved block count:/ { gsub(/ /, "", $2); print $2 }')
+test "$reserved" = 0 || { echo "ERROR: the filesystem reserves $reserved blocks for root, want 0" >&2; exit 1; }
 
 # debugfs is asked and its *output* is read, not its exit status: `debugfs -R` exits 0
 # whether or not the request succeeded, printing "File not found by ext2_lookup" to stderr
@@ -166,7 +189,7 @@ e2fsck -fn /work/base.raw
 # path, present or not — which is how this script first reported a missing /bin/sh as fine
 # and a deleted /etc/hostname as baked in (2026-09-07). A successful stat starts its output
 # with "Inode:"; nothing else does.
-stat_in_image() { debugfs -R "stat $1" /work/base.raw 2>&1; }
+stat_in_image() { "$bin/debugfs" -R "stat $1" /work/base.raw 2>&1; }
 in_image() { stat_in_image "$1" | grep -q '^Inode:'; }
 
 # /sbin/init is what this image is: a userland whose first process is systemd, and what a

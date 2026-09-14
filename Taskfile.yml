@@ -40,6 +40,9 @@ includes:
   kernel:
     taskfile: kernel/Taskfile.yml
     dir: '{{.ROOT_DIR}}'
+  e2fsprogs:
+    taskfile: e2fsprogs/Taskfile.yml
+    dir: '{{.ROOT_DIR}}'
   image:
     taskfile: image/Taskfile.yml
     dir: '{{.ROOT_DIR}}'
@@ -87,7 +90,9 @@ vars:
   QEMU_CACHE_TO: '{{.QEMU_CACHE_TO | default (printf "type=local,dest=%s/qemu,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
   KERNEL_CACHE_FROM: '{{.KERNEL_CACHE_FROM | default (printf "type=local,src=%s/kernel" .BUILDKIT_CACHE_DIR)}}'
   KERNEL_CACHE_TO: '{{.KERNEL_CACHE_TO | default (printf "type=local,dest=%s/kernel,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
-  # The container that builds the base image. Small — mkosi, e2fsprogs, qemu-utils — but it
+  E2FSPROGS_CACHE_FROM: '{{.E2FSPROGS_CACHE_FROM | default (printf "type=local,src=%s/e2fsprogs" .BUILDKIT_CACHE_DIR)}}'
+  E2FSPROGS_CACHE_TO: '{{.E2FSPROGS_CACHE_TO | default (printf "type=local,dest=%s/e2fsprogs,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
+  # The container that builds the base image. Small — mkosi, qemu-utils — but it
   # was the one buildx invocation here with no cache at all, so every CI run reinstalled it
   # from the archive before any image work started.
   IMAGE_CACHE_FROM: '{{.IMAGE_CACHE_FROM | default (printf "type=local,src=%s/image" .BUILDKIT_CACHE_DIR)}}'
@@ -119,10 +124,12 @@ tasks:
       - task --list
 
   build:
-    desc: Build QEMU, the guest kernel, the base image and the tools into _output/
+    desc: Build QEMU, the guest kernel, e2fsprogs, the base image and the tools into _output/
     cmds:
       - task: qemu:build
       - task: kernel:build
+      # Before the image, which is made with them.
+      - task: e2fsprogs:build
       - task: image:build
       - task: tools
       - cmd: echo "✓ build complete — {{.OUTPUT_ABS}}/"
@@ -153,7 +160,7 @@ tasks:
   boot:logind:
     desc: >-
       Check first SSH login, reconnect, user services and logout in a disposable guest.
-      Needs a built release and debugfs; uses KVM when available, otherwise TCG.
+      Needs a built release; uses KVM when available, otherwise TCG.
       The image does not start logind at boot, so this checks the thing that makes that
       safe: that the first login activates it and gets a real session. SPIN_LOGIND_NO_SEATS=1
       removes the drop-in that allows it and is expected to fail, not to measure anything.

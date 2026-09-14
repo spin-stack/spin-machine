@@ -56,6 +56,8 @@ One tarball:
 | `bin/qemu-system-x86_64` | static; KVM only — it refuses to emulate, on purpose |
 | `bin/qemu-system-x86_64-tcg` | for CI, which has no `/dev/kvm` |
 | `bin/qemu-img` | |
+| `bin/mkfs.ext4` | static e2fsprogs; read `e2fsprogs/mke2fs.conf` through `MKE2FS_CONFIG` |
+| `e2fsprogs/mke2fs.conf` | the defaults an ext4 made for this kernel is made with |
 | `qemu/{bios.bin,bios-256k.bin,pvh.bin,kvmvapic.bin,efi-virtio.rom}` | |
 | `kernel/vmlinux` | plus `kernel-config` |
 | `image/rootfs.qcow2` | read-only, 0444 |
@@ -302,6 +304,20 @@ directory over — which `kernel/Dockerfile` now asserts.
 **Partitionless**, not a bootable disk with an ESP and a GPT, which nothing here would read.
 mkosi produces the tree (`Format=directory`); `image/build.sh` runs `mkfs.ext4 -d` — no loop
 device, no mount — and wraps the result with `qemu-img convert`.
+
+### e2fsprogs
+
+`mkfs.ext4`, `e2fsck`, `dumpe2fs` and `debugfs`, **statically linked** like QEMU, from a
+pinned upstream tarball, together with the `mke2fs.conf` from the same tarball. What an ext4
+is made with — its features, block and inode sizes — is what the `mke2fs` that made it and
+its configuration file default to, so the same command line on two distributions makes two
+filesystems. The base image is made and checked with these and not the build container's,
+which carries no e2fsprogs; a release ships `mkfs.ext4` and its configuration, for anything
+else that makes a filesystem this kernel mounts. Set `MKE2FS_CONFIG` to the shipped file:
+the binary alone reads the host's `/etc/mke2fs.conf`.
+
+The base image reserves no blocks for root (`-m 0`). The reservation is a proportion, so a
+filesystem grown from the image onto a larger disk would keep 5% of the larger size.
 
 #### The two traps
 

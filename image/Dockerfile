@@ -24,8 +24,13 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
 
 # What mkosi itself runs: apt and dpkg to assemble the tree, ubuntu-keyring for the archive
 # it comes from (gpgv, which checks the signatures, arrives with apt). curl fetches mkosi
-# itself, below. e2fsprogs turns the tree into a filesystem with no loop device
-# (mkfs.ext4 -d) and reads it back to check it (debugfs, e2fsck); qemu-utils wraps it.
+# itself, below. qemu-utils wraps the filesystem in a qcow2.
+#
+# No e2fsprogs. The filesystem is made and checked with the static e2fsprogs this repository
+# builds (e2fsprogs/Dockerfile), which image/build.sh takes from the mounted _output: an ext4's
+# features are what the mke2fs that made it defaults to, and that is version- and
+# configuration-sensitive in exactly the direction that matters, the kernel reading it. Left
+# installed, a build missing the pinned tools would quietly use these.
 #
 # qemu-utils and not this repository's own qemu-img: the image build would otherwise depend
 # on the QEMU build, which is tens of minutes of compiling to write one qcow2 header. The
@@ -39,7 +44,6 @@ RUN --mount=type=cache,sharing=locked,id=image-aptlib,target=/var/lib/apt \
         apt \
         dpkg \
         ca-certificates \
-        e2fsprogs \
         qemu-utils \
         python3 \
         xz-utils \

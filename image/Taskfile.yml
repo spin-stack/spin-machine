@@ -24,7 +24,7 @@ tasks:
           {{.IMAGE_BUILDER_TAG}}
 
   builder:
-    desc: Build the container that builds the base image (mkosi, e2fsprogs, qemu-utils).
+    desc: Build the container that builds the base image (mkosi, qemu-utils).
     cmds:
       - |
         docker buildx build \

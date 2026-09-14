@@ -19,6 +19,15 @@ almost entirely other people's software under other people's licences:
       (Zlib), liburing (LGPL-2.1-or-later OR MIT), libaio (LGPL-2.1-or-later)
       and musl (MIT).
 
+  mkfs.ext4, e2fsprogs/mke2fs.conf
+      e2fsprogs: the programs GPL-2.0-only, lib/ext2fs and lib/e2p
+      LGPL-2.0-only, lib/uuid BSD-3-Clause, lib/et and lib/ss MIT. Statically
+      linked against libarchive (BSD-2-Clause) and what libarchive is built
+      with, as its pkg-config names them: libacl (LGPL-2.1-or-later), expat
+      (MIT), zstd (BSD-3-Clause OR GPL-2.0-only), lz4 (BSD-2-Clause), bzip2
+      (bzip2-1.0.6), zlib (Zlib), liblzma (0BSD), OpenSSL's libcrypto
+      (Apache-2.0); and musl (MIT).
+
   bios.bin, bios-256k.bin, vgabios*.bin
       SeaBIOS, LGPL-3.0-or-later, shipped as part of QEMU.
 

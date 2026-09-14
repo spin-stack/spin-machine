@@ -10,15 +10,17 @@ name: Base image
 # created.
 
 on:
-# image/** and nothing else; see the note in qemu.yml.
+# image/** and e2fsprogs/**, which makes the filesystem; see the note in qemu.yml.
   push:
     branches: [main]
     paths:
       - image/**
+      - e2fsprogs/**
       - .github/workflows/image.yml
   pull_request:
     paths:
       - image/**
+      - e2fsprogs/**
       - .github/workflows/image.yml
   workflow_dispatch:
 
@@ -53,6 +55,14 @@ jobs:
       # of .debs, and saving and restoring that costs about what downloading it costs — so
       # it would buy minutes of cache traffic in exchange for minutes of archive traffic,
       # and a cache entry large enough to push others out of the repository's 10 GB.
+      # The image is made and checked with the static e2fsprogs this repository builds, not
+      # the build container's, and image/build.sh stops when it is not there.
+      - name: Build e2fsprogs
+        run: |
+          task e2fsprogs:build \
+            E2FSPROGS_CACHE_FROM=type=gha \
+            E2FSPROGS_CACHE_TO=type=gha,mode=max
+
       - name: Build the base image
         run: |
           task image:build \

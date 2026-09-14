@@ -26,13 +26,15 @@ KERNEL_VERSION="${KERNEL_VERSION:-$(sed -n 's/^ARG KERNEL_VERSION="\{0,1\}\([^"]
 # and the other was not.
 QEMU_SHA256="${QEMU_SHA256:-$(sed -n 's/^ARG QEMU_SHA256=//p' qemu/Dockerfile)}"
 KERNEL_SHA256="${KERNEL_SHA256:-$(sed -n 's/^ARG KERNEL_SHA256=//p' kernel/Dockerfile)}"
+E2FSPROGS_VERSION="${E2FSPROGS_VERSION:-$(sed -n 's/^ARG E2FSPROGS_VERSION=//p' e2fsprogs/Dockerfile)}"
+E2FSPROGS_SHA256="${E2FSPROGS_SHA256:-$(sed -n 's/^ARG E2FSPROGS_SHA256=//p' e2fsprogs/Dockerfile)}"
 
 RELEASE_NAME="spin-machine-${VERSION}-linux-${KERNEL_ARCH}"
 RELEASE_DIR="${OUTPUT_DIR}/release/${RELEASE_NAME}"
 SHARE="${RELEASE_DIR}/usr/share/spin-stack"
 
 rm -rf "${OUTPUT_DIR}/release"
-mkdir -p "${SHARE}/bin" "${SHARE}/qemu" "${SHARE}/kernel" "${SHARE}/image"
+mkdir -p "${SHARE}/bin" "${SHARE}/qemu" "${SHARE}/kernel" "${SHARE}/image" "${SHARE}/e2fsprogs"
 
 # Every artefact, and every one required. A release missing a piece is worse than no
 # release: it installs, and the thing it left out fails somewhere else — a VM that will not
@@ -62,6 +64,14 @@ for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
   require "${OUTPUT_DIR}/bin/${b}" "${SHARE}/bin/${b}" "the ${b} binary" 0755
 done
 
+echo "e2fsprogs:"
+# mkfs.ext4 and the configuration it reads, together: what an ext4 is made with is what the
+# binary and mke2fs.conf default to, and a release carrying one without the other pins half
+# of it. e2fsck, dumpe2fs and debugfs are built too and stay in _output: the image build and
+# the tests here use them, and nothing that takes a release does.
+require "${OUTPUT_DIR}/bin/mkfs.ext4" "${SHARE}/bin/mkfs.ext4" "the mkfs.ext4 binary" 0755
+require "${OUTPUT_DIR}/e2fsprogs/mke2fs.conf" "${SHARE}/e2fsprogs/mke2fs.conf" "mke2fs.conf"
+
 echo "Firmware:"
 # pvh.bin is how QEMU enters a PVH ELF kernel and there is no other boot path here;
 # efi-virtio.rom is the option ROM of the one NIC the build keeps, and a VM given a
@@ -87,6 +97,7 @@ require "${OUTPUT_DIR}/licenses.txt" "${SHARE}/licenses.txt" "the image's licenc
   echo "version=${VERSION}"
   echo "qemu_version=${QEMU_VERSION}"
   echo "kernel_version=${KERNEL_VERSION}"
+  echo "e2fsprogs_version=${E2FSPROGS_VERSION}"
   echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "qemu_sha256=$(sha256sum "${SHARE}/bin/qemu-system-x86_64" | cut -d' ' -f1)"
   echo "kernel_sha256=$(sha256sum "${SHARE}/kernel/vmlinux" | cut -d' ' -f1)"
@@ -113,7 +124,7 @@ Sources for the third-party software in this release.
 This release contains software under the GNU General Public License, the GNU Lesser
 General Public License and other licences; see NOTICE for what is under which. The
 complete corresponding source for the GPL and LGPL components is available as set out
-below. The statically linked libraries in the QEMU binaries are covered by the same offer,
+below. The statically linked libraries in the QEMU and e2fsprogs binaries are covered by the same offer,
 which satisfies section 6 of the LGPL by making a relinkable build reproducible from source.
 
 QEMU ${QEMU_VERSION}
@@ -124,6 +135,14 @@ QEMU ${QEMU_VERSION}
   source:   https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz
   sha256:   ${QEMU_SHA256}
   built by: qemu/Dockerfile, unpatched, with the configure flags in that file
+
+e2fsprogs ${E2FSPROGS_VERSION}
+  binary:   usr/share/spin-stack/bin/mkfs.ext4
+  config:   usr/share/spin-stack/e2fsprogs/mke2fs.conf, upstream's, from the same tarball
+  source:   https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
+  sha256:   ${E2FSPROGS_SHA256}
+  built by: e2fsprogs/Dockerfile, unpatched, statically linked against the Alpine libraries
+            named there; their sources are the Alpine package sources for that release
 
 Linux ${KERNEL_VERSION}
   binary:   usr/share/spin-stack/kernel/vmlinux

@@ -1,0 +1,40 @@
+version: '3'
+
+vars:
+  E2FSPROGS_VERSION:
+    sh: sed -n 's/^ARG E2FSPROGS_VERSION=//p' e2fsprogs/Dockerfile
+
+tasks:
+  build:
+    desc: "Build e2fsprogs statically: mkfs.ext4, e2fsck, dumpe2fs, debugfs and the mke2fs.conf they are made with."
+    cmds:
+      - rm -rf {{.OUTPUT_ABS}}/bin/mkfs.ext4 {{.OUTPUT_ABS}}/bin/e2fsck {{.OUTPUT_ABS}}/bin/dumpe2fs {{.OUTPUT_ABS}}/bin/debugfs {{.OUTPUT_ABS}}/e2fsprogs
+      - mkdir -p {{.OUTPUT_ABS}}
+      - |
+        docker buildx build \
+          --file e2fsprogs/Dockerfile \
+          --target extract \
+          --platform linux/amd64 \
+          --cache-from {{.E2FSPROGS_CACHE_FROM}} \
+          --cache-to {{.E2FSPROGS_CACHE_TO}} \
+          --build-arg E2FSPROGS_VERSION={{.E2FSPROGS_VERSION}} \
+          --output type=local,dest={{.OUTPUT_ABS}} \
+          .
+      - task: verify
+
+  verify:
+    desc: Assert the extracted tools are the pinned version and run on this host.
+    cmds:
+      - |
+        set -euo pipefail
+        for b in mkfs.ext4 e2fsck dumpe2fs debugfs; do
+          test -x {{.OUTPUT_ABS}}/bin/$b || {
+            echo "missing {{.OUTPUT_ABS}}/bin/$b — run: task e2fsprogs:build" >&2; exit 1; }
+        done
+        test -f {{.OUTPUT_ABS}}/e2fsprogs/mke2fs.conf || {
+          echo "missing {{.OUTPUT_ABS}}/e2fsprogs/mke2fs.conf — run: task e2fsprogs:build" >&2; exit 1; }
+        # The version the binary answers, not the one the Dockerfile says: a stale _output from
+        # an earlier pin passes every existence check above.
+        {{.OUTPUT_ABS}}/bin/mkfs.ext4 -V 2>&1 | grep -q "mke2fs {{.E2FSPROGS_VERSION}}" || {
+          echo "{{.OUTPUT_ABS}}/bin/mkfs.ext4 is not e2fsprogs {{.E2FSPROGS_VERSION}}: $({{.OUTPUT_ABS}}/bin/mkfs.ext4 -V 2>&1 | head -1)" >&2; exit 1; }
+        echo "OK: e2fsprogs {{.E2FSPROGS_VERSION}}, static"

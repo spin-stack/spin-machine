@@ -36,9 +36,12 @@ func TestLogindSessions(t *testing.T) {
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "rootfs.raw")
 	mustRun(t, filepath.Join(out, "bin/qemu-img"), "convert", "-f", "qcow2", "-O", "raw", base, raw)
+	// The debugfs the image was made and checked with, not the host's: an older one refuses a
+	// filesystem with features it does not know rather than editing it.
+	debugfsBin := filepath.Join(out, "bin/debugfs")
 	debugfs := func(command string) string {
 		t.Helper()
-		output, err := exec.Command("debugfs", "-w", "-R", command, raw).CombinedOutput()
+		output, err := exec.Command(debugfsBin, "-w", "-R", command, raw).CombinedOutput()
 		if err != nil {
 			t.Fatalf("debugfs %s: %v\n%s", command, err, output)
 		}
@@ -53,7 +56,7 @@ func TestLogindSessions(t *testing.T) {
 		// debugfs returns success even if the write failed. Read the guest file
 		// back to ensure the experiment actually installed its input.
 		debugfs("write " + src + " " + path)
-		got, err := exec.Command("debugfs", "-R", "cat "+path, raw).Output()
+		got, err := exec.Command(debugfsBin, "-R", "cat "+path, raw).Output()
 		if err != nil || string(got) != content {
 			t.Fatalf("guest file %s differs from its input: %v", path, err)
 		}
