@@ -150,14 +150,35 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 # because a /dev node depends on probe order. A random UUID would be one more thing that
 # changes the image's checksum for no reason anyone could name.
 #
-# -O ^has_journal: this file is opened read-only by every VM for its whole life. A journal
-# is megabytes describing writes that cannot happen. The container's writes go to its own
-# qcow2 overlay, which is a different file with a different filesystem on it.
+# A journal, of 64 MiB. This file is never written — every VM reads it through an overlay of
+# its own — but the filesystem in it is: an overlay holds this same ext4, mounted read-write
+# and grown onto the disk the overlay was made at. A copy of that overlay taken while the guest
+# writes, or the overlay of a machine that died, is a filesystem interrupted mid-update, and
+# without a journal nothing puts its metadata back together at the next mount. It was built
+# without one until 2026-09-14, and a copy taken seconds after a grow would not mount:
+# "structure needs cleaning", a corrupt group descriptor.
+#
+# Each overlay replays and writes its own journal; the blocks it writes land in that overlay,
+# like any other write, and the image under it stays clean for every VM. The build asserts it
+# is clean below: a journal needing recovery in the image could not be mounted from a
+# read-only drive at all, and every overlay would replay it separately.
+#
+# 64 MiB, stated rather than derived: mke2fs sizes a journal from the filesystem it makes,
+# which would give this image 16 MiB and the first sizing pass a different number than the
+# second. 64 MiB is what mke2fs gives an 11 GiB filesystem, the size a VM's disk is grown to in
+# practice (so do 3 and 4 GiB; 16 GiB gets 128), and the grow does not resize a journal. It
+# costs the image almost nothing, since mke2fs does not zero it — an empty 974 MiB filesystem
+# converts to 1540 KiB of qcow2 with it and 1220 KiB without — and an overlay at most 64 MiB,
+# once the guest has cycled through it (all measured 2026-09-14).
 mkbase() {
     rm -f /work/base.raw
-    "$bin/mkfs.ext4" -q -F -L "" -U clear -O ^has_journal -m 0 -b 4096 -E root_owner=0:0 \
-        -d "$tree" /work/base.raw "$1"
+    "$bin/mkfs.ext4" -q -F -L "" -U clear -J size=64 -m 0 -b 4096 -E root_owner=0:0 \
+        -d "$tree" /work/base.raw "${1}k"
 }
+# The size is given in KiB with its unit spelled. A bare number is KiB only until -b is on the
+# command line, after which mke2fs reads it as a count of blocks: adding -b 4096 made this image
+# a 4.08 GiB filesystem instead of a 974 MiB one, and v20260914.01 shipped it (the checks below
+# now compare the size made against the size asked).
 # used_kb is what the filesystem holds, metadata included: blocks less free blocks.
 used_kb() {
     "$bin/dumpe2fs" -h /work/base.raw 2>/dev/null | awk -F: '
@@ -184,10 +205,19 @@ mkbase "$size_kb"
 # VM that boots and finds nothing to run.
 echo "==> checking the filesystem"
 "$bin/e2fsck" -fn /work/base.raw
-# And that it is made the way it was asked to be. mke2fs takes -m and never says whether it
-# honoured it; the reservation is only visible on the filesystem.
-reserved=$("$bin/dumpe2fs" -h /work/base.raw 2>/dev/null | awk -F: '/^Reserved block count:/ { gsub(/ /, "", $2); print $2 }')
+# And that it is made the way it was asked to be. mke2fs takes a size, -m and -J and never says
+# how it read them; each is only visible on the filesystem.
+header=$("$bin/dumpe2fs" -h /work/base.raw 2>/dev/null)
+made_kb=$(awk -F: '/^Block count:/ { n = $2 } /^Block size:/ { bs = $2 } END { printf "%d\n", n * bs / 1024 }' <<<"$header")
+test "$made_kb" = "$size_kb" || { echo "ERROR: the filesystem is $made_kb KiB, and $size_kb KiB was asked for" >&2; exit 1; }
+reserved=$(awk -F: '/^Reserved block count:/ { gsub(/ /, "", $2); print $2 }' <<<"$header")
 test "$reserved" = 0 || { echo "ERROR: the filesystem reserves $reserved blocks for root, want 0" >&2; exit 1; }
+# The journal is there, at the size asked, and nothing is waiting in it: the image is shared by
+# every VM and mounted from a read-only drive, where a journal needing recovery cannot be replayed.
+grep -q '^Filesystem features:.* has_journal' <<<"$header" || { echo "ERROR: the filesystem has no journal" >&2; exit 1; }
+grep -q '^Filesystem features:.* needs_recovery' <<<"$header" && { echo "ERROR: the filesystem's journal needs recovery" >&2; exit 1; }
+grep -q '^Total journal size: *64M$' <<<"$header" || { echo "ERROR: the journal is not 64M: $(grep '^Total journal size' <<<"$header")" >&2; exit 1; }
+grep -q '^Filesystem state: *clean$' <<<"$header" || { echo "ERROR: the filesystem is not clean" >&2; exit 1; }
 
 # debugfs is asked and its *output* is read, not its exit status: `debugfs -R` exits 0
 # whether or not the request succeeded, printing "File not found by ext2_lookup" to stderr
