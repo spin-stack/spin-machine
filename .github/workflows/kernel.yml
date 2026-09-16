@@ -64,7 +64,7 @@ jobs:
           echo "config sha256: $(sha256sum _output/kernel/kernel-config | cut -d' ' -f1)"
 
       - name: Upload the kernel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vmlinux-${{ github.sha }}
           path: |
