@@ -130,13 +130,13 @@ func (c Cmdline) String() string {
 	// The tick stops when a CPU has nothing to do, which is what CONFIG_NO_HZ_IDLE
 	// is compiled in for.
 	//
-	// It used to be turned off here, on the grounds that a short-lived VM never
-	// amortises the tickless machinery's setup cost and that the timer interrupt
-	// it saves is cheap on a guest. Both halves were wrong when measured
-	// (2026-09-09). The interrupt is not cheap: a guest kernel at CONFIG_HZ=1000
+	// Turning it off here is the tempting change, on the grounds that a short-lived
+	// VM never amortises the tickless machinery's setup cost and that the timer
+	// interrupt it saves is cheap on a guest. Both halves are wrong, measured
+	// 2026-09-09. The interrupt is not cheap: a guest kernel at CONFIG_HZ=1000
 	// with the tick forced on burns 1.7% of a core per vCPU doing nothing at all,
 	// because every one of those thousand wakeups a second is a vmexit. And the
-	// setup cost it was buying back does not show: with the tick left alone, a
+	// setup cost it would buy back does not show: with the tick left alone, a
 	// machine's boot and a workspace's restore both measured what they did before
 	// — 821-853 ms to boot and build a template, 113-221 ms to a usable workspace,
 	// against 843-846 ms and 124-216 ms with nohz=off.

@@ -2,10 +2,10 @@
 
 // Package boot measures what a boot of this machine costs, from the host.
 //
-// It exists because the number this repository had been quoting was systemd's own
-// `Startup finished`, which begins counting when the kernel hands over. Exec'ing QEMU, the
-// firmware and loading the kernel are all before it; a login prompt is after it. Neither end
-// had ever been measured, and both are part of what an operator waits for.
+// It exists because the number a machine reports for itself — systemd's `Startup
+// finished` — begins counting when the kernel hands over. Exec'ing QEMU, the firmware and
+// loading the kernel are all before it; a login prompt is after it. Neither end is in that
+// number, and both are part of what an operator waits for.
 //
 // The package is split so that the part that can be wrong is testable without a VM: Watch
 // turns a stream of console bytes into phase timings, and Percentile turns a set of runs
@@ -91,8 +91,8 @@ const (
 	// the VMM is doing.
 	//
 	// None of that says the firmware is cheap, and it is not: its work comes after the
-	// banner, and it had never been measured until 2026-09-13. QEMU exec to the kernel's PVH
-	// entry is 43.9 and 45.1 ms, 40 boots in each of two runs, against 34.6 to the banner —
+	// banner. Measured 2026-09-13, QEMU exec to the kernel's PVH entry is 43.9 and 45.1 ms,
+	// 40 boots in each of two runs, against 34.6 to the banner —
 	// so SeaBIOS's POST (PCI enumeration, SMM and MTRR setup, the ACPI table loader, a scan of
 	// storage and input the machine does not have, then pvh.bin) is ~10 ms. Two ways of
 	// spending less on it, and what each came to:
@@ -127,8 +127,8 @@ const (
 	// PID1 is the kernel handing over. The kernel must be printing at loglevel 7 for this
 	// to appear at all, so it is absent from a quiet boot rather than zero.
 	PID1
-	// Started is systemd's `Startup finished`, the number this repository used to quote in
-	// full. Kept so the old number stays comparable to the new ones.
+	// Started is systemd's `Startup finished`: the number the machine reports for itself,
+	// and the one most projects quote. Kept so these timings stay comparable to it.
 	Started
 	// Usable is a login prompt. It is the only one of these that is not the machine making
 	// a claim about itself, and it is the one an operator is actually waiting for.

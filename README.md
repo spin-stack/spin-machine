@@ -69,9 +69,9 @@ One tarball:
 
 `task build` writes that same tree into `_output/`, byte for byte the layout above, and
 `machine.Open` reads either. There is one layout: nothing rearranges the files on the way
-out of a build, into a tarball or into a consumer, because the three used to differ and
-what fell out of the translation between them was a path that existed and held the
-previous release's kernel.
+out of a build, into a tarball or into a consumer. Let the three differ and what falls out
+of the translation between them is a path that exists and holds the previous release's
+kernel.
 
 ```go
 rel, err := machine.Open("/usr/share/spin-stack")  // says which file is missing, if one is
@@ -174,10 +174,9 @@ It boots this QEMU and this kernel over a throwaway qcow2 overlay on `rootfs.qco
 
 It boots with no initrd at all: `root=/dev/vda rw init=/sbin/init`, which the kernel can
 serve because virtio-blk and ext4 are built in and `image/build.sh` writes a partitionless
-filesystem. There was a debug initramfs here until 2026-09-10 — static Go that mounted the
-API filesystems, found the root disk and exec'd — and it was a second init, doing what the
-init a consumer brings already does. What removed the need for it was turning `systemd-udevd`
-back on.
+filesystem. There is no debug initramfs: one that mounted the API filesystems, found the
+root disk and exec'd would be a second init, doing what the init a consumer brings already
+does. What removes the need for one is `systemd-udevd` being on.
 
 Three things the shell has found, all of them true of the image and none of them visible
 from outside:
@@ -190,12 +189,12 @@ from outside:
   its own with the dependency removed. Masking bought nothing measurable and cost a
   ten-second `dev-ttyS0.device` timeout on every boot that had no initrd; the numbers are in
   `optimize-systemd.sh`, where the decision is.
-- **`ssh.service` used to fail five times and give up.** The image ships no host keys — they
-  are identity — and the distribution's `sshd-keygen.service` carries
-  `ConditionFirstBoot=yes`, so it did not run before `sshd` was asked to validate a
-  configuration with no keys. Fixed by generating them at boot instead
-  (`spin-machine-sshd-keygen.service`): every boot here *is* a first boot, since the root
-  filesystem is a fresh overlay, so the keys live exactly as long as the VM does.
+- **`sshd` needs host keys generated at boot.** The image ships none — they are identity —
+  and the distribution's `sshd-keygen.service` carries `ConditionFirstBoot=yes`, so it does
+  not run before `sshd` is asked to validate a configuration with no keys, and
+  `ssh.service` fails five times and gives up. `spin-machine-sshd-keygen.service` generates
+  them instead: every boot here *is* a first boot, since the root filesystem is a fresh
+  overlay, so the keys live exactly as long as the VM does.
 - **Two thirds of the boot was systemd asking the console questions.** The kernel execs
   `/sbin/init` at 59 ms and systemd's first log line arrived at 852, with nothing running in
   between. It was a terminfo query and a terminal reset, 334 ms of timeout each, waiting for
@@ -283,9 +282,9 @@ which is a different fingerprint. It moves on purpose, not when Debian publishes
 release.
 
 And the build is reproducible: two builds from the same inputs produce the same `vmlinux`,
-byte for byte. It was not until 2026-09-14: bookworm's pahole 1.24 encoded `.BTF` with make's
-`-j` in whatever order its threads finished, and every release had a new fingerprint whether
-or not the kernel had changed. trixie's 1.30 is deterministic with `-j`.
+byte for byte. That needs trixie's pahole 1.30, which is deterministic with `-j`. Bookworm's
+1.24 encodes `.BTF` in whatever order make's `-j` threads finish, which gives every release a
+new fingerprint whether or not the kernel changed.
 
 ### Base image
 

@@ -13,15 +13,15 @@
 # systemd gave up.
 #
 # Why this and not the distribution's serial-getty@.service: it carries
-# `BindsTo=dev-%i.device`, a .device unit exists only if udev announced it, and this image
-# used to mask systemd-udevd. Enabling serial-getty then got
+# `BindsTo=dev-%i.device`, and a .device unit exists only if udev announced it. With
+# systemd-udevd masked, enabling serial-getty gets
 # `[DEPEND] Dependency failed for serial-getty@ttyS0.service`, and a drop-in clearing
-# BindsTo did not lift it either. This unit has no device dependency to fail.
+# BindsTo does not lift it either. This unit has no device dependency to fail.
 #
-# THAT REASON EXPIRED ON 2026-09-10 and left a hole this file is the wrong place to close.
-# udev runs now, so serial-getty@ttyS0 works — and systemd-getty-generator instantiates it
+# THAT REASON NO LONGER HOLDS, and it leaves a hole this file is the wrong place to close.
+# udev runs, so serial-getty@ttyS0 works — and systemd-getty-generator instantiates it
 # on its own from console=ttyS0, with nothing in optimize-systemd.sh disabling that
-# generator. So the split this file is built around no longer exists: production gets a
+# generator. So the split this file is built around does not exist: production gets a
 # login prompt on the console it prints its kernel log to, which is what the paragraph above
 # says production must not have, and it gets it without anybody enabling anything.
 #

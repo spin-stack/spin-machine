@@ -315,9 +315,9 @@ func TestFingerprintCoversTheDevicesPresentAtRestore(t *testing.T) {
 	// A NIC is on the command line, so it is present when state is loaded and a machine
 	// with one cannot restore from a template frozen without one.
 	//
-	// This case said the opposite until 2026-09-09 — that a NIC must not change the
+	// The opposite is the tempting assertion — that a NIC must not change the
 	// fingerprint, because "it is cold-plugged after a restore, so a VM would never find
-	// its template". That was true of disks and asserted of both.
+	// its template". That is true of disks, and does not carry across to NICs.
 	withNIC := base
 	withNIC.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
 	got, err := withNIC.Fingerprint()

@@ -32,8 +32,7 @@ sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_con
 #
 # Without this line the control plane signs five-minute certificates that nothing on earth
 # accepts, and every login quietly falls back to a long-lived key in authorized_keys that
-# nothing ever rewrites. That was the state of things until 2026-09-11, and it was invisible
-# because logins kept working.
+# nothing ever rewrites. It is invisible when it happens, because logins keep working.
 mkdir -p /etc/ssh/sshd_config.d
 cat <<'EOF' > /etc/ssh/sshd_config.d/10-spin-user-ca.conf
 TrustedUserCAKeys /etc/ssh/spin_user_ca.pub
@@ -116,8 +115,8 @@ esac
 MOTD
 chmod 0755 /etc/update-motd.d/00-spin-boot
 
-# pam_motd stays enabled, including for ssh, where it had been commented out. There is
-# something worth printing now.
+# pam_motd stays enabled, including for ssh, where the distribution ships it commented
+# out. There is something worth printing.
 sed -i 's/^#\(session.*pam_motd.so\)/\1/' /etc/pam.d/sshd
 
 

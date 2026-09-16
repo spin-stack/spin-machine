@@ -37,10 +37,6 @@ MASK_UNITS=(
     #     spin-machine-console.service, and the decision left open there.
     #   * A hot-plugged CPU or memory block never produced an add event, so nothing could
     #     act on one — see 40-spin-hotadd.rules, which is the thing that acts on it.
-    #
-    # The numbers here used to compare a boot with the debug initramfs against one without.
-    # That initramfs was deleted the same day, so the comparison it made cannot be re-run;
-    # what is above is the one the harness measures now.
 
     # Time sync - handled by host
     systemd-timesyncd.service
@@ -139,10 +135,6 @@ MASK_UNITS=(
     # tmpfiles-setup (19ms + 13ms + 11ms). The directories it would create are already
     # there: /tmp is in the image at mode 1777 (image/build.sh makes it), /run is a tmpfs
     # systemd mounts itself before any unit runs, and /dev is devtmpfs with udev on top.
-    #
-    # The reason recorded here until 2026-09-10 was that an init outside this repository
-    # created them, which was both wrong — it named a consumer, and this machine now boots
-    # root=/dev/vda with no initrd at all — and unfalsifiable from inside this tree.
     systemd-tmpfiles-setup.service
     systemd-tmpfiles-setup-dev.service
     systemd-tmpfiles-setup-dev-early.service

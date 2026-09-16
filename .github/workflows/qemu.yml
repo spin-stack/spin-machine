@@ -9,9 +9,9 @@ name: QEMU
 
 on:
 # qemu/** and nothing else. The version pin is the ARG in qemu/Dockerfile, so a bump is a
-# change under qemu/ and fires this; the root Taskfile holds only how many jobs to compile
-# with and which cache to use, and used to be listed here — which meant every edit to it
-# rebuilt QEMU, the kernel and the base image for nothing.
+# change under qemu/ and fires this. The root Taskfile is deliberately not listed: it holds
+# only how many jobs to compile with and which cache to use, so listing it would rebuild
+# QEMU, the kernel and the base image for an edit that cannot change any of them.
   push:
     branches: [main]
     paths:

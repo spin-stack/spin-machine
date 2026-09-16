@@ -89,12 +89,12 @@ tasks:
         # there is nothing for one to do: mounting root is the kernel's job here and
         # systemd mounts the rest.
         #
-        # This used to boot a debug initramfs, for two reasons that were both real and are
+        # Booting a debug initramfs here is a second init, and the two reasons for one are
         # both gone. It mounted /proc, /sys, devtmpfs and devpts, which systemd does itself
         # and only a bare `init=/bin/sh` ever needed. And it wrote a symlink enabling a
-        # serial login, because this image masked systemd-udevd, so no dev-ttyS0.device
-        # unit existed and serial-getty@ttyS0's BindsTo could never be satisfied. udev
-        # runs now; the getty starts on its own. Measured 2026-09-10: 207ms to a login
+        # serial login, which was needed while this image masked systemd-udevd: no
+        # dev-ttyS0.device unit existed and serial-getty@ttyS0's BindsTo could never be
+        # satisfied. udev runs; the getty starts on its own. Measured 2026-09-10: 207ms to a login
         # prompt this way, against 163ms through the initramfs — 44ms for a second init
         # doing what the first one does.
         #
