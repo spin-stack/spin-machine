@@ -58,6 +58,24 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
+      # What makes `--cache-to type=gha` do anything at all.
+      #
+      # BuildKit writes to GitHub's cache service with $ACTIONS_RUNTIME_TOKEN and
+      # $ACTIONS_RESULTS_URL, and those are handed to JavaScript actions, not to `run:`
+      # steps. Docker's documentation is explicit — "If you invoke the `docker buildx`
+      # command manually from an inline step, then the variables must be manually exposed"
+      # — and names this action for it. Every build here runs through `task`, which is a
+      # `run:` step.
+      #
+      # Without it the flags are accepted, nothing is stored, and nothing says so: the
+      # builds pass and take the cold time, every run. That failure is invisible in a log.
+      # Where it shows is `gh api repos/{owner}/{repo}/actions/cache/usage` — a repository
+      # that builds QEMU and a kernel and reports a handful of megabytes is caching neither.
+      #
+      # Remove this step and nothing breaks; everything just gets slow again.
+      - name: Expose the Actions cache to buildx
+        uses: crazy-max/ghaction-github-runtime@v4
+
       # The pinned version comes from the Taskfile, never from a literal here: two places
       # to bump is how CI and production end up on different QEMUs.
       #
@@ -73,10 +91,7 @@ jobs:
 
       - name: Build QEMU and verify what came out
         run: |
-          task qemu:build \
-            QEMU_CACHE_FROM=type=gha \
-            QEMU_CACHE_TO=type=gha,mode=max \
-            QEMU_JOBS=4
+          CACHE_BACKEND=gha task qemu:build QEMU_JOBS=4
 
       # vhost-vsock is a kernel module, and the machine's vsock device cannot be created
       # without /dev/vhost-vsock. The runner has the node and gives the user no access to
@@ -145,6 +160,12 @@ jobs:
       # Two tags: the QEMU version, which is what everything pins, and the commit, which is
       # what makes a specific build reachable when the version tag has moved because a flag
       # changed.
+      #
+      # Two --cache-from and one --cache-to, which is not symmetry gone wrong. This target
+      # sits on top of the builder stage the step above just compiled, so it reads the
+      # `qemu` scope to get it and writes only its own — sharing one scope would have the
+      # two builds overwriting each other's cache, which is the default behaviour that made
+      # every scope in this repository distinct in the first place.
       - name: Publish the runtime image
         if: github.event_name != 'pull_request'
         run: |
@@ -152,8 +173,9 @@ jobs:
             --file qemu/Dockerfile \
             --target runtime \
             --platform linux/amd64 \
-            --cache-from type=gha \
-            --cache-to type=gha,mode=max \
+            --cache-from type=gha,scope=qemu \
+            --cache-from type=gha,scope=qemu-image \
+            --cache-to type=gha,scope=qemu-image,mode=max \
             --build-arg QEMU_VERSION=${{ steps.qemu.outputs.version }} \
             --build-arg JOBS=4 \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \

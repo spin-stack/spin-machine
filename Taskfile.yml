@@ -97,21 +97,38 @@ vars:
   KERNEL_ARCH: '{{.KERNEL_ARCH | default "x86_64"}}'
   KERNEL_NPROC: '{{.KERNEL_NPROC | default 8}}'
 
-  # BuildKit cache backends. Local by default; CI overrides them with `type=gha` so the
-  # build is not duplicated in a workflow file — the Dockerfiles and the flags stay in one
-  # place, which is the rule these files exist for.
+  # Where BuildKit reads and writes its cache: a directory under the repository for a
+  # developer, GitHub's cache service in CI. One name to switch — `CACHE_BACKEND=gha` — and
+  # every scope below is decided here, next to the builds they belong to, rather than as
+  # eight cache strings pasted into workflow files.
+  #
+  # The scopes are why this is a var and not a string in a workflow. `type=gha` defaults to
+  # the scope `buildkit`, and Docker's own documentation says what that means for a
+  # repository with more than one build: "each build will overwrite the cache of the
+  # previous, leaving only the final cache." Four builds sharing that default is four builds
+  # each destroying the last one's cache and then missing on the next run. The names have to
+  # be distinct, and — this is the part that is easy to get wrong — they have to be the
+  # *same* names in the per-artefact workflows and in the release, or a release warms
+  # nothing that the lane on main already paid for.
+  #
+  # `gha` needs one thing this file cannot give it — see the note in
+  # .github/workflows/qemu.yml. The variables that authorise a write to the cache service
+  # are not in a plain `run:` step's environment, and without them `--cache-to type=gha` is
+  # accepted, stores nothing, and says nothing.
+  CACHE_BACKEND: '{{.CACHE_BACKEND | default "local"}}'
   BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default (printf "%s/.cache/buildkit" .ROOT_DIR)}}'
-  QEMU_CACHE_FROM: '{{.QEMU_CACHE_FROM | default (printf "type=local,src=%s/qemu" .BUILDKIT_CACHE_DIR)}}'
-  QEMU_CACHE_TO: '{{.QEMU_CACHE_TO | default (printf "type=local,dest=%s/qemu,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
-  KERNEL_CACHE_FROM: '{{.KERNEL_CACHE_FROM | default (printf "type=local,src=%s/kernel" .BUILDKIT_CACHE_DIR)}}'
-  KERNEL_CACHE_TO: '{{.KERNEL_CACHE_TO | default (printf "type=local,dest=%s/kernel,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
-  E2FSPROGS_CACHE_FROM: '{{.E2FSPROGS_CACHE_FROM | default (printf "type=local,src=%s/e2fsprogs" .BUILDKIT_CACHE_DIR)}}'
-  E2FSPROGS_CACHE_TO: '{{.E2FSPROGS_CACHE_TO | default (printf "type=local,dest=%s/e2fsprogs,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
-  # The container that builds the base image. Small — mkosi, qemu-utils — but it
-  # was the one buildx invocation here with no cache at all, so every CI run reinstalled it
-  # from the archive before any image work started.
-  IMAGE_CACHE_FROM: '{{.IMAGE_CACHE_FROM | default (printf "type=local,src=%s/image" .BUILDKIT_CACHE_DIR)}}'
-  IMAGE_CACHE_TO: '{{.IMAGE_CACHE_TO | default (printf "type=local,dest=%s/image,mode=max,compression=zstd" .BUILDKIT_CACHE_DIR)}}'
+
+  QEMU_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/qemu{{end}}'
+  QEMU_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qemu,mode=max,compression=zstd{{end}}'
+  KERNEL_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kernel{{end}}'
+  KERNEL_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kernel,mode=max,compression=zstd{{end}}'
+  E2FSPROGS_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/e2fsprogs{{end}}'
+  E2FSPROGS_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/e2fsprogs,mode=max,compression=zstd{{end}}'
+  # The container that builds the base image. Small — mkosi, qemu-utils — and cached like
+  # the rest: uncached, every CI run reinstalls it from the archive before any image work
+  # starts.
+  IMAGE_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=image{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/image{{end}}'
+  IMAGE_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=image,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/image,mode=max,compression=zstd{{end}}'
 
   # mkosi's package cache, which is not a BuildKit cache because mkosi does not run under
   # BuildKit (see image/Dockerfile). A rebuild of the base image is ~1.5 GB of apt.

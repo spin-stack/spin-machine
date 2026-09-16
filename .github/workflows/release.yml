@@ -63,6 +63,11 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
+      # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
+      # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.
+      - name: Expose the Actions cache to buildx
+        uses: crazy-max/ghaction-github-runtime@v4
+
       # Three sources, in order: what the caller typed, the tag that triggered this, or a
       # new one for today. The generated form is deliberately not `date +%s` or a commit
       # hash — it has to be readable, sortable, and the same shape as one typed by hand.
@@ -107,14 +112,15 @@ jobs:
       - name: Build the release
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          QEMU_CACHE_FROM: type=gha
-          QEMU_CACHE_TO: type=gha,mode=max
-          KERNEL_CACHE_FROM: type=gha
-          KERNEL_CACHE_TO: type=gha,mode=max
-          E2FSPROGS_CACHE_FROM: type=gha
-          E2FSPROGS_CACHE_TO: type=gha,mode=max
-          IMAGE_CACHE_FROM: type=gha
-          IMAGE_CACHE_TO: type=gha,mode=max
+          # The same scopes the per-artefact workflows write on main, decided in
+          # Taskfile.yml. That is the whole point of them being named there: a release
+          # reads what the lane on main already paid to compile, instead of starting cold
+          # because a workflow file spelled the scope differently.
+          #
+          # This run's own writes are mostly wasted — it is triggered by a tag, and a cache
+          # written under one tag ref cannot be read from another tag or from a branch. The
+          # reads are what matter, and those come from the default branch.
+          CACHE_BACKEND: gha
         run: task release QEMU_JOBS=4 KERNEL_NPROC=4
 
       # The machine's identity, and what it costs whoever holds templates.
