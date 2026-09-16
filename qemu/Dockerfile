@@ -392,9 +392,9 @@ RUN for b in /opt/qemu/bin/qemu-system-x86_64 /opt/qemu/bin/qemu-img \
 #
 # Two binaries and five files on a base that exists only so a human can open a shell in it
 # and look around. There are no libraries to install: that is the whole difference static
-# linking makes here. This stage used to be an Ubuntu with a hand-written apt list that had
-# to be kept in step with what the builder linked against, and the way it was found to be
-# wrong was a CI run.
+# linking makes here. An Ubuntu base with a hand-written apt list would have to be kept in
+# step with what the builder links against, and the way that is found to be wrong is a CI
+# run.
 FROM alpine:${ALPINE_VERSION} AS runtime
 
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64

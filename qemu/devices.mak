@@ -11,14 +11,14 @@
 # upstream shipped depends on whether some earlier build happened to configure. This file
 # is copied in and read on every build.
 #
-# ## An allowlist, since 2026-09-10
+# ## An allowlist, not a denylist
 #
-# This file used to include upstream's default.mak and switch off about forty symbols. That
-# is a denylist, and it loses by construction: it can only remove what somebody thought to
+# The obvious alternative is to include upstream's default.mak and switch off some forty
+# symbols. That is a denylist, and it loses by construction: it can only remove what somebody thought to
 # name, and every QEMU release adds devices that arrive switched on. The binary it produced
-# could instantiate ich9-ahci, ide-hd, sb16, isa-fdc, isa-parallel, VGA, virtio-vga,
-# vfio-pci, intel-iommu and amd-iommu — audited on the shipped binary with `-device help`,
-# not read off this file.
+# binary it produces can instantiate ich9-ahci, ide-hd, sb16, isa-fdc, isa-parallel, VGA,
+# virtio-vga, vfio-pci, intel-iommu and amd-iommu — audited on a shipped binary with
+# `-device help`, not read off a file like this one.
 #
 # Now the build is configured `--without-default-devices`, which makes meson run
 # scripts/minikconf.py with `--allnoconfig` instead of `--defconfig`: nothing is on unless

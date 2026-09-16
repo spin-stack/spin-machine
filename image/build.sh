@@ -154,8 +154,8 @@ echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 # its own — but the filesystem in it is: an overlay holds this same ext4, mounted read-write
 # and grown onto the disk the overlay was made at. A copy of that overlay taken while the guest
 # writes, or the overlay of a machine that died, is a filesystem interrupted mid-update, and
-# without a journal nothing puts its metadata back together at the next mount. It was built
-# without one until 2026-09-14, and a copy taken seconds after a grow would not mount:
+# without a journal nothing puts its metadata back together at the next mount. Measured
+# 2026-09-14: built without one, a copy taken seconds after a grow does not mount —
 # "structure needs cleaning", a corrupt group descriptor.
 #
 # Each overlay replays and writes its own journal; the blocks it writes land in that overlay,

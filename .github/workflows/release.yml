@@ -26,12 +26,12 @@ permissions:
   contents: write
   packages: write
 
-# One release at a time, across every ref. The group used to be per-ref, which serialised
-# two runs on the same tag and nothing else: a workflow_dispatch on main and a tag push are
-# different refs, so both counted the tags already taken today, both generated .01, and the
-# loser found out at `git tag` — after six hours of building. There is no reason to build
-# two releases at once, and the version is decided at the start of a run and pushed at the
-# end, so the window is the whole build.
+# One release at a time, across every ref, and not per-ref. Per-ref serialises two runs on
+# the same tag and nothing else: a workflow_dispatch on main and a tag push are different
+# refs, so both count the tags already taken today, both generate .01, and the loser finds
+# out at `git tag` — after six hours of building. The version is decided at the start of a
+# run and pushed at the end, so that window is the whole build, and there is no reason to
+# build two releases at once anyway.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -125,14 +125,15 @@ jobs:
 
       # The machine's identity, and what it costs whoever holds templates.
       #
-      # "why did every template in the fleet stop matching?" used to be answered by opening
-      # two release pages and comparing sixty-four hex digits by eye, which is a thing
-      # nobody does and therefore an answer nobody had. hack/fingerprint-diff fetches the
-      # previous release's machine.env and states the consequence in a sentence, at the top
-      # of the notes, where a consumer deciding whether to take this release reads it.
+      # The alternative to hack/fingerprint-diff is opening two release pages and comparing
+      # sixty-four hex digits by eye, which is a thing nobody does — so the answer to "why
+      # did every template in the fleet stop matching?" is one nobody has. The script
+      # fetches the previous release's machine.env and states the consequence in a sentence,
+      # at the top of the notes, where a consumer deciding whether to take this release
+      # reads it.
       #
       # It exits 0 on every verdict: a changed machine is a release this repository makes on
-      # purpose. The point is that it can no longer be made quietly.
+      # purpose. The point is not to prevent it but to keep it from being quiet.
       - name: What this release is, and what it breaks
         id: manifest
         env:

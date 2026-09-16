@@ -20,10 +20,10 @@
 # qemu/Dockerfile and nobody reads three hundred lines to change one flag.
 #
 # What is deliberately NOT here: the software that runs inside a guest. This repository
-# builds a machine and knows nothing about what boots on it, and there is no longer an
-# exception to that — the debug initramfs that used to be one was a second init, doing what
-# the init a consumer already brings does, and the machine boots straight into /sbin/init
-# without it.
+# builds a machine and knows nothing about what boots on it, and there is no exception to
+# that. A debug initramfs is the one that keeps being proposed: it is a second init, doing
+# what the init a consumer already brings does, and the machine boots straight into
+# /sbin/init without one.
 
 version: '3'
 
@@ -65,17 +65,16 @@ vars:
 
   # One version for all three artefacts. See the header.
   #
-  # --dirty, and it is the whole point of the line. This used to be --exact-match with a
-  # bare `git rev-parse --short HEAD` behind it, neither of which says anything about
-  # uncommitted changes — so `task release` on a tagged commit with edits in the tree
-  # produced spin-machine-v20260914.03-linux-x86_64.tar.gz with version=v20260914.03 in its
-  # manifest: the same name and the same declared identity as the release that was actually
-  # published, around different bytes. machine.env is how a host explains why its templates
-  # stopped matching, and that made it lie.
+  # --dirty, and it is the whole point of the line. Without it, `task release` on a tagged
+  # commit with edits in the tree produces spin-machine-v20260914.03-linux-x86_64.tar.gz
+  # with version=v20260914.03 in its manifest: the same name and the same declared identity
+  # as the release that was actually published, around different bytes. machine.env is how
+  # a host explains why its templates stopped matching, so it is the one file that must not
+  # be able to claim an identity the bytes do not have.
   #
-  # The fallback is --tags --always --dirty rather than a bare hash, which is what
-  # hack/release already defaulted to on its own: v20260914.03-1-g86d2386 says which release
-  # this is one commit past, where 86d2386 says nothing until somebody looks it up.
+  # The fallback is --tags --always --dirty rather than a bare hash, matching what
+  # hack/release defaults to on its own: v20260914.03-1-g86d2386 says which release this is
+  # one commit past, where 86d2386 says nothing until somebody looks it up.
   VERSION:
     sh: |
       echo "${VERSION:-$(git describe --tags --exact-match --dirty 2>/dev/null \

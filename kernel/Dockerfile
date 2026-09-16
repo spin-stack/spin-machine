@@ -340,10 +340,10 @@ EOT
 # ============================================
 #
 # The tree this stage writes is the release tree: kernel/vmlinux, at the path a release
-# carries it and the path machine.Release reads it from. It used to extract to the root and
-# let hack/release do the moving, which meant the same four files had one layout here, a
-# second in the tarball and a third wherever a consumer rearranged them into — with a
-# translation step between each pair, and each of those a place to be wrong.
+# carries it and the path machine.Release reads it from. Extracting to the root and letting
+# hack/release do the moving gives the same four files one layout here, a second in the
+# tarball and a third wherever a consumer rearranges them into — with a translation step
+# between each pair, and each of those a place to be wrong.
 FROM scratch AS kernel
 COPY --from=kernel-build /build/vmlinux /kernel/vmlinux
 COPY --from=kernel-build /build/kernel-config /kernel/kernel-config

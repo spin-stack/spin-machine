@@ -32,8 +32,8 @@ type variant struct {
 // implemented by systemd-debug-generator, which optimize-systemd.sh symlinks to /dev/null,
 // so it parses, reaches /proc/cmdline and does nothing: verified 2026-09-10 with
 // `systemd.mask=chrony.service` on the command line and `systemctl is-active chrony`
-// answering `active`. Everything this repository concluded from that parameter was concluded
-// from a boot in which nothing had been masked.
+// answering `active`. Anything concluded from that parameter is concluded from a boot in
+// which nothing was masked.
 var udevUnits = []string{
 	"systemd-udevd.service",
 	"systemd-udevd-control.socket",
