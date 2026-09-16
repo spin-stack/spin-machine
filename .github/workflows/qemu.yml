@@ -101,6 +101,23 @@ jobs:
       - name: Check the built QEMU accepts the machine's arguments
         run: task verify:args
 
+      # The other thing a changed QEMU binary is: a different machine. It is hashed by
+      # content into the fingerprint exactly as the kernel is, so a configure flag added
+      # here, or a device removed from devices.mak, stops every template in the fleet from
+      # matching. Compared against the last released machine.env and reported; never a
+      # failure, since changing the machine is a thing that gets done on purpose.
+      #
+      # The TCG binary is deliberately not compared. It is not part of a machine's identity
+      # and must never run a machine a KVM guest will later restore from.
+      - name: What this QEMU is, and what it breaks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          qemu=$(sha256sum _output/bin/qemu-system-x86_64 | cut -d' ' -f1)
+          echo "qemu sha256: ${qemu}"
+          hack/fingerprint-diff "qemu_sha256=${qemu}" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload the extracted binaries
         uses: actions/upload-artifact@v7
         with:

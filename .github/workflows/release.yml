@@ -26,8 +26,14 @@ permissions:
   contents: write
   packages: write
 
+# One release at a time, across every ref. The group used to be per-ref, which serialised
+# two runs on the same tag and nothing else: a workflow_dispatch on main and a tag push are
+# different refs, so both counted the tags already taken today, both generated .01, and the
+# loser found out at `git tag` — after six hours of building. There is no reason to build
+# two releases at once, and the version is decided at the start of a run and pushed at the
+# end, so the window is the whole build.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -111,27 +117,47 @@ jobs:
           IMAGE_CACHE_TO: type=gha,mode=max
         run: task release QEMU_JOBS=4 KERNEL_NPROC=4
 
-      # The machine's identity, in the log and in the release notes. These are the numbers
-      # that decide whether a template still matches, so "why did every template in the
-      # fleet stop matching?" is answered by diffing this against the previous release.
-      - name: What this release is
+      # The machine's identity, and what it costs whoever holds templates.
+      #
+      # "why did every template in the fleet stop matching?" used to be answered by opening
+      # two release pages and comparing sixty-four hex digits by eye, which is a thing
+      # nobody does and therefore an answer nobody had. hack/fingerprint-diff fetches the
+      # previous release's machine.env and states the consequence in a sentence, at the top
+      # of the notes, where a consumer deciding whether to take this release reads it.
+      #
+      # It exits 0 on every verdict: a changed machine is a release this repository makes on
+      # purpose. The point is that it can no longer be made quietly.
+      - name: What this release is, and what it breaks
         id: manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          name="spin-machine-${{ steps.version.outputs.version }}-linux-x86_64"
+          name="spin-machine-${VERSION}-linux-x86_64"
           manifest="_output/release/${name}/usr/share/spin-stack/machine.env"
           cat "$manifest"
+
+          # EXCLUDE so that a re-run of a version that already published compares against
+          # its predecessor rather than against itself, which would report every release as
+          # breaking nothing.
+          EXCLUDE="$VERSION" hack/fingerprint-diff \
+            "qemu_sha256=$(sed -n 's/^qemu_sha256=//p' "$manifest")" \
+            "kernel_sha256=$(sed -n 's/^kernel_sha256=//p' "$manifest")" \
+            "image_sha256=$(sed -n 's/^image_sha256=//p' "$manifest")" \
+            > /tmp/verdict.md
+
+          cat /tmp/verdict.md
           {
-            echo 'notes<<EOF'
-            echo 'The machine as it stood on this date. These checksums decide which'
-            echo 'templates a host may restore from: a release in which any of them moved'
-            echo 'is a different machine, and every template taken against the previous'
-            echo 'one stops matching.'
+            echo 'notes<<RELEASE_NOTES_EOF'
+            cat /tmp/verdict.md
+            echo
+            echo 'The machine as it stood on this date.'
             echo
             echo '```'
             cat "$manifest"
             echo '```'
-            echo EOF
+            echo RELEASE_NOTES_EOF
           } >> "$GITHUB_OUTPUT"
 
       # Tagged here when the run generated its own version, so that the next run's count
@@ -149,6 +175,10 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
           body: ${{ steps.manifest.outputs.notes }}
+          # machine.env is published on its own, and not only inside the tarball, so the
+          # next release can read it back in a few hundred bytes and say whether it
+          # invalidates the templates taken against this one.
           files: |
             _output/release/*.tar.gz
             _output/release/*.tar.gz.sha256
+            _output/release/machine.env

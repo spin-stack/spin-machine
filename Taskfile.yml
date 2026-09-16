@@ -64,8 +64,23 @@ vars:
     sh: realpath -m "{{.OUTPUT_DIR}}"
 
   # One version for all three artefacts. See the header.
+  #
+  # --dirty, and it is the whole point of the line. This used to be --exact-match with a
+  # bare `git rev-parse --short HEAD` behind it, neither of which says anything about
+  # uncommitted changes — so `task release` on a tagged commit with edits in the tree
+  # produced spin-machine-v20260914.03-linux-x86_64.tar.gz with version=v20260914.03 in its
+  # manifest: the same name and the same declared identity as the release that was actually
+  # published, around different bytes. machine.env is how a host explains why its templates
+  # stopped matching, and that made it lie.
+  #
+  # The fallback is --tags --always --dirty rather than a bare hash, which is what
+  # hack/release already defaulted to on its own: v20260914.03-1-g86d2386 says which release
+  # this is one commit past, where 86d2386 says nothing until somebody looks it up.
   VERSION:
-    sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
+    sh: |
+      echo "${VERSION:-$(git describe --tags --exact-match --dirty 2>/dev/null \
+        || git describe --tags --always --dirty 2>/dev/null \
+        || echo dev)}"
 
   # The version pins are NOT here. Each lives once, in the Dockerfile that builds the
   # thing, and the Taskfile beside it reads that — see qemu/Taskfile.yml.
@@ -200,7 +215,7 @@ tasks:
       - cmd: 'echo "OK: the Taskfiles parse"'
       - |
         set -euo pipefail
-        for f in hack/release image/build.sh image/mkosi.postinst.chroot \
+        for f in hack/release hack/fingerprint-diff image/build.sh image/mkosi.postinst.chroot \
                  image/mkosi.extra/usr/local/lib/spin-base/*.sh boot/testdata/*.sh; do
           bash -n "$f" || { echo "$f does not parse" >&2; exit 1; }
         done

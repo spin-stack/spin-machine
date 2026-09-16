@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+#
+# Whether this build is still the machine the fleet's templates were taken against.
+#
+# `machine.Spec.Fingerprint` hashes the QEMU binary, the kernel and the initrd by content,
+# together with the machine's shape. Two of those five inputs are not this repository's:
+# the initrd is brought by whoever runs guests, and the shape is decided per VM. Both are
+# the same on either side of the comparison made here, so between two releases the question
+# collapses to two numbers — **templates carry over if and only if qemu_sha256 and
+# kernel_sha256 are unchanged.**
+#
+# image_sha256 is deliberately not one of them. The base image is mapped read-only through
+# a backing chain and is not hashed into the fingerprint, so a release that moves only the
+# image still restores every template taken against its predecessor. Saying that plainly is
+# half the value of this script: the other half is that the two numbers which *do* decide it
+# stop being something a human diffs by eye across two release pages.
+#
+# It exits 0 whatever it finds. This is not a gate — changing the machine is a thing this
+# repository does on purpose, and a check that failed on it would be one people learn to
+# force through. What changing the machine is not allowed to be is silent, and it has been
+# exactly once here already: a comment edited in kernel/Dockerfile, a rebuilt vmlinux, and a
+# fleet-wide invalidation that nothing announced.
+#
+#   hack/fingerprint-diff qemu_sha256=<hex> [kernel_sha256=<hex>] [image_sha256=<hex>]
+#
+# Writes a Markdown verdict to stdout — meant to be pasted into release notes or a step
+# summary — and its workings to stderr.
+#
+#   REFERENCE=<tag>   compare against this release instead of the newest published one
+#   EXCLUDE=<tag>     skip this tag when picking the newest one: the release being built,
+#                     on a re-run that already published it
+#
+# The reference is the machine.env that hack/release publishes beside the tarball. A
+# release that did not publish one cannot be compared against, and this says so rather than
+# downloading a 1 GB tarball to find three lines in it.
+set -euo pipefail
+
+declare -a KEYS=()
+declare -A NEW=()
+for arg in "$@"; do
+  case "${arg}" in
+    *=*) KEYS+=("${arg%%=*}"); NEW["${arg%%=*}"]="${arg#*=}" ;;
+    *)   echo "usage: hack/fingerprint-diff key=value [key=value...]" >&2; exit 2 ;;
+  esac
+done
+if [ "${#KEYS[@]}" -eq 0 ]; then
+  echo "usage: hack/fingerprint-diff key=value [key=value...]" >&2
+  exit 2
+fi
+
+# The classification this script exists to hold in one place. Adding a file to the
+# fingerprint means adding it here; anything else is a number that is reported and does not
+# bear on whether a template matches.
+bears_on_fingerprint() {
+  case "$1" in
+    qemu_sha256 | kernel_sha256) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+value_of() { sed -n "s/^$1=//p" "$2" | head -1; }
+
+say() { printf '%s\n' "$*"; }
+
+# ---------------------------------------------------------------------------
+# Pick the release to compare against.
+# ---------------------------------------------------------------------------
+
+if ! command -v gh >/dev/null 2>&1; then
+  say "Nothing to compare against: \`gh\` is not on this machine, so the last released"
+  say "machine could not be looked up."
+  exit 0
+fi
+
+reference="${REFERENCE:-}"
+if [ -z "${reference}" ]; then
+  # Listed in its own step, not inside the pipeline that filters it. Piped, a `gh` that
+  # failed on the network still left the pipeline exiting 0 through `head`, and an empty
+  # result reads identically to a repository with no releases — so a transient outage
+  # reported "this is the first published release", which is a false statement made
+  # confidently. The two cases are told apart here.
+  if ! releases=$(gh release list --limit 20 --json tagName --jq '.[].tagName' 2>/dev/null); then
+    say "Nothing to compare against: the published releases could not be listed."
+    exit 0
+  fi
+  # Newest first, which is the order `gh release list` gives. Twenty is far more than the
+  # window in which the previous release is interesting, and bounds the call.
+  reference=$(printf '%s\n' "${releases}" |
+    if [ -n "${EXCLUDE:-}" ]; then grep -vFx -- "${EXCLUDE}"; else cat; fi |
+    head -1)
+fi
+
+if [ -z "${reference}" ]; then
+  say "Nothing to compare against: this is the first published release."
+  exit 0
+fi
+
+echo "comparing against ${reference}" >&2
+
+work=$(mktemp -d)
+trap 'rm -rf "${work}"' EXIT
+
+if ! gh release download "${reference}" --pattern machine.env --dir "${work}" >/dev/null 2>&1; then
+  say "Cannot say whether templates carry over: \`${reference}\` published no \`machine.env\`"
+  say "to compare against. Releases from this one on do."
+  exit 0
+fi
+old="${work}/machine.env"
+
+# ---------------------------------------------------------------------------
+# What moved.
+# ---------------------------------------------------------------------------
+
+declare -a moved_fp=() moved_other=() checked_fp=() unchecked_fp=()
+for k in "${KEYS[@]}"; do
+  before=$(value_of "${k}" "${old}")
+  if [ -z "${before}" ]; then
+    # The reference does not record it, so it was not compared. Said plainly below rather
+    # than folded into a verdict: a comparison that silently skipped an input is exactly
+    # the shape of the mistake this script exists to prevent.
+    bears_on_fingerprint "${k}" && unchecked_fp+=("${k}")
+    continue
+  fi
+  bears_on_fingerprint "${k}" && checked_fp+=("${k}")
+  [ "${before}" = "${NEW[${k}]}" ] && continue
+  if bears_on_fingerprint "${k}"; then
+    moved_fp+=("${k}=${before}")
+  else
+    moved_other+=("${k}=${before}")
+  fi
+done
+
+# Whatever bears on the fingerprint and was never passed in. A caller that builds one
+# artefact — the kernel workflow builds a kernel and no QEMU — can only speak for that one,
+# and a verdict that reads as if it covered both would be worse than no verdict.
+for k in qemu_sha256 kernel_sha256; do
+  [ -n "${NEW[${k}]:-}" ] || unchecked_fp+=("${k}")
+done
+
+detail() {
+  local entry key before
+  for entry in "$@"; do
+    key="${entry%%=*}"
+    before="${entry#*=}"
+    say "- \`${key}\`"
+    say "  - was \`${before}\` (${reference})"
+    say "  - now \`${NEW[${key}]}\`"
+  done
+}
+
+if [ "${#moved_fp[@]}" -gt 0 ]; then
+  say "### ⚠️ Every template taken against \`${reference}\` stops matching this machine"
+  say
+  say "The fingerprint hashes these by content, so a host restoring a template frozen"
+  say "against \`${reference}\` into this machine is doing something undefined rather than"
+  say "something that fails."
+  say
+  detail "${moved_fp[@]}"
+elif [ "${#unchecked_fp[@]}" -eq 0 ]; then
+  say "### Templates taken against \`${reference}\` still match this machine"
+  say
+  say "\`qemu_sha256\` and \`kernel_sha256\` are unchanged, and they are the whole of what"
+  say "this repository contributes to the fingerprint — the initrd and the machine's shape"
+  say "come from whoever runs the guests and are untouched by a release."
+else
+  say "### Nothing compared here moves the fingerprint"
+  say
+  say "Unchanged since \`${reference}\`: ${checked_fp[*]:-nothing}."
+  say
+  say "Not compared, and therefore not vouched for: ${unchecked_fp[*]}. This is a partial"
+  say "answer — only a release compares the whole machine."
+fi
+
+if [ "${#moved_other[@]}" -gt 0 ]; then
+  say
+  say "Changed, and not part of the fingerprint — templates are unaffected:"
+  say
+  detail "${moved_other[@]}"
+fi
+

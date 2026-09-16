@@ -54,14 +54,29 @@ jobs:
             KERNEL_CACHE_TO=type=gha,mode=max \
             KERNEL_NPROC=4
 
-      # Printed, not compared: this workflow has no way to know which checksum is the
-      # right one. It is here so that a pull request that changes the config shows, in its
-      # own log, that it changed the machine — and so that the number can be read back
-      # when somebody asks why their templates stopped matching.
-      - name: What this kernel is
+      # Compared, now, against the last released machine — which is the reference this step
+      # used to say it did not have. It does: every release publishes its machine.env as an
+      # asset, and the kernel's checksum is one of the two numbers in it that decide whether
+      # a template still matches.
+      #
+      # So a pull request that changes the config, or bumps the Debian toolchain the kernel
+      # is compiled with, says on its own summary that it invalidates every template in
+      # existence. That is not a reason to reject it — it is a release this repository makes
+      # deliberately, and the step exits 0 either way — but it was previously a sentence
+      # nobody wrote down, and the last time it happened it was a comment in this directory's
+      # Dockerfile that nobody expected to rebuild anything.
+      #
+      # It speaks only for the kernel: this workflow builds no QEMU, and the verdict says so
+      # rather than implying it checked the whole machine.
+      - name: What this kernel is, and what it breaks
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "kernel sha256: $(sha256sum _output/kernel/vmlinux | cut -d' ' -f1)"
+          set -euo pipefail
+          kernel=$(sha256sum _output/kernel/vmlinux | cut -d' ' -f1)
+          echo "kernel sha256: ${kernel}"
           echo "config sha256: $(sha256sum _output/kernel/kernel-config | cut -d' ' -f1)"
+          hack/fingerprint-diff "kernel_sha256=${kernel}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the kernel
         uses: actions/upload-artifact@v7

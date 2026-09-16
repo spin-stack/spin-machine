@@ -95,6 +95,11 @@ require "${OUTPUT_DIR}/licenses.txt" "${SHARE}/licenses.txt" "the image's licenc
 # previous release's.
 {
   echo "version=${VERSION}"
+  # Which tree this came out of. The version alone does not answer it: for a tagged
+  # release it is a name that has to be resolved against a repository somebody still
+  # has, and for a development build it is a `git describe` string. A manifest that
+  # cannot be read without the repository it came from is half a manifest.
+  echo "source_commit=$(git rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "qemu_version=${QEMU_VERSION}"
   echo "kernel_version=${KERNEL_VERSION}"
   echo "e2fsprogs_version=${E2FSPROGS_VERSION}"
@@ -172,6 +177,15 @@ echo "  ok: SOURCES"
 TARBALL="${OUTPUT_DIR}/release/${RELEASE_NAME}.tar.gz"
 tar -czf "${TARBALL}" -C "${OUTPUT_DIR}/release" "${RELEASE_NAME}"
 sha256sum "${TARBALL}" | sed "s|${OUTPUT_DIR}/release/||" > "${TARBALL}.sha256"
+
+# The manifest again, beside the tarball rather than inside it, so that it can be published
+# as an asset of its own and read back without the 1 GB around it.
+#
+# That is what makes the next release able to say whether it breaks this one:
+# hack/fingerprint-diff fetches this file for the previous release and compares the two
+# checksums that decide it. Downloading a whole tarball to read three lines would be a cost
+# nobody pays, which is another way of saying the comparison would not happen.
+cp "${SHARE}/machine.env" "${OUTPUT_DIR}/release/machine.env"
 
 echo
 echo "✓ ${TARBALL}"
