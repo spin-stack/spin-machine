@@ -46,6 +46,11 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
+      # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
+      # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.
+      - name: Expose the Actions cache to buildx
+        uses: crazy-max/ghaction-github-runtime@v4
+
       # image/build.sh asserts what came out on the finished filesystem rather than
       # trusting the build that made it: that there is an /sbin/init and a /bin/sh, that
       # the directories the guest mounts over exist, that no identity is baked in, and
@@ -59,15 +64,11 @@ jobs:
       # the build container's, and image/build.sh stops when it is not there.
       - name: Build e2fsprogs
         run: |
-          task e2fsprogs:build \
-            E2FSPROGS_CACHE_FROM=type=gha \
-            E2FSPROGS_CACHE_TO=type=gha,mode=max
+          CACHE_BACKEND=gha task e2fsprogs:build
 
       - name: Build the base image
         run: |
-          task image:build \
-            IMAGE_CACHE_FROM=type=gha \
-            IMAGE_CACHE_TO=type=gha,mode=max
+          CACHE_BACKEND=gha task image:build
 
       - name: What this image is
         run: |
