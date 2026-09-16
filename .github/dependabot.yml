@@ -1,0 +1,55 @@
+# What is here is what Dependabot can actually see, and nothing else.
+#
+# Not here, on purpose:
+#
+#   gomod — go.mod requires nothing. There is no dependency to update, and an
+#           ecosystem that can never open a PR is a config nobody reads.
+#
+#   qemu/Dockerfile, e2fsprogs/Dockerfile — both build from
+#           `FROM alpine:${ALPINE_VERSION}`, where the argument carries the tag
+#           and not the image. Dependabot resolves an argument that holds a whole
+#           image reference; it cannot splice one into a tag, so it finds nothing
+#           in either file. Alpine is bumped by hand, in the Dockerfile.
+#
+#   the upstream tarballs — QEMU, the kernel, e2fsprogs and mkosi are ARGs pinned
+#           by SHA-256 against the source they are fetched from. That is not an
+#           ecosystem Dependabot knows how to read, and a bot that bumped the
+#           version without the hash would produce a build that fails on the
+#           checksum, at best.
+version: 2
+
+updates:
+  # Actions cannot change the machine: nothing they do reaches the QEMU binary,
+  # the kernel or the initrd, so nothing they do reaches a fingerprint. These are
+  # the updates that can be taken on their merits.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images, and the two files where a version is written plainly enough for
+  # Dependabot to find it.
+  #
+  # /kernel is not a routine merge. The Debian image is the toolchain the kernel
+  # is compiled with; a different toolchain is a different vmlinux, a different
+  # fingerprint, and every template in existence stops matching the machine that
+  # made it. Merge it when the machine is meant to change, not because a bot
+  # opened it.
+  #
+  # /image builds the base filesystem, which no fingerprint covers — but a base
+  # image is written once and read by every overlay chained onto it, so a bump
+  # there is a new file beside the old one, never a rewrite in place.
+  #
+  # Grouped and separate so the PR says which of those two things it is.
+  - package-ecosystem: docker
+    directories:
+      - /image
+      - /kernel
+    schedule:
+      interval: weekly
+    groups:
+      base-images:
+        patterns: ["*"]
