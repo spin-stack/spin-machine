@@ -210,6 +210,37 @@ func TestMemoryFileChangesTheShape(t *testing.T) {
 	}
 }
 
+// A template's source maps its file shared and writes it; a restore maps the same file
+// private and opens it read-only, so no VM restored from a template can change it for the
+// next, and a QEMU that does not own the file can still restore from it.
+func TestARestoreOpensItsTemplateReadOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		shared  bool
+		want    string
+		refuses string
+	}{
+		{"the template's source", true, "mem-path=/tmp/pc.ram,share=on", "readonly=on"},
+		{"a restore", false, "mem-path=/tmp/pc.ram,share=off,readonly=on,rom=off", "rom=on"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec(t)
+			s.Memory.File, s.Memory.Shared = "/tmp/pc.ram", tc.shared
+			args, err := s.Args()
+			if err != nil {
+				t.Fatal(err)
+			}
+			line := strings.Join(args, " ")
+			if !strings.Contains(line, tc.want) {
+				t.Errorf("the memory backend is not %q: %s", tc.want, line)
+			}
+			if strings.Contains(line, tc.refuses) {
+				t.Errorf("the memory backend says %q: %s", tc.refuses, line)
+			}
+		})
+	}
+}
+
 // The whole point of the fingerprint: two machines may exchange templates only
 // if the binary, the kernel, the initrd and the shape all agree. Each of these
 // changes is one a caller could make without noticing.

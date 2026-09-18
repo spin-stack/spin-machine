@@ -138,6 +138,17 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 	if err := os.Truncate(memFile, 512<<20); err != nil {
 		t.Fatal(err)
 	}
+	// A published template, which a restoring QEMU may read and not write.
+	sealedMemFile := filepath.Join(t.TempDir(), "sealed-memory")
+	if err := os.WriteFile(sealedMemFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(sealedMemFile, 512<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sealedMemFile, 0o444); err != nil {
+		t.Fatal(err)
+	}
 
 	base := func() Spec {
 		return Spec{
@@ -174,6 +185,16 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 		name: "restore target",
 		spec: func(s Spec) Spec {
 			s.Memory.File = memFile
+			s.IncomingDefer = true
+			return s
+		},
+	}, {
+		// Restored from a file it may not write: a published template, which belongs to
+		// the host and not to the VM. Root would open it anyway, so under root this case
+		// says nothing; the gate runs as a user.
+		name: "restore target, read-only template",
+		spec: func(s Spec) Spec {
+			s.Memory.File = sealedMemFile
 			s.IncomingDefer = true
 			return s
 		},
