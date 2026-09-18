@@ -258,7 +258,8 @@ tasks:
       # a rebuilt QEMU with a device removed would otherwise be met with a cached pass.
       # -v because what was rewritten for the TCG binary, and what a host without
       # /dev/vhost-vsock left unchecked, is the part a reader has to see.
-      - SPIN_MACHINE_OUTPUT={{.OUTPUT_ABS}} go test ./machine -run TestQEMUAcceptsEveryArgument -count=1 -v
+      # And the chain over descriptors: what QEMU does with it, not only whether it parses.
+      - SPIN_MACHINE_OUTPUT={{.OUTPUT_ABS}} go test ./machine -run 'TestQEMUAcceptsEveryArgument|TestAChainOverDescriptors' -count=1 -v
 
   fingerprint:
     desc: >-
