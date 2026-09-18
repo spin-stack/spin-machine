@@ -207,8 +207,9 @@ type Memory struct {
 	File string
 	// Shared maps that file MAP_SHARED. A VM being frozen into a template needs
 	// this — the pages it dirties must reach the file the restores will read. A
-	// VM restoring from one passes false, mapping the same file MAP_PRIVATE: it
-	// sees the template's memory and anything it writes stays private to it.
+	// VM restoring from one passes false, opening the same file read-only and
+	// mapping it MAP_PRIVATE: it sees the template's memory and anything it writes
+	// stays private to it.
 	// That is the whole copy-on-write story, and it is why one template file can
 	// serve many VMs without being copied.
 	Shared bool
@@ -642,13 +643,18 @@ func (s Spec) Args() ([]string, error) {
 	}
 
 	if s.Memory.File != "" {
-		share := "off"
+		// A restore opens the file read-only. QEMU otherwise opens it read-write even to
+		// map it private, so every VM restored from a template could write the template
+		// the next one restores from — and a QEMU that is not root cannot open it at all,
+		// the file being its host's and not the VM's. rom=off keeps the guest's RAM
+		// writable: its writes land in its private copy, which is what share=off meant.
+		backing := "share=off,readonly=on,rom=off"
 		if s.Memory.Shared {
-			share = "on"
+			backing = "share=on"
 		}
 		args = append(args, "-object",
-			fmt.Sprintf("memory-backend-file,id=%s,size=%dM,mem-path=%s,share=%s",
-				MemoryBackendID, s.Memory.SizeMB, s.Memory.File, share))
+			fmt.Sprintf("memory-backend-file,id=%s,size=%dM,mem-path=%s,%s",
+				MemoryBackendID, s.Memory.SizeMB, s.Memory.File, backing))
 	}
 
 	// S3 and S4 are suspend states this machine cannot come back from and that a
