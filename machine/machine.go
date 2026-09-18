@@ -257,7 +257,10 @@ type FD struct {
 type NIC struct {
 	// TapFD is the descriptor number in the QEMU process, so 3 or above.
 	TapFD int
-	MAC   string
+	// VhostFD is /dev/vhost-net already open, handed to QEMU as a descriptor, for a
+	// QEMU that may open no device node. Zero has QEMU open the node itself.
+	VhostFD int
+	MAC     string
 
 	// MTU is the largest frame the guest may send, announced through
 	// VIRTIO_NET_F_MTU. Zero leaves the guest at its own default, 1500.
@@ -415,6 +418,15 @@ type Spec struct {
 	// has no serial port for a caller to drive and no network it is required to
 	// have.
 	VsockCID int
+	// VsockFD is /dev/vhost-vsock already open, handed to QEMU as a descriptor, for a
+	// QEMU that may open no device node: one whose root has no /dev. Zero has QEMU open
+	// the node itself.
+	VsockFD int
+
+	// KVMFDSet is /dev/kvm as a descriptor set, for the same QEMU. Only under KVM, which
+	// is the accelerator that opens a device. The shape still says accel=kvm: where the
+	// accelerator's descriptor came from is not the machine a template is loaded into.
+	KVMFDSet int
 
 	// QMPSocket is a Unix socket path QEMU listens on for QMP. Required to do
 	// anything to a running machine, including shutting it down.
@@ -612,6 +624,16 @@ func (s Spec) Shape() Shape {
 	}
 }
 
+// machineArg is the shape's machine string as -machine takes it. With KVMFDSet the
+// accelerator moves to its own -accel, which carries the descriptor: QEMU refuses the
+// two together — "The -accel and "-machine accel=" options are incompatible" (11.1.1).
+func (s Spec) machineArg(shape Shape) string {
+	if s.KVMFDSet == 0 {
+		return shape.Machine
+	}
+	return strings.Replace(shape.Machine, ",accel=kvm", "", 1)
+}
+
 // derivedFromHost reports whether a CPU model takes its feature set from the
 // silicon it runs on, which is what makes a template built with it unusable on
 // another machine — and what migratable=on applies to.
@@ -721,6 +743,19 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("a console given both as a chardev and as a descriptor set")
 	case s.SerialFDSet != 0 && !sets[s.SerialFDSet]:
 		return fmt.Errorf("the console is descriptor set %d, which Spec.FDSets does not have", s.SerialFDSet)
+	case s.KVMFDSet != 0 && s.Accel != "" && s.Accel != "kvm":
+		return fmt.Errorf("a /dev/kvm descriptor for accel=%s, which opens no device", s.Accel)
+	case s.KVMFDSet != 0 && !sets[s.KVMFDSet]:
+		return fmt.Errorf("/dev/kvm is descriptor set %d, which Spec.FDSets does not have", s.KVMFDSet)
+	case s.VsockFD != 0 && s.VsockCID == 0:
+		return fmt.Errorf("a /dev/vhost-vsock descriptor for a machine with no vsock")
+	case s.VsockFD != 0 && s.VsockFD < 3:
+		return fmt.Errorf("a /dev/vhost-vsock descriptor below 3 is stdin, stdout or stderr")
+	}
+	for i, n := range s.NICs {
+		if n.VhostFD != 0 && n.VhostFD < 3 {
+			return fmt.Errorf("NIC %d: a /dev/vhost-net descriptor below 3 is stdin, stdout or stderr", i)
+		}
 	}
 	for i, d := range s.Disks {
 		if err := d.validate(sets); err != nil {
@@ -798,10 +833,14 @@ func (s Spec) Args() ([]string, error) {
 		// done from outside rather than from inside QEMU.
 		"-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
 
-		"-machine", shape.Machine,
+		"-machine", s.machineArg(shape),
 		"-cpu", shape.CPU,
 		"-smp", shape.SMP,
 		"-m", shape.Memory,
+	}
+
+	if s.KVMFDSet != 0 {
+		args = append(args, "-accel", fmt.Sprintf("kvm,device=/dev/fdset/%d", s.KVMFDSet))
 	}
 
 	if s.Memory.File != "" {
@@ -884,9 +923,12 @@ func (s Spec) Args() ([]string, error) {
 			virtioModern, SlotBalloon))
 
 	if s.VsockCID != 0 {
-		args = append(args, "-device",
-			fmt.Sprintf("vhost-vsock-pci,guest-cid=%d,%s,addr=0x%x",
-				s.VsockCID, virtioModern, SlotVsock))
+		dev := fmt.Sprintf("vhost-vsock-pci,guest-cid=%d,%s,addr=0x%x",
+			s.VsockCID, virtioModern, SlotVsock)
+		if s.VsockFD != 0 {
+			dev += fmt.Sprintf(",vhostfd=%d", s.VsockFD)
+		}
+		args = append(args, "-device", dev)
 	}
 
 	// virtio-mem, when this VM is allowed to grow: the region between its boot
@@ -978,9 +1020,11 @@ func (s Spec) Args() ([]string, error) {
 		if n.MTU > 0 {
 			dev += fmt.Sprintf(",host_mtu=%d", n.MTU)
 		}
-		args = append(args,
-			"-netdev", fmt.Sprintf("tap,id=net%d,fd=%d,vhost=on", i, n.TapFD),
-			"-device", dev)
+		netdev := fmt.Sprintf("tap,id=net%d,fd=%d,vhost=on", i, n.TapFD)
+		if n.VhostFD != 0 {
+			netdev += fmt.Sprintf(",vhostfd=%d", n.VhostFD)
+		}
+		args = append(args, "-netdev", netdev, "-device", dev)
 	}
 
 	switch {
