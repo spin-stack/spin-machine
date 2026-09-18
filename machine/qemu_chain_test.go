@@ -7,7 +7,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -39,6 +41,13 @@ func TestAChainOverDescriptorsIsReadWithoutAPathAndSealedUnderAnOverlay(t *testi
 	}
 	// Descriptors 3 onwards, in this order.
 	files := []*os.File{open(top, os.O_RDWR), open(base, os.O_RDONLY), open(next, os.O_RDWR)}
+	// The console, a FIFO as a runner keeps one: its reader first, or opening the writer blocks.
+	fifo := filepath.Join(t.TempDir(), "console")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = open(fifo, os.O_RDONLY|syscall.O_NONBLOCK)
+	files = append(files, open(fifo, os.O_WRONLY))
 	socket := qmpSocket(t)
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
@@ -64,13 +73,15 @@ func TestAChainOverDescriptorsIsReadWithoutAPathAndSealedUnderAnOverlay(t *testi
 	spec := Spec{
 		QEMU: qemu, Kernel: kernel, Firmware: firmware,
 		BootCPUs: 1, Memory: Memory{SizeMB: 512}, Cmdline: DefaultCmdline().String(),
-		QMPFD: 6,
+		QMPFD: 7,
 		FDSets: []FDSet{
 			{ID: 1, FDs: []FD{{Num: 3, Opaque: top}}},
 			{ID: 2, FDs: []FD{{Num: 4, Opaque: base}}},
 			{ID: 3, FDs: []FD{{Num: 5, Opaque: next}}},
+			{ID: 4, FDs: []FD{{Num: 6, Opaque: fifo}}},
 		},
-		Disks: []Disk{{Chain: []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}, Serial: "root", Locking: true}},
+		SerialFDSet: 4,
+		Disks:       []Disk{{Chain: []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}, Serial: "root", Locking: true}},
 	}
 	args, err := spec.Args()
 	if err != nil {
@@ -154,7 +165,7 @@ func TestAChainOverDescriptorsIsReadWithoutAPathAndSealedUnderAnOverlay(t *testi
 			opaque[s.ID] = fd.Opaque
 		}
 	}
-	for id, want := range map[int]string{1: top, 2: base, 3: next} {
+	for id, want := range map[int]string{1: top, 2: base, 3: next, 4: fifo} {
 		if opaque[id] != want {
 			t.Errorf("descriptor set %d says it is %q, want %q", id, opaque[id], want)
 		}

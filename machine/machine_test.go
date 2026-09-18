@@ -441,10 +441,16 @@ func TestFingerprintIgnoresWhatIsBehindTheDevices(t *testing.T) {
 	a.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
 	a.VsockCID = 7
 
+	a.Serial = "file:/var/log/console"
+
+	// The same machine handed its disk, monitor and console as descriptors.
 	b := a
-	b.Disks = []Disk{{Path: "/another.qcow2", Format: "qcow2", Serial: "bbb"}}
+	b.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}, {ID: 2, FDs: []FD{{Num: 11}}}}
+	b.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "qcow2"}}, Serial: "bbb"}}
 	b.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:00:00:02"}}
 	b.VsockCID = 42
+	b.Serial, b.SerialFDSet = "", 2
+	b.QMPSocket, b.QMPFD = "", 12
 
 	fa, err := a.Fingerprint()
 	if err != nil {
@@ -455,7 +461,7 @@ func TestFingerprintIgnoresWhatIsBehindTheDevices(t *testing.T) {
 		t.Fatal(err)
 	}
 	if fa != fb {
-		t.Error("different paths, MACs and context ids made it a different machine")
+		t.Error("different paths, MACs, context ids and descriptors made it a different machine")
 	}
 }
 

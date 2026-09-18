@@ -425,9 +425,16 @@ type Spec struct {
 	QMPFD  int
 	QMPFD2 int
 
-	// FDSets are the descriptor sets the command line names: a Disk's Chain, a
-	// Serial of the form file:/dev/fdset/<ID>.
+	// FDSets are the descriptor sets the command line names: a Disk's Chain,
+	// SerialFDSet.
 	FDSets []FDSet
+
+	// SerialFDSet is the console as a descriptor set QEMU writes to, instead of
+	// Serial, for a QEMU that may open nothing by path. It is opened append-only:
+	// QEMU otherwise truncates what it opens, and the usual console descriptor is
+	// a FIFO, which cannot be truncated — "-serial file:/dev/fdset/<ID>" fails
+	// with EINVAL on one (measured, QEMU 11.1.1).
+	SerialFDSet int
 
 	// QMPSocket2 is a second monitor, on its own socket, for a second thing that drives
 	// this machine.
@@ -709,6 +716,12 @@ func (s Spec) Validate() error {
 	if err != nil {
 		return err
 	}
+	switch {
+	case s.SerialFDSet != 0 && s.Serial != "":
+		return fmt.Errorf("a console given both as a chardev and as a descriptor set")
+	case s.SerialFDSet != 0 && !sets[s.SerialFDSet]:
+		return fmt.Errorf("the console is descriptor set %d, which Spec.FDSets does not have", s.SerialFDSet)
+	}
 	for i, d := range s.Disks {
 		if err := d.validate(sets); err != nil {
 			return fmt.Errorf("disk %d: %w", i, err)
@@ -970,9 +983,14 @@ func (s Spec) Args() ([]string, error) {
 			"-device", dev)
 	}
 
-	if s.Serial != "" {
+	switch {
+	case s.SerialFDSet != 0:
+		args = append(args,
+			"-chardev", fmt.Sprintf("file,id=serial0,path=/dev/fdset/%d,append=on", s.SerialFDSet),
+			"-serial", "chardev:serial0")
+	case s.Serial != "":
 		args = append(args, "-serial", s.Serial)
-	} else {
+	default:
 		args = append(args, "-serial", "none")
 	}
 
@@ -1173,7 +1191,7 @@ func (s Spec) topology() string {
 	if s.Memory.MaxMB > s.Memory.SizeMB {
 		fmt.Fprintf(&b, ";virtio-mem-pci@%#x", SlotMem)
 	}
-	if s.Serial != "" {
+	if s.Serial != "" || s.SerialFDSet != 0 {
 		b.WriteString(";isa-serial")
 	}
 	// The empty root ports, which are devices present when the state is loaded even
