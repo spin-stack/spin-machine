@@ -26,6 +26,7 @@ package machine
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -115,8 +116,17 @@ const memGrowthID = "mem.growth"
 
 // Disk is one virtio-blk device.
 type Disk struct {
-	// Path to the image file.
+	// Path to the image file. QEMU opens it, and every backing file its header
+	// names, by path. Set Path or Chain, not both.
 	Path string
+	// Chain is the image and every image under it, top first, each handed to
+	// QEMU as a descriptor set (Spec.FDSets): QEMU opens no image by path, and
+	// follows no backing file a header names — each image's backing is the next
+	// one here, and the last has none. So a QEMU that is not allowed to see the
+	// caller's filesystem at all still reads the whole chain, and reads nothing
+	// a header could point it at. Format and Cache do not apply: each image
+	// carries its own format, and the chain is cached as QEMU does by default.
+	Chain []Image
 	// Format as QEMU names it: qcow2 or raw. Required — it is not guessed
 	// from the file name, because a wrong guess is a guest that boots and finds
 	// a disk full of nothing, and because letting QEMU probe the format of a
@@ -159,6 +169,87 @@ type Disk struct {
 	// one that does not ("Could not open backing file"). And, like cache=none,
 	// not on tmpfs, which has no O_DIRECT.
 	DirectOverBacking bool
+}
+
+// chainArgs is disk i as -blockdev nodes over descriptor sets, the base first: each format
+// node is backed by the node below it, and the last by nothing, so QEMU never reads a backing
+// name from a header. The top node is blk<i>, as a -drive's id would be, and the rest
+// blk<i>-<depth>.
+//
+// The same options as the path form: aio=io_uring, discard=unmap, and the lock only where
+// asked for. Every image but the top is read-only, as a backing file is.
+//
+// JSON, not key=value: "no backing" is JSON null, which key=value cannot say — backing=null
+// names a node called null — and an opaque path needs no comma escaping.
+func (d Disk) chainArgs(i int) ([]string, error) {
+	var args []string
+	for j := len(d.Chain) - 1; j >= 0; j-- {
+		img := d.Chain[j]
+		node := fmt.Sprintf("blk%d", i)
+		if j > 0 {
+			node = fmt.Sprintf("blk%d-%d", i, j)
+		}
+		readOnly := d.Readonly || j > 0
+		file := map[string]any{
+			"driver": "file", "node-name": node + "-file",
+			"filename": fmt.Sprintf("/dev/fdset/%d", img.FDSet),
+			"aio":      "io_uring", "discard": "unmap", "read-only": readOnly,
+		}
+		if j == 0 && d.Locking {
+			file["locking"] = "on"
+		}
+		if d.DirectOverBacking {
+			file["cache"] = map[string]any{"direct": j == 0}
+		}
+		format := map[string]any{
+			"driver": img.Format, "node-name": node, "file": node + "-file", "read-only": readOnly,
+		}
+		switch {
+		case j < len(d.Chain)-1:
+			format["backing"] = fmt.Sprintf("blk%d-%d", i, j+1)
+		case img.Format != "raw":
+			// Or QEMU opens whatever the header names.
+			format["backing"] = nil
+		}
+		for _, n := range []map[string]any{file, format} {
+			b, err := json.Marshal(n)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, "-blockdev", string(b))
+		}
+	}
+	return args, nil
+}
+
+// Image is one image of a Disk's chain.
+type Image struct {
+	// FDSet is the id of the descriptor set holding the image (Spec.FDSets): one
+	// descriptor, opened read-write for the top of a writable disk and read-only
+	// for everything else. Sealing the top under a new overlay (blockdev-snapshot)
+	// needs nothing more — measured on QEMU 11.1.1, which keeps the old top's
+	// descriptor rather than reopening it read-only.
+	FDSet int
+	// Format as QEMU names it, qcow2 or raw, for the same reasons as Disk.Format.
+	// Only the last image of a chain may be raw: raw has no backing.
+	Format string
+}
+
+// FDSet is descriptors QEMU is handed open rather than a path to open: a path
+// of the form /dev/fdset/<ID> names the set wherever QEMU takes a file name.
+type FDSet struct {
+	ID  int
+	FDs []FD
+}
+
+// FD is one descriptor in the QEMU process, so 3 or above.
+type FD struct {
+	Num int
+	// Opaque is what QEMU reports for the descriptor in query-fdsets, and the
+	// only way back from /dev/fdset/<ID> to what the caller opened: the path, in
+	// practice, so that a caller asking which image a device has open gets an
+	// answer it can compare.
+	Opaque string
 }
 
 // NIC is one virtio-net device, backed by a TAP file descriptor the caller has
@@ -328,6 +419,15 @@ type Spec struct {
 	// QMPSocket is a Unix socket path QEMU listens on for QMP. Required to do
 	// anything to a running machine, including shutting it down.
 	QMPSocket string
+	// QMPFD is QMPSocket already listening, handed to QEMU as a descriptor, for a
+	// QEMU that may not create a socket where the caller would connect to it. Set
+	// one or the other; QMPFD2 is the same for QMPSocket2.
+	QMPFD  int
+	QMPFD2 int
+
+	// FDSets are the descriptor sets the command line names: a Disk's Chain, a
+	// Serial of the form file:/dev/fdset/<ID>.
+	FDSets []FDSet
 
 	// QMPSocket2 is a second monitor, on its own socket, for a second thing that drives
 	// this machine.
@@ -600,13 +700,62 @@ func (s Spec) Validate() error {
 	case s.HotplugPorts < 0 || s.HotplugPorts > MaxHotplugPorts:
 		return fmt.Errorf("%d root ports for devices arriving later, and the slot range holds %d",
 			s.HotplugPorts, MaxHotplugPorts)
+	case s.QMPSocket != "" && s.QMPFD != 0, s.QMPSocket2 != "" && s.QMPFD2 != 0:
+		return fmt.Errorf("a monitor is given both a socket path and a descriptor")
+	case s.QMPFD != 0 && s.QMPFD < 3, s.QMPFD2 != 0 && s.QMPFD2 < 3:
+		return fmt.Errorf("a monitor descriptor below 3 is stdin, stdout or stderr")
+	}
+	sets, err := s.fdSets()
+	if err != nil {
+		return err
 	}
 	for i, d := range s.Disks {
-		if d.Path == "" {
-			return fmt.Errorf("disk %d has no path", i)
+		if err := d.validate(sets); err != nil {
+			return fmt.Errorf("disk %d: %w", i, err)
 		}
-		if d.Format == "" {
-			return fmt.Errorf("disk %d (%s) has no format: it is not guessed", i, d.Path)
+	}
+	return nil
+}
+
+// fdSets indexes Spec.FDSets by id, refusing what QEMU would refuse later and less clearly.
+func (s Spec) fdSets() (map[int]bool, error) {
+	sets := make(map[int]bool, len(s.FDSets))
+	for _, set := range s.FDSets {
+		switch {
+		case sets[set.ID]:
+			return nil, fmt.Errorf("descriptor set %d is given twice", set.ID)
+		case len(set.FDs) == 0:
+			return nil, fmt.Errorf("descriptor set %d holds no descriptor", set.ID)
+		}
+		for _, fd := range set.FDs {
+			if fd.Num < 3 {
+				return nil, fmt.Errorf("descriptor set %d names descriptor %d, which is stdin, stdout or stderr", set.ID, fd.Num)
+			}
+		}
+		sets[set.ID] = true
+	}
+	return sets, nil
+}
+
+func (d Disk) validate(sets map[int]bool) error {
+	switch {
+	case d.Path == "" && len(d.Chain) == 0:
+		return fmt.Errorf("no path and no chain")
+	case d.Path != "" && len(d.Chain) != 0:
+		return fmt.Errorf("both a path and a chain: which one the guest reads is not a guess")
+	case d.Path != "" && d.Format == "":
+		return fmt.Errorf("%s has no format: it is not guessed", d.Path)
+	case len(d.Chain) != 0 && (d.Cache != "" || d.Format != ""):
+		return fmt.Errorf("a chain carries a format per image and takes QEMU's caching")
+	}
+	for j, img := range d.Chain {
+		switch {
+		case !sets[img.FDSet]:
+			return fmt.Errorf("image %d is in descriptor set %d, which Spec.FDSets does not have", j, img.FDSet)
+		case img.Format == "":
+			return fmt.Errorf("image %d has no format: it is not guessed", j)
+		case img.Format == "raw" && j != len(d.Chain)-1:
+			return fmt.Errorf("image %d is raw, which has no backing, and images follow it", j)
 		}
 	}
 	return nil
@@ -788,7 +937,16 @@ func (s Spec) Args() ([]string, error) {
 		if d.Serial != "" {
 			dev += ",serial=" + d.Serial
 		}
-		args = append(args, "-drive", drive, "-device", dev)
+		if len(d.Chain) != 0 {
+			chain, err := d.chainArgs(i)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, chain...)
+		} else {
+			args = append(args, "-drive", drive)
+		}
+		args = append(args, "-device", dev)
 	}
 
 	for i, n := range s.NICs {
@@ -824,6 +982,28 @@ func (s Spec) Args() ([]string, error) {
 		}
 		args = append(args, "-qmp",
 			fmt.Sprintf("unix:%s,server=on,wait=off", sock))
+	}
+	// A monitor on a socket the caller made and listens on: QEMU accepts on the descriptor
+	// and never needs a place in the filesystem to put a socket.
+	for i, fd := range []int{s.QMPFD, s.QMPFD2} {
+		if fd == 0 {
+			continue
+		}
+		// -object monitor-qmp and not -mon, which QEMU 11.1 warns is deprecated.
+		id := fmt.Sprintf("qmpfd%d", i)
+		args = append(args,
+			"-chardev", fmt.Sprintf("socket,id=%s,fd=%d,server=on,wait=off", id, fd),
+			"-object", fmt.Sprintf("monitor-qmp,id=mon-%s,chardev=%s", id, id))
+	}
+	// Commas are doubled: QEMU splits an option on a single one, and an opaque is a path.
+	for _, set := range s.FDSets {
+		for _, fd := range set.FDs {
+			spec := fmt.Sprintf("fd=%d,set=%d", fd.Num, set.ID)
+			if fd.Opaque != "" {
+				spec += ",opaque=" + strings.ReplaceAll(fd.Opaque, ",", ",,")
+			}
+			args = append(args, "-add-fd", spec)
+		}
 	}
 
 	// -incoming, in whichever of its two forms this machine was given. Validate has

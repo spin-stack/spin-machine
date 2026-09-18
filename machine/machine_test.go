@@ -622,6 +622,27 @@ func TestValidateRefuses(t *testing.T) {
 		{"a negative number of root ports", func(s *Spec) { s.HotplugPorts = -1 }},
 		{"a disk with no path", func(s *Spec) { s.Disks = []Disk{{Format: "qcow2"}} }},
 		{"a disk with no format", func(s *Spec) { s.Disks = []Disk{{Path: "/a.qcow2"}} }},
+		{"a disk with a path and a chain", func(s *Spec) {
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}}
+			s.Disks = []Disk{{Path: "/a.qcow2", Format: "qcow2", Chain: []Image{{FDSet: 1, Format: "qcow2"}}}}
+		}},
+		{"a chain image in a set nobody gave", func(s *Spec) {
+			s.Disks = []Disk{{Chain: []Image{{FDSet: 9, Format: "qcow2"}}}}
+		}},
+		{"a chain image with no format", func(s *Spec) {
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}}
+			s.Disks = []Disk{{Chain: []Image{{FDSet: 1}}}}
+		}},
+		{"a raw image with images under it", func(s *Spec) {
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}, {ID: 2, FDs: []FD{{Num: 4}}}}
+			s.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "raw"}, {FDSet: 2, Format: "qcow2"}}}}
+		}},
+		{"a descriptor set given twice", func(s *Spec) {
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}, {ID: 1, FDs: []FD{{Num: 4}}}}
+		}},
+		{"a descriptor set holding stdin", func(s *Spec) { s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 0}}}} }},
+		{"a monitor given a path and a descriptor", func(s *Spec) { s.QMPSocket, s.QMPFD = "/qmp", 3 }},
+		{"a monitor on stderr", func(s *Spec) { s.QMPFD = 2 }},
 		// Both forms of -incoming: QEMU takes the flag once, and which source a VM
 		// restores from is not something to guess at on the caller's behalf.
 		{"both forms of -incoming", func(s *Spec) { s.IncomingDefer, s.Incoming = true, "file:/state" }},
