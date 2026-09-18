@@ -139,6 +139,50 @@ func TestTheGuestIsToldItsMTUOnTheDevice(t *testing.T) {
 	}
 }
 
+// A device handed over as a descriptor is named by it on the command line, and one that
+// is not is left for QEMU to open: a node that exists only where it runs.
+func TestADeviceHandedOverIsNamedByItsDescriptor(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		given  bool
+		want   []string
+		absent []string
+	}{
+		{"opened by QEMU", false,
+			[]string{"q35,accel=kvm,", "vhost-vsock-pci,guest-cid=7,disable-legacy=on,addr=0x2 ", "tap,id=net0,fd=3,vhost=on "},
+			[]string{"-accel", "vhostfd"}},
+		// -machine loses accel=: QEMU refuses it beside -accel.
+		{"handed over", true,
+			[]string{"-machine q35,kernel-irqchip=on,", "-accel kvm,device=/dev/fdset/1 ", "addr=0x2,vhostfd=5 ", "tap,id=net0,fd=3,vhost=on,vhostfd=6 "},
+			[]string{"accel=kvm"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec(t)
+			s.VsockCID = 7
+			s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
+			if tc.given {
+				s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 4}}}}
+				s.KVMFDSet, s.VsockFD, s.NICs[0].VhostFD = 1, 5, 6
+			}
+			args, err := s.Args()
+			if err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(args, " ") + " "
+			for _, want := range tc.want {
+				if !strings.Contains(joined, want) {
+					t.Errorf("missing %q in %s", want, joined)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(joined, absent) {
+					t.Errorf("%q in %s", absent, joined)
+				}
+			}
+		})
+	}
+}
+
 // A disk's format is stated, never guessed: a wrong guess is a guest that boots
 // and finds a disk full of nothing.
 func TestDiskFormatIsRequired(t *testing.T) {
@@ -451,6 +495,9 @@ func TestFingerprintIgnoresWhatIsBehindTheDevices(t *testing.T) {
 	b.VsockCID = 42
 	b.Serial, b.SerialFDSet = "", 2
 	b.QMPSocket, b.QMPFD = "", 12
+	b.FDSets = append(b.FDSets, FDSet{ID: 3, FDs: []FD{{Num: 13}}})
+	b.KVMFDSet, b.VsockFD = 3, 14
+	b.NICs[0].VhostFD = 15
 
 	fa, err := a.Fingerprint()
 	if err != nil {
@@ -649,6 +696,14 @@ func TestValidateRefuses(t *testing.T) {
 		{"a descriptor set holding stdin", func(s *Spec) { s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 0}}}} }},
 		{"a monitor given a path and a descriptor", func(s *Spec) { s.QMPSocket, s.QMPFD = "/qmp", 3 }},
 		{"a monitor on stderr", func(s *Spec) { s.QMPFD = 2 }},
+		{"/dev/kvm in a set nobody gave", func(s *Spec) { s.KVMFDSet = 1 }},
+		{"/dev/kvm for an emulator", func(s *Spec) {
+			s.Accel, s.KVMFDSet = "tcg", 1
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}}
+		}},
+		{"/dev/vhost-vsock with no vsock", func(s *Spec) { s.VsockCID, s.VsockFD = 0, 3 }},
+		{"/dev/vhost-vsock on stdout", func(s *Spec) { s.VsockCID, s.VsockFD = 3, 1 }},
+		{"/dev/vhost-net on stderr", func(s *Spec) { s.NICs = []NIC{{TapFD: 3, VhostFD: 2, MAC: "52:54:00:00:00:01"}} }},
 		// Both forms of -incoming: QEMU takes the flag once, and which source a VM
 		// restores from is not something to guess at on the caller's behalf.
 		{"both forms of -incoming", func(s *Spec) { s.IncomingDefer, s.Incoming = true, "file:/state" }},
