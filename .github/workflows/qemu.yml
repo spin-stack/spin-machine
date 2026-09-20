@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # A cold build is tens of minutes and a warm one is a cache restore, so the spread is
     # wide and the ceiling has to sit above the cold case. What it is really for is the
     # other end: a `configure` that stops on a prompt would hold a runner for six hours
@@ -55,8 +55,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       # What makes `--cache-to type=gha` do anything at all.
       #
