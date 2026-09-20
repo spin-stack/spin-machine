@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # QEMU and the kernel are each tens of minutes from cold, on a runner with two cores,
     # and this job builds both plus the image. The GitHub Actions cache makes a warm run
     # far shorter; the ceiling is for the cold one.
@@ -60,8 +60,8 @@ jobs:
       - name: Set up Task
         uses: go-task/setup-task@v2
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
       # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.

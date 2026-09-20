@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -43,8 +43,8 @@ jobs:
       - name: Set up Task
         uses: go-task/setup-task@v2
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
       # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.
