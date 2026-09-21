@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // FingerprintCache reuses artifact hashes across VM creations in one process.
@@ -19,6 +20,8 @@ import (
 // Every call opens and stats each artifact. Device, inode, size, modification
 // time and change time must all match before its hash is reused. The complete
 // machine identity (including host CPU when applicable) is recomputed each time.
+// Files modified within the last second are hashed without caching: ordinary
+// Linux filesystems can give consecutive writes identical coarse timestamps.
 //
 // This is for local release files that remain unchanged while VMs use them.
 // Metadata is not proof of content against a privileged writer or a filesystem
@@ -33,6 +36,23 @@ type FingerprintCache struct {
 type artifactHash struct {
 	info os.FileInfo
 	sum  string
+}
+
+// Do not cache a hash taken inside the timestamp's own resolution window.
+// Otherwise a second write in that window can leave all cache keys unchanged.
+// A full second covers local filesystems with second-resolution timestamps as
+// well as Linux's coarse clock ticks. This does not make remote timestamps or
+// a clock that jumps backwards reliable content identifiers.
+const artifactTimestampWindow = time.Second
+
+func artifactOldEnough(info os.FileInfo, now time.Time) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	cutoff := now.Add(-artifactTimestampWindow)
+	return time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec).Before(cutoff) &&
+		time.Unix(stat.Ctim.Sec, stat.Ctim.Nsec).Before(cutoff)
 }
 
 // Fingerprint returns exactly the same identity as Spec.Fingerprint, reusing
@@ -51,6 +71,9 @@ func sameArtifact(a, b os.FileInfo) bool {
 }
 
 func (c *FingerprintCache) fileSum(path string) (string, error) {
+	// Decide eligibility before hashing, not after: a long read must not promote
+	// a hash taken while timestamps could still collide into a reusable entry.
+	started := time.Now()
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -63,9 +86,11 @@ func (c *FingerprintCache) fileSum(path string) (string, error) {
 	if !before.Mode().IsRegular() {
 		return "", fmt.Errorf("%s is not a regular artifact file", path)
 	}
-	if cached, ok := c.files[path]; ok && sameArtifact(cached.info, before) {
+	cacheable := artifactOldEnough(before, started)
+	if cached, ok := c.files[path]; ok && cacheable && sameArtifact(cached.info, before) {
 		return cached.sum, nil
 	}
+	delete(c.files, path)
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -78,6 +103,9 @@ func (c *FingerprintCache) fileSum(path string) (string, error) {
 		return "", fmt.Errorf("%s changed while hashing", path)
 	}
 	sum := hex.EncodeToString(h.Sum(nil))
+	if !cacheable {
+		return sum, nil
+	}
 	if c.files == nil {
 		c.files = make(map[string]artifactHash)
 	}

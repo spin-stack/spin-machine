@@ -28,6 +28,9 @@ fp, err := fingerprints.Fingerprint(spec)
 
 The cache opens and stats the artifacts on every call, rehashing when inode, device,
 size, mtime or ctime changes; it recomputes the complete machine identity each time.
+Files modified within the last second are hashed without caching, because consecutive
+writes can share the same filesystem timestamp. Once that window has elapsed, the
+next call hashes the file again before making its hash reusable; callers never sleep.
 Use it with local release files kept unchanged while VMs use them. Metadata cannot
 prove content against a privileged writer or a filesystem with unreliable timestamps;
 `spec.Fingerprint()` still reads and hashes every byte. No cache is implicit in it.
