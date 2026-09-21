@@ -1102,6 +1102,10 @@ func (s Spec) Args() ([]string, error) {
 // every VM restored from one have their memory in a file whatever the spec being
 // asked was configured with.
 func (s Spec) Fingerprint() (string, error) {
+	return s.fingerprint(fileSum)
+}
+
+func (s Spec) fingerprint(sumFile func(string) (string, error)) (string, error) {
 	h := sha256.New()
 
 	// Length-prefixed, so that no two different machines can produce the same
@@ -1127,7 +1131,7 @@ func (s Spec) Fingerprint() (string, error) {
 			write(f.name, "none")
 			continue
 		}
-		sum, err := fileSum(f.path)
+		sum, err := sumFile(f.path)
 		if err != nil {
 			return "", fmt.Errorf("fingerprinting %s: %w", f.name, err)
 		}
