@@ -56,7 +56,7 @@ jobs:
           cache: true
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@v2
 
       # What makes `--cache-to type=gha` do anything at all.
       #
