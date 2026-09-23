@@ -42,7 +42,7 @@ jobs:
         uses: go-task/setup-task@v2
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@v2
 
       # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
       # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.
