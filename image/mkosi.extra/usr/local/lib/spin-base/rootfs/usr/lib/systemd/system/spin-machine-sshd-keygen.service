@@ -33,9 +33,13 @@ ConditionPathExists=/usr/bin/ssh-keygen
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# -A generates one key of each type sshd expects, and skips any that already exist — so a
-# VM whose provisioner placed its own keys keeps them.
-ExecStart=/usr/bin/ssh-keygen -A
+# Ed25519 and ECDSA only, each skipped when it already exists, so a VM whose provisioner
+# placed its own keys keeps them. Not -A: it also makes an RSA key, and RSA was the whole
+# cost of this unit — 309 ms of systemd-analyze blame in a guest, measured 2026-09-24, and on
+# the host 141 ms for RSA against 6 ms for ECDSA and 5 ms for Ed25519. sshd skips a default
+# host key that is not there without a word, so nothing is configured to leave RSA out, and
+# every client since OpenSSH 6.5 (2014) takes Ed25519.
+ExecStart=/bin/sh -c 'for t in ed25519 ecdsa; do f=/etc/ssh/ssh_host_$${t}_key; [ -e "$$f" ] || /usr/bin/ssh-keygen -q -t "$$t" -N "" -f "$$f" || exit 1; done'
 
 [Install]
 WantedBy=ssh.service sshd.service
