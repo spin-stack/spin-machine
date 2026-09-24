@@ -118,8 +118,8 @@ AccuracySec=100ms
 		spec.QEMU = filepath.Join(out, "bin/qemu-system-x86_64-tcg")
 		for i := range args {
 			args[i] = strings.ReplaceAll(args[i], "accel=kvm", "accel=tcg")
-			if args[i] == "host,migratable=on" {
-				args[i] = "max,migratable=on"
+			if strings.HasPrefix(args[i], "host,migratable=on") {
+				args[i] = "max" + strings.TrimPrefix(args[i], "host")
 			}
 		}
 		t.Log("TCG: checking functionality only")

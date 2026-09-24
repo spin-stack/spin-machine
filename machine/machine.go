@@ -615,6 +615,17 @@ func (s Spec) Shape() Shape {
 		// "Host doesn't support requested features", exit 1, before the VM exists.
 		cpu += ",enforce=on"
 	}
+	// No hardware virtualisation in the guest. The kernel has neither KVM nor modules, so
+	// nothing in it can use VMX or SVM, and exposing them only hands a guest's root the
+	// host's nested-virtualisation code to reach. It also kept the CPUs from agreeing:
+	// firmware locks IA32_FEATURE_CONTROL with VMX on for the CPUs present at boot, and a
+	// hot-added one arrives with it unlocked, which this kernel locks with VMX off - so the
+	// boot CPU had vmx and every added one did not, and the first addition printed
+	// "WARNING: arch/x86/kernel/cpu/cpuid-deps.c:127 at do_clear_cpu_cap". Measured
+	// 2026-09-24 under KVM, -smp 1,maxcpus=4, three cores added over QMP: that warning and
+	// vmx=1,0,0,0 before; no warning and vmx=0 on all four with it. Global properties of the
+	// model, so a CPU added later is given them too.
+	cpu += ",-vmx,-svm"
 
 	return Shape{
 		Machine: machine,
