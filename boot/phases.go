@@ -77,6 +77,21 @@ const (
 	//     ~6 ms     rom_reset copying the kernel's 36 MB, at ~6 GB/s
 	//     ~2 ms     cont to the first vCPU entering the guest
 	//
+	// Two of those five are paid only by a cold boot, and it is worth knowing before anybody
+	// hunts for savings in them. Profiled 2026-09-26 with perf over twelve 85 ms launches,
+	// kernel_init_pages — the host zeroing pages as guest RAM is faulted in — is 18.8% of a
+	// cold start and 3.0% of a restore, where next_uptodate_folio and filemap_get_entry
+	// replace it: the template's memory arrives as mapped file pages rather than fresh
+	// anonymous ones. rom_reset's 6 ms goes the same way, and QEMU says so in hw/core/loader.c
+	// rather than leaving it to be measured — it skips every ROM under RUN_STATE_INMIGRATE
+	// "because we'll fill the data in during the next incoming migration in all cases".
+	//
+	// So the largest item here is the host setting up memory for a machine that does not have
+	// any yet, and that is not a configuration problem. What it costs to avoid is a template:
+	// 2 GiB on disk per template, not sparse, plus ~92 MiB of device state, restored fast only
+	// while that file is in the host's page cache — and one fingerprint's worth of coupling,
+	// since a template restores into this machine and no other.
+	//
 	// There is no gap after machine init, and an earlier version of this comment said there
 	// was — it read "~8 ms to a QMP round trip" and put ~14 ms after it. The 8 ms was the QMP
 	// *greeting*, which the monitor emits from qemu_create_late_backends() at vl.c:3835,
