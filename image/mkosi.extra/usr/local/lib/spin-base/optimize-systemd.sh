@@ -162,6 +162,16 @@ DISABLE_GENERATORS=(
     systemd-rc-local-generator
     systemd-hibernate-resume-generator
     systemd-system-update-generator
+    # Two that cannot do anything on this machine, and the boot log says so in both cases:
+    # the tpm2 one reports that libtss2-esys.so.0 cannot be opened, and the factory-reset one
+    # runs on a machine systemd itself logs as not booted in EFI mode.
+    #
+    # Worth 1.0 ms of the 26 ms systemd spends loading units and building the initial
+    # transaction — measured 2026-09-26 with `task boot:unitload`, which asks systemd for that
+    # number through `systemd --test` rather than reading it out of a debug-logged boot. The
+    # same number read from a debug boot is 212 ms, and that difference is the logging.
+    systemd-tpm2-generator
+    systemd-factory-reset-generator
 )
 
 for gen in "${DISABLE_GENERATORS[@]}"; do
