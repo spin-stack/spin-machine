@@ -12,8 +12,8 @@
 #
 # which is the shape a chain of images is made of: one base, many overlays.
 #
-# ext4 and not something denser: the guest kernel has EXT4_FS, EROFS_FS and OVERLAY_FS and
-# explicitly not XFS_FS, BTRFS_FS or SQUASHFS (kernel/config-7.2.1-x86_64). Any other
+# ext4 and not something denser: the guest kernel has EXT4_FS and OVERLAY_FS and explicitly
+# not XFS_FS, BTRFS_FS, SQUASHFS or EROFS_FS (kernel/config-7.2.1-x86_64). Any other
 # filesystem here starts with a kernel config change one directory over.
 set -euo pipefail
 

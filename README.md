@@ -326,8 +326,8 @@ the tools a workspace expects, and boot optimizations that were each measured â€
 `image/mkosi.extra/usr/local/lib/spin-base/optimize-systemd.sh` names the milliseconds every
 mask saved, and is an unmodified copy for that reason.
 
-**ext4**, because the guest kernel has `EXT4_FS`, `EROFS_FS` and `OVERLAY_FS` and explicitly
-not `XFS_FS`, `BTRFS_FS` or `SQUASHFS`. Anything else starts with a kernel config change one
+**ext4**, because the guest kernel has `EXT4_FS` and `OVERLAY_FS` and explicitly not
+`XFS_FS`, `BTRFS_FS`, `SQUASHFS` or `EROFS_FS`. Anything else starts with a kernel config change one
 directory over â€” which `kernel/Dockerfile` now asserts.
 
 **Partitionless**, not a bootable disk with an ESP and a GPT, which nothing here would read.
