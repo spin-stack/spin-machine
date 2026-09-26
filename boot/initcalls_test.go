@@ -37,9 +37,15 @@ import (
 // so every number here is a p50 over REPS boots and the p95 is printed beside it to say how
 // settled it is. A wide spread means the host was shared, not that the kernel changed.
 //
+// Variants are interleaved rather than run in blocks, for the reason TestBootCost is: a
+// block schedule hands one variant a slow minute and reads it as a difference.
+//
 //	SPIN_INITCALL_PROBE=1   run at all
-//	REPS=<n>                boots to take (default 10)
+//	REPS=<n>                boots per variant (default 10)
 //	TOP=<n>                 how many initcalls to print (default 30)
+//	SPIN_KERNEL_B=<vmlinux> adds a variant booting this kernel instead of the release's,
+//	                        which is how a config change is compared without two runs on a
+//	                        host that is not the same host from one minute to the next
 func TestKernelInitcalls(t *testing.T) {
 	if os.Getenv("SPIN_INITCALL_PROBE") == "" {
 		t.Skip("set SPIN_INITCALL_PROBE=1: boots a VM and needs sudo to write into its overlay")
@@ -76,11 +82,10 @@ ExecStart=/bin/sh -c "{ echo SPIN-DMESG-BEGIN; dmesg; echo SPIN-DMESG-END; } > /
 [Install]
 WantedBy=multi-user.target
 `
-	v := variant{
-		label: "initcalls", cpus: "2", memory: "2048",
-		// log_buf_len because initcall_debug is two lines per initcall and the default ring
-		// wraps: a wrapped buffer loses the early initcalls, which are the interesting ones.
-		extra: "initcall_debug log_buf_len=2M",
+	addKernelVariant(t)
+
+	base := variant{
+		cpus: "2", memory: "2048",
 		files: map[string]string{
 			"/etc/systemd/system/spin-dmesg.service": dump,
 		},
@@ -89,21 +94,31 @@ WantedBy=multi-user.target
 		},
 	}
 
-	runs := make([]parsed, 0, reps)
+	runs := map[string][]parsed{}
 	for i := range reps {
-		console := bootUntil(t, out, v, "SPIN-DMESG-END", 90*time.Second)
-		// The raw buffer of the first boot, for a question this report does not answer yet.
-		// Written only when asked: a test that drops a megabyte in the working directory on
-		// every run is a test people stop running.
-		if f := os.Getenv("SPIN_CONSOLE_OUT"); f != "" && i == 0 {
-			if err := os.WriteFile(f, []byte(console), 0o644); err != nil {
-				t.Fatalf("writing the console to %s: %v", f, err)
+		for _, cv := range cmdlineVariants {
+			v := base
+			v.label = cv.label
+			// log_buf_len because initcall_debug is two lines per initcall and the default
+			// ring wraps: a wrapped buffer loses the early initcalls, which are the
+			// interesting ones. 2M and not 8M — 8M allocates 37 MB and cost 4.9 ms of the
+			// boot being measured.
+			v.extra = strings.TrimSpace("initcall_debug log_buf_len=2M " + cv.extra)
+			console := bootUntil(t, out, v, cv.kernel, "SPIN-DMESG-END", 90*time.Second)
+			// The raw buffer of the first boot, for a question this report does not answer
+			// yet. Written only when asked: a test that drops a megabyte in the working
+			// directory on every run is a test people stop running.
+			if f := os.Getenv("SPIN_CONSOLE_OUT"); f != "" && i == 0 && cv.label == cmdlineVariants[0].label {
+				if err := os.WriteFile(f, []byte(console), 0o644); err != nil {
+					t.Fatalf("writing the console to %s: %v", f, err)
+				}
+				t.Logf("raw console of the first boot written to %s", f)
 			}
-			t.Logf("raw console of the first boot written to %s", f)
+			runs[cv.label] = append(runs[cv.label], parse(t, console))
 		}
-		runs = append(runs, parse(t, console))
 	}
-	report(t, runs, top, reps)
+	compare(t, runs)
+	report(t, runs[cmdlineVariants[0].label], top, reps)
 }
 
 // bootUntil boots one machine and returns its console once marker has appeared.
@@ -111,7 +126,7 @@ WantedBy=multi-user.target
 // Separate from bootOnce because that one stops at a login prompt, which is the right place
 // to stop when a boot time is what is wanted and the wrong one here: everything this reads
 // is printed after it.
-func bootUntil(t *testing.T, out string, v variant, marker string, timeout time.Duration) string {
+func bootUntil(t *testing.T, out string, v variant, kernel, marker string, timeout time.Duration) string {
 	t.Helper()
 	dir := t.TempDir()
 	overlay := filepath.Join(dir, "overlay.qcow2")
@@ -123,9 +138,13 @@ func bootUntil(t *testing.T, out string, v variant, marker string, timeout time.
 	if v.extra != "" {
 		cmdline += " " + v.extra
 	}
-	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), "boot",
-		"--release", out, "--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
-		"--console", "file:/dev/stdout", "--append", cmdline)
+	args := []string{"boot", "--release", out, "--disk", overlay,
+		"--memory", v.memory, "--cpus", v.cpus,
+		"--console", "file:/dev/stdout", "--append", cmdline}
+	if kernel != "" {
+		args = append(args, "--kernel", kernel)
+	}
+	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -198,6 +217,99 @@ func clip(s string) string {
 		return s[:88]
 	}
 	return s
+}
+
+// The command lines to compare. The first is the baseline and the one the per-initcall
+// table below is taken from.
+//
+// Boot parameters only, because they cost nothing: a kernel config change invalidates every
+// template in existence, so it is worth knowing whether the saving is there at all before
+// anybody pays for it. thash_entries and uhash_entries size the TCP and UDP hash tables,
+// which inet_init allocates — 8.7 ms of initcall time, with another 8.2 ms of gap around
+// "IP idents hash table entries: 32768 (order: 6, 262144 bytes, linear)" on a machine that
+// will never hold 32768 connections.
+type cmdlineVariant struct{ label, extra, kernel string }
+
+var cmdlineVariants = []cmdlineVariant{
+	{label: "baseline"},
+	{label: "small hashes", extra: "thash_entries=2048 uhash_entries=2048"},
+}
+
+// A second kernel, if one was built. Not a hard-coded path: an experimental vmlinux is not
+// in this repository and a variant naming a file nobody has is a variant that fails for
+// everyone who did not build it.
+func addKernelVariant(t *testing.T) {
+	t.Helper()
+	k := os.Getenv("SPIN_KERNEL_B")
+	if k == "" {
+		return
+	}
+	abs, err := filepath.Abs(k)
+	if err != nil {
+		t.Fatalf("resolving SPIN_KERNEL_B=%q: %v", k, err)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf("SPIN_KERNEL_B=%s: %v", abs, err)
+	}
+	cmdlineVariants = append(cmdlineVariants, cmdlineVariant{label: "kernel B", kernel: abs})
+}
+
+// initcallsOfInterest are printed side by side for every variant, because a variant that
+// moved the total is only interesting once it is clear which initcall moved.
+var initcallsOfInterest = []string{
+	"acpi_init", "inet_init", "ksm_init", "hugepage_init", "kcompactd_init",
+	"virtio_pci_driver_init", "virtio_blk_init",
+}
+
+// compare prints one row per variant, and is the only part of this test that answers a
+// question of the form "is it worth changing".
+func compare(t *testing.T, runs map[string][]parsed) {
+	t.Helper()
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n%-14s %10s %10s %10s   %s\n", "VARIANT", "FREEING", "INITCALLS", "OUTSIDE", "(p50 ms)")
+	for _, cv := range cmdlineVariants {
+		rs := runs[cv.label]
+		freeing, totals, outside := make([]float64, 0, len(rs)), make([]float64, 0, len(rs)), make([]float64, 0, len(rs))
+		for _, r := range rs {
+			totals = append(totals, float64(r.total)/1000)
+			if r.freeing > 0 {
+				freeing = append(freeing, r.freeing*1000)
+				outside = append(outside, r.freeing*1000-float64(r.total)/1000)
+			}
+		}
+		sort.Float64s(freeing)
+		sort.Float64s(totals)
+		sort.Float64s(outside)
+		fmt.Fprintf(&b, "%-14s %10.1f %10.1f %10.1f\n", cv.label,
+			pct(freeing, 50), pct(totals, 50), pct(outside, 50))
+	}
+
+	fmt.Fprintf(&b, "\n%-26s", "INITCALL (p50 ms)")
+	for _, cv := range cmdlineVariants {
+		fmt.Fprintf(&b, " %14s", cv.label)
+	}
+	fmt.Fprintln(&b)
+	for _, name := range initcallsOfInterest {
+		fmt.Fprintf(&b, "%-26s", name)
+		for _, cv := range cmdlineVariants {
+			var xs []float64
+			for _, r := range runs[cv.label] {
+				for n, us := range r.calls {
+					if strings.HasPrefix(n, name+"+") {
+						xs = append(xs, float64(us)/1000)
+					}
+				}
+			}
+			sort.Float64s(xs)
+			if len(xs) == 0 {
+				fmt.Fprintf(&b, " %14s", "-")
+				continue
+			}
+			fmt.Fprintf(&b, " %14.2f", pct(xs, 50))
+		}
+		fmt.Fprintln(&b)
+	}
+	t.Log(b.String())
 }
 
 // parsed is one boot's ring buffer, reduced.
