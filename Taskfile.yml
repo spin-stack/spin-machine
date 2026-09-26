@@ -123,6 +123,9 @@ vars:
   KERNEL_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kernel,mode=max,compression=zstd{{end}}'
   # The firmware experiment. Its own scope like everything else, and it is never built by
   # `task build`: nothing in a release comes from it.
+  # The floor-kernel experiment, like QBOOT_ above: never built by `task build`.
+  KMIN_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kmin{{end}}'
+  KMIN_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kmin,mode=max,compression=zstd{{end}}'
   QBOOT_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qboot{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/qboot{{end}}'
   QBOOT_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qboot,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qboot,mode=max,compression=zstd{{end}}'
   E2FSPROGS_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/e2fsprogs{{end}}'
@@ -228,6 +231,15 @@ tasks:
       is what it is for. GAP= the floor in ms, TOP= how many gaps.
     cmds:
       - SPIN_SYSTEMD_DEBUG=1 go test ./boot/ -run TestSystemdDebug -count=1 -v -timeout 15m
+
+  boot:floor:
+    desc: >-
+      What a kernel costs before anything is configured into it: the release kernel against
+      the one `task kernel:minimal` builds, interleaved, on a marker both can reach. Needs
+      KVM, a built release, `task kernel:minimal`, and a diagnostic initrd in
+      SPIN_PROBE_INITRD=. The answer bounds every kernel-config change that could follow.
+    cmds:
+      - SPIN_FLOOR_PROBE=1 go test ./boot/ -run TestKernelFloor -count=1 -v -timeout 20m
 
   boot:firmware:
     desc: >-
