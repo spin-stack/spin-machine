@@ -99,6 +99,54 @@ func TestArgsHasTheMachineWideFlags(t *testing.T) {
 	}
 }
 
+// Every image a disk is made of is opened with drop-cache off, and the layers below the top
+// are the ones that matter.
+//
+// QEMU's default drops the host's page cache for a node when the machine is activated after
+// an incoming migration — see the note in chainArgs. A sealed read-only layer cannot have a
+// stale cache, and it is one file that every VM on the host reads through, so dropping it is
+// paid by all of them. The default is on, so this is the kind of thing that comes back when
+// a drive string is rewritten and shows up as a slow restore on a busy host rather than as
+// an error anywhere.
+func TestEveryImageIsOpenedWithoutDroppingTheHostCache(t *testing.T) {
+	s := spec(t)
+	s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 5}}}, {ID: 2, FDs: []FD{{Num: 6}}}}
+	s.Disks = []Disk{
+		{Path: "/images/one.qcow2", Format: "qcow2"},
+		{Chain: []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}},
+	}
+	args, err := s.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var drive string
+	var fileNodes int
+	for i, a := range args {
+		switch {
+		case a == "-drive":
+			drive = args[i+1]
+		case a == "-blockdev" && strings.Contains(args[i+1], `"driver":"file"`):
+			fileNodes++
+			if !strings.Contains(args[i+1], `"drop-cache":false`) {
+				t.Errorf("file node without drop-cache off: %s", args[i+1])
+			}
+		}
+	}
+	if !strings.Contains(drive, "file.drop-cache=off") {
+		t.Errorf("the drive does not turn drop-cache off on its own node: %s", drive)
+	}
+	// Both layers of the chain, not just the one the guest writes to.
+	if fileNodes != 2 {
+		t.Errorf("expected a file node per image of the chain, got %d", fileNodes)
+	}
+	// And not on a child the image may not have: naming backing.file here makes QEMU open a
+	// backing file whether the header has one or not, and it refuses when it does not.
+	if strings.Contains(drive, "backing.file.drop-cache") {
+		t.Errorf("the drive names a backing child it cannot know exists: %s", drive)
+	}
+}
+
 // The slot map is the reason the kernel can be told pci=lastbus=0. A device that
 // moved off its slot is a device the guest may not find, with no error.
 func TestDevicesSitOnTheirFixedSlots(t *testing.T) {

@@ -190,10 +190,28 @@ func (d Disk) chainArgs(i int) ([]string, error) {
 			node = fmt.Sprintf("blk%d-%d", i, j)
 		}
 		readOnly := d.Readonly || j > 0
+		// drop-cache off, on every layer.
+		//
+		// QEMU's default is on, and what it does is not caching: when a machine is activated
+		// after an incoming migration, block/file-posix.c's raw_co_invalidate_cache flushes the
+		// node and then calls posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED) on it. That exists
+		// for a live migration onto a second host over shared storage, where the source may
+		// have written the image and the destination's page cache would otherwise serve what it
+		// read before.
+		//
+		// Neither half of that is true here. A layer below the top is sealed and read-only, so
+		// nothing can have made its cache stale — and it is one file that every VM on the host
+		// reads through, so dropping it is paid by all of them and by none of the one that
+		// restored. Traced with `strace -y`, a restore issues the call against the base image
+		// itself; it cost 4.8 ms here against a cache that had just been read, which is the case
+		// where invalidate_mapping_pages mostly declines to free anything, and has been measured
+		// at 251 ms elsewhere against a colder one. With this off the call is not made at all and
+		// cont goes from 8.9 ms to 2.8.
 		file := map[string]any{
 			"driver": "file", "node-name": node + "-file",
 			"filename": fmt.Sprintf("/dev/fdset/%d", img.FDSet),
 			"aio":      "io_uring", "discard": "unmap", "read-only": readOnly,
+			"drop-cache": false,
 		}
 		if j == 0 && d.Locking {
 			file["locking"] = "on"
@@ -988,7 +1006,14 @@ func (s Spec) Args() ([]string, error) {
 		// discard=unmap lets the guest's TRIM reach the image, so a qcow2 overlay
 		// gives its blocks back when files are deleted inside the VM instead of
 		// growing to the high-water mark of everything ever written.
-		drive := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s,aio=io_uring,discard=unmap",
+		// file.drop-cache=off for the reason in chainArgs, and only on this node: the option
+		// names a child, and a disk given as one path has whatever backing file its own header
+		// names, which QEMU opens implicitly. Naming that child here — backing.file.drop-cache
+		// — makes QEMU open a backing file whether the image has one or not, and an image
+		// without one then fails with "Could not open backing file: Must specify either driver
+		// or file". A restore that wants every layer left alone declares its chain; see
+		// Disk.Chain.
+		drive := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s,aio=io_uring,discard=unmap,file.drop-cache=off",
 			d.Path, i, d.Format)
 		if d.Cache != "" {
 			drive += ",cache=" + d.Cache
