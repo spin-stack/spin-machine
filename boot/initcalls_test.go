@@ -99,11 +99,15 @@ WantedBy=multi-user.target
 		for _, cv := range cmdlineVariants {
 			v := base
 			v.label = cv.label
-			// log_buf_len because initcall_debug is two lines per initcall and the default
-			// ring wraps: a wrapped buffer loses the early initcalls, which are the
-			// interesting ones. 2M and not 8M — 8M allocates 37 MB and cost 4.9 ms of the
-			// boot being measured.
-			v.extra = strings.TrimSpace("initcall_debug log_buf_len=2M " + cv.extra)
+			// The profiling command line is not built here. `spin-machine boot --profile` is,
+			// through machine.Cmdline.Profiling(), and that is the only definition of what
+			// profiling a boot means — including the log_buf_len the default ring needs and
+			// the silent console, whose reason that function already records: a console
+			// registers during the device_initcall phase and registering it replays the whole
+			// printk ring into it synchronously, inside that initcall, so a verbose boot
+			// charges the measurement to whichever console driver registered.
+			v.extra = cv.extra
+			v.profile = true
 			console := bootUntil(t, out, v, cv.kernel, "SPIN-DMESG-END", 90*time.Second)
 			// The raw buffer of the first boot, for a question this report does not answer
 			// yet. Written only when asked: a test that drops a megabyte in the working
@@ -143,6 +147,9 @@ func bootUntil(t *testing.T, out string, v variant, kernel, marker string, timeo
 		"--console", "file:/dev/stdout", "--append", cmdline}
 	if kernel != "" {
 		args = append(args, "--kernel", kernel)
+	}
+	if v.profile {
+		args = append(args, "--profile")
 	}
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
