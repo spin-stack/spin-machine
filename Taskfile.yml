@@ -202,6 +202,15 @@ tasks:
     cmds:
       - SPIN_LOGIND_TEST=1 go test ./boot/ -run '^TestLogindSessions$' -count=1 -v -timeout 5m
 
+  boot:initcalls:
+    desc: >-
+      Where the kernel's own boot goes, initcall by initcall, as a p50 over REPS boots.
+      Needs KVM, a built release and sudo. It boots with the console silent and reads the
+      ring buffer afterwards, because initcall_debug on a serial console puts a VM exit
+      inside every interval it reports. TOP= how many rows, REPS= how many boots.
+    cmds:
+      - SPIN_INITCALL_PROBE=1 go test ./boot/ -run TestKernelInitcalls -count=1 -v -timeout 30m
+
   boot:firmware:
     desc: >-
       Compare firmware for this machine: SeaBIOS against the qboot build in qemu/qboot/.
