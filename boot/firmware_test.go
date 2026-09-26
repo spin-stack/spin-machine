@@ -140,7 +140,7 @@ type vm struct {
 	qmp    string
 }
 
-func (p *probe) start(t *testing.T, variant string, gen bool, incoming, kernel, initrd string) *vm {
+func (p *probe) start(t *testing.T, variant string, gen bool, incoming, kernel, initrd, cpu string) *vm {
 	t.Helper()
 	p.n++
 	qmp := filepath.Join(p.dir, fmt.Sprintf("qmp-%d.sock", p.n))
@@ -152,7 +152,7 @@ func (p *probe) start(t *testing.T, variant string, gen bool, incoming, kernel, 
 	args := []string{
 		"-L", p.firmware,
 		"-machine", "q35,sata=off,smbus=off",
-		"-accel", "kvm", "-cpu", "host",
+		"-accel", "kvm", "-cpu", orElse("host", cpu),
 		"-m", "2048", "-smp", "2",
 		"-nodefaults", "-display", "none", "-serial", "stdio", "-monitor", "none",
 		"-qmp", "unix:" + qmp + ",server=on,wait=off",
@@ -218,7 +218,7 @@ func (v *vm) close() {
 
 func (p *probe) reach(t *testing.T, variant string, gen bool, marker string, timeout time.Duration) (float64, error) {
 	t.Helper()
-	v := p.start(t, variant, gen, "", "", "")
+	v := p.start(t, variant, gen, "", "", "", "")
 	defer v.close()
 	return v.wait(marker, timeout)
 }
@@ -242,7 +242,7 @@ func (p *probe) mustReach(t *testing.T, variant string, gen bool, marker string)
 // reports a fault.
 func (p *probe) mustPublishVMGenID(t *testing.T) {
 	t.Helper()
-	v := p.start(t, "patched", withVMGenID, "", "", "")
+	v := p.start(t, "patched", withVMGenID, "", "", "", "")
 	ms, err := v.wait("SPIN-READY", 8*time.Second)
 	if err != nil {
 		v.close()
@@ -263,7 +263,7 @@ func (p *probe) mustPublishVMGenID(t *testing.T) {
 	q.close()
 	v.close()
 
-	r := p.start(t, "patched", withVMGenID, state, "", "")
+	r := p.start(t, "patched", withVMGenID, state, "", "", "")
 	defer r.close()
 	q = dial(t, r.qmp, r)
 	defer q.close()

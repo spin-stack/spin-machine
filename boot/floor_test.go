@@ -54,7 +54,7 @@ func TestKernelFloor(t *testing.T) {
 	// Same firmware, same initrd, same machine line: one argument differs. vmgenid stays on
 	// because it is on the machine this is asking about, and a floor kernel that cannot see
 	// the table still boots past it.
-	rows := []struct{ label, kernel, initrd string }{
+	rows := []struct{ label, kernel, initrd, cpu string }{
 		{label: "release", kernel: p.kernel},
 		{label: "floor", kernel: floor},
 	}
@@ -64,20 +64,30 @@ func TestKernelFloor(t *testing.T) {
 	// largest single items in kernel boot, and this says what that choice is worth on the same
 	// machine rather than on the general claim.
 	if lz4 := os.Getenv("SPIN_PROBE_INITRD_LZ4"); lz4 != "" {
-		rows = append(rows, struct{ label, kernel, initrd string }{
+		rows = append(rows, struct{ label, kernel, initrd, cpu string }{
 			label: "release+lz4", kernel: p.kernel, initrd: envFile(t, "SPIN_PROBE_INITRD_LZ4")})
+	}
+	// A named CPU model instead of the host's, which the machine already supports for a
+	// different reason: `-cpu host` shows the guest this host's silicon, so a template cannot
+	// move between machines, and Spec.Identity hashes the host CPU only in that case. What it
+	// costs at boot was never measured, and QEMU has to enumerate the host's CPUID and build
+	// the guest's from it either way — this says whether the migratable choice is also the
+	// cheaper one.
+	if cpu := os.Getenv("SPIN_CPU_MODEL"); cpu != "" {
+		rows = append(rows, struct{ label, kernel, initrd, cpu string }{
+			label: "named cpu", kernel: p.kernel, cpu: cpu})
 	}
 	for _, r := range rows {
 		if st, err := os.Stat(r.kernel); err == nil {
-			t.Logf("%-12s kernel %.1f MiB, initrd %s", r.label, float64(st.Size())/(1<<20),
-				filepath.Base(orElse(p.initrd, r.initrd)))
+			t.Logf("%-12s kernel %.1f MiB, initrd %s, cpu %s", r.label, float64(st.Size())/(1<<20),
+				filepath.Base(orElse(p.initrd, r.initrd)), orElse("host", r.cpu))
 		}
 	}
 
 	samples := map[string][]float64{}
 	for range reps {
 		for _, r := range rows {
-			v := p.start(t, "seabios", withVMGenID, "", r.kernel, r.initrd)
+			v := p.start(t, "seabios", withVMGenID, "", r.kernel, r.initrd, r.cpu)
 			ms, err := v.wait("SPIN-READY", 15*time.Second)
 			v.close()
 			if err != nil {

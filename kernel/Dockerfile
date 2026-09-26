@@ -158,11 +158,16 @@ RUN <<EOT
 
     # No virtual consoles. This machine's QEMU ships no VGA at all and its console is one
     # 16550 on ttyS0, so CONFIG_VT builds 64 tty devices that nothing opens and that udev
-    # walks on every boot — a quarter of the 266 devices it coldplugs. Worth 2.09 ms of the
-    # kernel phase, measured 2026-09-26 with `task boot:floor`; `task boot:bench` cannot see
-    # it through the userspace after it, which is why a kernel-config change is measured there
-    # first. olddefconfig drops VT_CONSOLE, CONSOLE_TRANSLATIONS, VGA_CONSOLE and
-    # DUMMY_CONSOLE with it; UNIX98_PTYS does not depend on it, so ssh still has its ptys.
+    # walks on every boot — a quarter of the 266 devices it coldplugs. olddefconfig drops
+    # VT_CONSOLE, CONSOLE_TRANSLATIONS, VGA_CONSOLE and DUMMY_CONSOLE with it; UNIX98_PTYS
+    # does not depend on it, so ssh keeps its ptys.
+    #
+    # It is off because it is dead, not because it is slow. Together with the erofs removal it
+    # measures 0.31 ms at `task boot:floor` over 40 interleaved boots on an idle host
+    # (2026-09-26), which is nothing. An earlier 20-boot run on a host that was building a
+    # kernel at the time read 2.09 ms for this symbol alone and does not reproduce — at this
+    # size a single run of this probe is a guess, and 40 on a quiet host is the smallest thing
+    # worth quoting.
     ! grep -q "CONFIG_VT=y" .config || (echo "ERROR: CONFIG_VT is back; there is no VGA and no virtual console here (see above)!" ; exit 1)
     grep -q "CONFIG_OVERLAY_FS=y" .config || (echo "ERROR: CONFIG_OVERLAY_FS not enabled!" ; exit 1)
 
@@ -232,9 +237,13 @@ RUN <<EOT
     # not one. `task boot:initcalls` reports ksm_init at 2.00 ms, hugepage_init at 2.00 and
     # kcompactd_init at 2.00 — and a kernel built with CONFIG_KSM and
     # CONFIG_TRANSPARENT_HUGEPAGE off, together with the erofs removal, measures -0.50 ms
-    # against this one at `task boot:floor`: nothing, on an instrument that resolves the
-    # 2.09 ms CONFIG_VT=n is worth. Those round 2.00 values are what initcall_debug can
-    # resolve at CONFIG_HZ=1000, not what the initcalls cost.
+    # against this one at `task boot:floor`: nothing. Those round 2.00 values are what
+    # initcall_debug can resolve at CONFIG_HZ=1000, not what the initcalls cost.
+    #
+    # Nothing in this config has been found to be worth more than about half a millisecond,
+    # CONFIG_VT included — see the note beside its assertion. The 45.6 ms that separates this
+    # kernel from the floor one in kernel/minimal/ is BTF, ACPI and ftrace, and BPF and
+    # hotplug need all three.
     #
     # COMPACTION is not available at all: CONFIG_VIRTIO_MEM depends on CONTIG_ALLOC, which is
     # def_bool (MEMORY_ISOLATION && COMPACTION) || CMA, so compaction is what this machine's
