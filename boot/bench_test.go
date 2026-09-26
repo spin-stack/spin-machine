@@ -26,6 +26,7 @@ type variant struct {
 	mask   []string          // units masked by writing into this boot's own overlay
 	files  map[string]string // written into the overlay: path under / -> content
 	links  map[string]string // symbolic links made in the overlay: path under / -> target
+	kernel string            // a kernel other than the release's, for comparing configs
 }
 
 // Masks are written into the overlay and never passed as `systemd.mask=`. That parameter is
@@ -34,6 +35,48 @@ type variant struct {
 // `systemd.mask=chrony.service` on the command line and `systemctl is-active chrony`
 // answering `active`. Anything concluded from that parameter is concluded from a boot in
 // which nothing was masked.
+// Rule files for hardware this machine cannot have. udev reads 49 of them and evaluates
+// them against the 266 devices it coldplugs; 32 reference cdrom, drm, input, alsa, hidraw,
+// tape, v4l, cameras, joysticks, mice, touchpads, graphics and sound cards, or a ProLiant's
+// power switch. They arrive with the udev package, not with anything this image asked for.
+//
+// Conservative on purpose. Not here and not maskable: 60-block and 60-persistent-storage
+// (vda), 60-serial (ttyS0), 71-seat (logind), the net-naming rules, 50-udev-default,
+// 80-debian-compat and 99-systemd. Masking one of those is a machine that does not boot or
+// a disk with no by-uuid link, and the point of the row is the ones that cannot matter.
+var impossibleRules = []string{
+	"60-cdrom_id.rules",
+	"60-drm.rules",
+	"60-evdev.rules",
+	"60-fido-id.rules",
+	"60-gpiochip.rules",
+	"60-persistent-alsa.rules",
+	"60-persistent-hidraw.rules",
+	"60-persistent-input.rules",
+	"60-persistent-storage-tape.rules",
+	"60-persistent-v4l.rules",
+	"60-sensor.rules",
+	"61-persistent-storage-android.rules",
+	"70-camera.rules",
+	"70-joystick.rules",
+	"70-mouse.rules",
+	"70-touchpad.rules",
+	"71-power-switch-proliant.rules",
+	"78-graphics-card.rules",
+	"78-sound-card.rules",
+}
+
+// maskedRules is what udev's own override mechanism is: a symlink to /dev/null in
+// /etc/udev/rules.d shadows the file of the same name in /usr/lib/udev/rules.d, exactly as
+// it works for units.
+func maskedRules() map[string]string {
+	m := map[string]string{}
+	for _, r := range impossibleRules {
+		m["/etc/udev/rules.d/"+r] = "/dev/null"
+	}
+	return m
+}
+
 var udevUnits = []string{
 	"systemd-udevd.service",
 	"systemd-udevd-control.socket",
@@ -247,18 +290,71 @@ var variants = []variant{
 	// udev's ~46 ms, about 2 ms, which this harness cannot resolve. What it establishes is the
 	// shape of the cost: it is per device and there is no one device that matters.
 	//
-	// So the prediction for CONFIG_VT=n, which removes the 64 ttys: 24% of the devices, and
-	// with 14 workers running in parallel somewhere between 5 and 12 ms of the 51 ms udev
-	// window. Worth a kernel build to find out, and worth knowing beforehand that it is ~10 ms
-	// of a 239 ms boot. Early userspace is 139 ms and it is not one expensive thing; it is
-	// 266 cheap ones.
+	// The prediction from that was CONFIG_VT=n — 64 of the 266 devices, 24%, so 5 to 12 ms of
+	// the 51 ms udev window with 14 workers in parallel. It was built and measured, and it is
+	// wrong. 15 boots each on a quiet host, 2026-09-26, p50/p95 to a usable machine:
+	//
+	//     baseline           228/237
+	//     fewer devices      225/238
+	//     fewer udev rules   228/234
+	//     kernel B (VT=n)    228/246
+	//
+	// Nothing. Not noise hiding it either: at a p95 of 237 a 10 ms saving would be visible.
+	// Removing a quarter of the devices udev walks, and nineteen of its rule files, changes
+	// the time to a login prompt by zero.
+	//
+	// Which means udev's 46 ms is not on the critical path. It runs up to 14 workers while
+	// other things happen, and taking work away from it gives the wall clock back to whatever
+	// it was overlapping with. That is the third time the same mistake has been made here in
+	// a different disguise: `blame` ranks units by their own duration, a critical chain ranks
+	// by what finished last, and `task boot:systemd` ranks writers by the time between their
+	// log lines. None of the three is a list of savings. The only way to find out what a boot
+	// costs is to take something out and measure, and every removal tried so far has bought
+	// nothing or cost a great deal.
 	labelled("fewer devices", variant{cpus: "2", memory: "2048",
 		files: gettyDropin(gettyEcho),
 		extra: "loop.max_loop=0 8250.nr_uarts=1"}),
+	// The other half of udev's work: not how many devices, but how many rules each one is
+	// matched against. This masks the 19 rule files above and changes nothing else.
+	//
+	// It is the image-side lever, which is what makes it worth trying before the kernel one:
+	// no symbol moves, so no template is invalidated, and if it pays it pays in image/ where
+	// static configuration belongs.
+	//
+	// It does not pay — 228/234 against the baseline's 228/237. Kept because the row is the
+	// only thing that says so, and because it is cheap to re-run against a future image whose
+	// rule set is larger. See the numbers under "fewer devices".
+	labelled("fewer udev rules", variant{cpus: "2", memory: "2048",
+		files: gettyDropin(gettyEcho),
+		links: maskedRules()}),
 	// What a tmpfs /tmp and the boot's tmpfiles pass cost against the /tmp on the disk the
 	// image once shipped, which every copy of the disk carried. 20 boots of each, 2026-09-26,
 	// p50/p95 to a usable machine: baseline 223/230, this row 220/232 - 3 ms, within noise.
 	labelled("tmp on disk", without("tmp.mount", "systemd-tmpfiles-setup.service")),
+}
+
+// withKernelVariant adds a row booting a kernel built somewhere else, when SPIN_KERNEL_B
+// names one. Interleaved with the rest rather than run as a second pass, which is the only
+// way to compare two kernel configurations on a host that is not the same host from one
+// minute to the next: three consecutive runs of one kernel read 59.5, 96.8 and 167.7 ms.
+//
+// Not a hard-coded path, because a kernel built from a changed config is not in this
+// repository and a row naming a file nobody has fails for everyone who did not build it.
+func withKernelVariant(t *testing.T) {
+	t.Helper()
+	k := os.Getenv("SPIN_KERNEL_B")
+	if k == "" {
+		return
+	}
+	abs, err := filepath.Abs(k)
+	if err != nil {
+		t.Fatalf("resolving SPIN_KERNEL_B=%q: %v", k, err)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf("SPIN_KERNEL_B=%s: %v", abs, err)
+	}
+	variants = append(variants, variant{label: "kernel B", cpus: "2", memory: "2048",
+		files: gettyDropin(gettyEcho), kernel: abs})
 }
 
 // TestBootCost boots each variant many times, interleaved, and prints what each phase cost.
@@ -277,6 +373,7 @@ func TestBootCost(t *testing.T) {
 	}
 	out := releaseDir(t)
 	reps := envInt(t, "REPS", 20)
+	withKernelVariant(t)
 
 	if !canSudo() {
 		for _, v := range variants {
@@ -462,9 +559,13 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 		cmdline += " " + v.extra
 	}
 
-	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), "boot",
-		"--release", out, "--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
-		"--console", "file:/dev/stdout", "--append", cmdline)
+	args := []string{"boot", "--release", out, "--disk", overlay,
+		"--memory", v.memory, "--cpus", v.cpus,
+		"--console", "file:/dev/stdout", "--append", cmdline}
+	if v.kernel != "" {
+		args = append(args, "--kernel", v.kernel)
+	}
+	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	// Its own process group, so the machine can be taken down as a whole. spin-machine execs
 	// QEMU as a child and killing the parent leaves the child running: the first version of
 	// this left one `qemu-system-x86_64` per boot alive, each still holding an overlay open.
@@ -542,6 +643,19 @@ func editOverlay(t *testing.T, overlay string, v variant) {
 		}
 	}
 	for path, target := range v.links {
+		// A mask only masks something. udev reads /etc/udev/rules.d before
+		// /usr/lib/udev/rules.d and a file of the same name shadows the one below it, so a
+		// symlink to /dev/null here switches a rule file off — and a symlink whose name
+		// matches no rule file switches nothing off, changes no timing, and reports a row
+		// that looks like a measurement. Checked rather than trusted, for the same reason
+		// image/build.sh opens the filesystem it just made.
+		if target == "/dev/null" && strings.HasPrefix(path, "/etc/udev/rules.d/") {
+			shadowed := filepath.Join(mnt, "usr/lib/udev/rules.d", filepath.Base(path))
+			if err := exec.Command("sudo", "test", "-e", shadowed).Run(); err != nil {
+				t.Fatalf("%s masks nothing: there is no %s in this image",
+					path, filepath.Base(path))
+			}
+		}
 		dst := filepath.Join(mnt, path)
 		mustRun(t, "sudo", "mkdir", "-p", filepath.Dir(dst))
 		mustRun(t, "sudo", "ln", "-sfn", target, dst)
