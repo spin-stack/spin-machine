@@ -27,6 +27,12 @@ import (
 //
 //	SPIN_USERSPACE_PROBE=1  run at all
 //	REPS=<n>                boots to take (default 5)
+//	SPIN_SYSTEMD_VARIANT=console-swap
+//	                      measure the "console no dev" configuration. Its 331 ms lands
+//	                      entirely after `Startup finished` — every phase before that is
+//	                      unchanged — so the question is whether the login process starts
+//	                      late or starts on time and its bytes are held. systemd's own
+//	                      accounting is the only side that can say.
 func TestUserspaceCost(t *testing.T) {
 	if os.Getenv("SPIN_USERSPACE_PROBE") == "" {
 		t.Skip("set SPIN_USERSPACE_PROBE=1: boots a VM and needs sudo to write into its overlay")
@@ -64,6 +70,18 @@ WantedBy=multi-user.target
 		links: map[string]string{
 			"/etc/systemd/system/multi-user.target.wants/spin-analyze.service": "/etc/systemd/system/spin-analyze.service",
 		},
+	}
+
+	if os.Getenv("SPIN_SYSTEMD_VARIANT") == "console-swap" {
+		sw := consoleSwap()
+		v.mask = sw.mask
+		for k, val := range sw.files {
+			v.files[k] = val
+		}
+		for k, val := range sw.links {
+			v.links[k] = val
+		}
+		v.label += " + console swap"
 	}
 
 	var kernel, userspace, total []float64

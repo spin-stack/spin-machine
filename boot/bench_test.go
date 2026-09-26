@@ -166,6 +166,10 @@ func withFile(m map[string]string, path, content string) map[string]string {
 }
 
 var variants = []variant{
+	// The image as it is, with a real agetty rather than the echo every row below uses. It
+	// reads about a second slower and that is agetty's own sleep, not a fault to hunt: the
+	// terminfo timeout found on spin-machine-console.service was tried here too and
+	// TERM=dumb on this unit changes nothing (1229 against 1232, 12 boots, 2026-09-26).
 	{label: "as shipped", cpus: "2", memory: "2048"},
 	{label: "baseline", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho)},
 	// The critical chain into multi-user.target, measured 2026-09-10:
@@ -247,30 +251,24 @@ var variants = []variant{
 	// The login prompt's own dependency on udev, which every row above pays including the
 	// baseline: the drop-in they use sits on serial-getty@ttyS0, and that unit carries
 	// `BindsTo=dev-ttyS0.device`. systemd-getty-generator instantiates it from console=ttyS0,
-	// so nothing has to enable it for it to be on the critical path, and a critical chain
-	// puts dev-ttyS0.device at 128 ms.
+	// so nothing has to enable it for it to be on the critical path.
 	//
 	// Swapping it for spin-machine-console.service, which the image carries and which has no
-	// device dependency, is 340 ms *worse* — measured 2026-09-26, and not explained. Removing
-	// that unit's Type=idle does not recover it either. This row exists to stop the swap being
-	// tried again on the strength of the chain: a critical chain is what finished last, never
-	// a list of savings.
-	labelled("console no dev", consoleSwap()),
-	// The swap with the tty handling taken out, which was the third hypothesis for its cost
-	// and is wrong like the other two: 693 against the swap's 701 over 12 boots, 2026-09-26.
+	// device dependency, costs nothing: 221/233 against the baseline's 227/236 over 12 boots,
+	// 2026-09-26. So the hole that unit's own comment describes can be closed after all.
 	//
-	// What `task boot:systemd SPIN_SYSTEMD_VARIANT=console-swap` shows is not one blocking
-	// dependency but the whole of early userspace running about three times slower — udevd
-	// 120 ms against 34.5, udevadm 60 against 11, systemd-sysctl 39 against 3 — and its first
-	// logged line at 1009 ms against 409. Whatever the swap does, it degrades everything
-	// after it rather than waiting on something.
+	// It did not look that way. Without TERM=dumb the same swap is 558/572, and three
+	// explanations were measured and wrong before the console named the fourth itself — the
+	// device dependency the swap removes, the unit's Type=idle, and its TTYReset/TTYVHangup,
+	// which both units carry anyway and so could never have been a difference between them.
+	// What it is: systemd sets TERM for a service declaring its own TTYPath rather than
+	// passing its own down, so machine/cmdline.go's TERM=dumb does not reach this unit, and
+	// the tty setup waits out the 334 ms terminfo timeout asking a serial port with a file
+	// behind it what it can do.
 	//
-	// Eliminated so far: the device dependency it was supposed to remove, the replacement
-	// unit's Type=idle, and its TTYReset/TTYVHangup — which both units carry anyway, so it
-	// could never have been a difference between them. The row stays because the cost is real
-	// and the cause is not known.
-	labelled("console no tty reset", withDropin(consoleSwap(),
-		"TTYReset=no\nTTYVHangup=no\n")),
+	// The drop-in mirrors the Environment=TERM=dumb now in image/, and goes when an image
+	// carrying it is what _output holds.
+	labelled("console no dev", withDropin(consoleSwap(), "Environment=TERM=dumb\n")),
 	// Devices udev does not have to walk. udev coldplugs 266 of them on this machine, and
 	// three families are for hardware it does not have: 64 virtual consoles (CONFIG_VT, on a
 	// machine whose QEMU ships no VGA), 8 unused loop devices, and three of the four 16550s.
