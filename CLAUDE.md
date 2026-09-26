@@ -5,29 +5,36 @@
 A virtual machine: QEMU, a guest kernel, a base image, and the definition of the machine
 they make. Four artefacts and one version.
 
-**What it is not: anything that runs inside a guest.** No container runtime, no agent, no
-supervisor, no RPC, and no init. A release is not bootable on its own and that is deliberate
-— whoever runs guests brings the init. There is no exception; there was one, a debug
-initramfs, and it was a second init doing what the consumer's already does. It went on
-2026-09-10, when udev was turned back on and the machine reached a login prompt through
-`root=/dev/vda init=/sbin/init` without it.
+**A release does not carry software that owns a guest.** No container runtime, agent,
+supervisor, RPC service, or init is part of the published machine. A release is not bootable
+on its own: whoever runs a guest supplies its init.
 
-**It does not know about the projects that consume it.** No repository names, no file paths
-into other trees, no ADR numbers. If a rationale can only be stated by naming a consumer,
-it is either the wrong rationale or the wrong repository for the code. Say what is true of
-the machine.
+Diagnostic input is different from release content. A test or experiment may use a caller
+supplied initrd, a temporary guest helper, a disposable overlay, or a separately built
+firmware image when it is isolated from `task build` and `task release`. State clearly what
+is diagnostic, who supplies it, and what it is measuring. The qboot probe is the model:
+it does not change a release tree and compares both variants with the same diagnostic initrd.
+
+**Keep consumer-specific implementation out of this tree, but record real contracts.** Do
+not copy consumer code, paths, or an ADR as a substitute for an explanation. It is correct to
+name an external component when its protocol, provisioned file, lifecycle, or compatibility
+contract affects this machine; describe the contract here and test the observable behaviour
+where possible.
 
 ## The three rules that are load-bearing
 
-Everything else is style. These are correctness, and each fails silently.
+These are release invariants, not defaults. Everything below them is a strong engineering
+default unless it says otherwise; an experiment may depart from a default when it is isolated
+and makes its scope and result clear.
 
 1. **A release is one machine.** `machine.Spec.Fingerprint` hashes the QEMU binary, the
    kernel and the initrd by content, together with the four arguments that decide the
    machine's shape. Two machines with the same fingerprint may exchange templates; two
-   without may not, and a restore across them is undefined rather than an error. Any change
-   to any of those three files invalidates every template in existence. That is the design,
-   not a bug to work around — but it means "I only changed a comment in `kernel/Dockerfile`"
-   is a fleet-wide event, and it has already happened once in this repository's history.
+   without may not, and a restore across them is undefined rather than an error. A content
+   change to any of those three files invalidates every template in existence. That is the
+   design, not a bug to work around. A source or recipe change is a possible fleet-wide event; whether
+   it is one is decided by the resulting artifact hashes and shape, not by the diff's apparent
+   size. Verify them before promotion.
 
 2. **The base image is never written to.** Every VM maps it read-only through a qcow2
    backing chain and many share one file. Anything that opens it for writing invalidates
@@ -59,6 +66,25 @@ what it makes clear.
   systemd unit written by a Go program at run time was the wrong answer to a real problem;
   the unit belongs in `image/`, and only the symlink that enables it belongs in the boot.
 
+### Experiments
+
+Experiments are welcome when they make a production decision cheaper to evaluate. They must
+not silently become production behaviour.
+
+- Keep experiment outputs, overlays, initrds, firmware, and caches separate from release
+  outputs. Do not modify a shared base image; use a disposable overlay or a new artifact.
+- A probe may change one production default at a time, including a kernel option, unit,
+  QEMU sandbox setting, CPU affinity, or diagnostic initrd. Production defaults remain the
+  safe settings until the result is promoted deliberately.
+- Record the baseline, environment, sample count, and the measured result. A fast exploratory
+  run is enough to decide what to investigate; a promotion needs a reproducible comparison
+  and the functional check that could reveal a false win.
+- If a promoted change alters what a restored guest sees, update the machine identity and
+  prove that templates do not cross the boundary. If it is host-only (for example launcher
+  CPU affinity), document why it does not.
+- Remove or quarantine an experiment once it no longer has an active question. Keep the
+  conclusion and durable evidence, not a permanent switch in the release path.
+
 ## Go
 
 - **Clarity beats cleverness.** This code is read far more often than it is written, and
@@ -82,13 +108,13 @@ what it makes clear.
 Comments here are longer than usual, on purpose. The rule is what makes them worth reading:
 
 - **Say why, not what.** The code says what. If a comment restates it, delete the comment.
-- **Carry the evidence.** When something is the way it is because of a measurement, put the
-  number in: `87.6 ms to 51.1 ms, kernel to init`, `+356 ms and rejected`, `−3.7 ms of
-  boot`. A claim without a number invites someone to undo it on a hunch.
-- **Record what was tried and failed.** The comments that have paid for themselves most
-  here are the ones naming a dead end: the drop-in that did not lift the device dependency,
-  the flag that broke a link twenty minutes into a build, the check that passed for every
-  input because a tool exits 0 on failure. Someone will otherwise try it again.
+- **Carry durable evidence.** When a production decision rests on a measurement, put a
+  concise result and its context near the decision, or link to a maintained measurement
+  record. Include a number when it is the reason for the decision; do not turn an exploratory
+  observation into a permanent claim.
+- **Record failed approaches selectively.** Keep a failed attempt near code only when it
+  prevents a plausible, costly regression or repeats a non-obvious tool failure. Put raw
+  samples and short-lived exploration in a measurement record, issue, or commit instead.
 - **Date a fact that could go stale.** "measured 2026-09-07" tells a reader whether to
   re-check.
 - **Do not write down that it works.** The README had a "Status" section listing what had
@@ -97,14 +123,15 @@ Comments here are longer than usual, on purpose. The rule is what makes them wor
   justified — so it could only rot, and it did. A claim about the state of the tree
   belongs in a workflow, a badge, or a commit message. Never in prose that nobody
   re-reads.
-- **Do not name the projects that consume this.** See above.
+- **Name external contracts when relevant.** See above.
 
 ## Artefacts leave this machine
 
-QEMU is linked statically, and anything added beside it should be too. An artefact that
-needs the host to have the right libraries is not one artefact, and the failure it produces
-arrives on somebody else's machine, at start-up, naming a library rather than a decision
-made here.
+Host-executed binaries published in a release should be statically linked unless there is a
+documented deployment reason not to be. This rule does not apply to guest userspace, build
+tools, or diagnostic artifacts. A released host binary that depends on host libraries needs a
+compatibility and packaging story, because its failure otherwise arrives on someone else's
+machine at start-up.
 
 ## Verifying
 

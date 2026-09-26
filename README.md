@@ -65,9 +65,11 @@ Each part's targets live beside what they build — `qemu/Taskfile.yml`, `kernel
 `image/Taskfile.yml` — so `task qemu:build` is next to `qemu/Dockerfile`. The root
 `Taskfile.yml` holds the vars every part reads and the targets that cross all of them.
 
-**What is deliberately not here: the software that runs inside a guest.** This repository
-builds a machine. It knows nothing about what boots on it, and a release is not bootable on
-its own by design — whoever runs guests brings the initrd. There is no exception to that.
+**What is deliberately not in a release: software that owns a guest.** This repository
+builds a machine, and a release is not bootable on its own by design — whoever runs guests
+brings the initrd. Tests and performance probes may use caller-supplied diagnostic initrds
+or disposable guest helpers, but those are not release artifacts and must stay isolated from
+the published machine.
 
 ## What it publishes
 
