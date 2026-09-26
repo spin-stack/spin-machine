@@ -19,14 +19,15 @@ import (
 // variant is one configuration to boot, and the whole point is that two of them differ in
 // exactly one thing.
 type variant struct {
-	label  string
-	cpus   string
-	memory string
-	extra  string            // appended to the kernel command line
-	mask   []string          // units masked by writing into this boot's own overlay
-	files  map[string]string // written into the overlay: path under / -> content
-	links  map[string]string // symbolic links made in the overlay: path under / -> target
-	kernel string            // a kernel other than the release's, for comparing configs
+	label   string
+	cpus    string
+	memory  string
+	extra   string            // appended to the kernel command line
+	mask    []string          // units masked by writing into this boot's own overlay
+	files   map[string]string // written into the overlay: path under / -> content
+	links   map[string]string // symbolic links made in the overlay: path under / -> target
+	kernel  string            // a kernel other than the release's, for comparing configs
+	profile bool              // boot with `--profile`: initcall profiling, console silent
 }
 
 // Masks are written into the overlay and never passed as `systemd.mask=`. That parameter is
