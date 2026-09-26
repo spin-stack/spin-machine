@@ -40,6 +40,25 @@ tasks:
           .
       - task: verify
 
+  qboot:
+    desc: >-
+      Build the qboot firmware experiment in qemu/qboot/ — stock and patched — into
+      _output/qboot/. Not part of a release and not on the path to one: it is the input to
+      `task boot:firmware`, which decides whether a firmware can run this machine before it
+      times one. See qemu/qboot/README.md.
+    cmds:
+      - mkdir -p {{.OUTPUT_ABS}}
+      - |
+        docker buildx build \
+          --file qemu/qboot/Dockerfile \
+          --target extract \
+          --platform linux/amd64 \
+          --cache-from {{.QBOOT_CACHE_FROM}} \
+          --cache-to {{.QBOOT_CACHE_TO}} \
+          --output type=local,dest={{.OUTPUT_ABS}}/qboot \
+          .
+      - cmd: echo "✓ {{.OUTPUT_ABS}}/qboot/{stock,patched}/bios.bin"
+
   verify:
     desc: Assert the extracted QEMU tree carries what every consumer needs.
     cmds:

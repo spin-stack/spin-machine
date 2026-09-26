@@ -4,6 +4,13 @@ Copyright The spin-stack Authors
 This product includes software developed by the spin-stack project.
 Licensed under the Apache License, Version 2.0; see LICENSE.
 
+The patch in qemu/qboot/write-pointer.patch includes context from qboot,
+https://github.com/bonzini/qboot, commit
+8ca302e86d685fa05b16e2b208888243da319941, under GPL-2.0 (see qemu/qboot/COPYING).
+It modifies fw_cfg.c, include/fw_cfg.h and tables.c to implement WRITE_POINTER,
+DMA writes and error/bounds checks. This experimental firmware is not shipped
+in releases. The Apache-2.0 licence does not apply to that patch or COPYING.
+
 --------------------------------------------------------------------------------
 Third-party software in a release, which this licence does NOT cover
 --------------------------------------------------------------------------------
