@@ -214,6 +214,16 @@ tasks:
     cmds:
       - SPIN_INITCALL_PROBE=1 go test ./boot/ -run TestKernelInitcalls -count=1 -v -timeout 30m
 
+  boot:unitload:
+    desc: >-
+      What systemd spends loading units and building the initial transaction, from its own
+      instrumentation: `systemd --test` reports it at LOG_INFO where a real boot logs it at
+      LOG_DEBUG. Many runs inside one boot, so there is no boot-to-boot noise, and it
+      measures the generators by masking two that cannot do anything on this machine. Needs
+      KVM, a built release and sudo.
+    cmds:
+      - SPIN_UNITLOAD_PROBE=1 go test ./boot/ -run TestUnitLoadCost -count=1 -v -timeout 15m
+
   boot:userspace:
     desc: >-
       systemd's own account of the boot: its kernel/userspace split, `blame` and the
