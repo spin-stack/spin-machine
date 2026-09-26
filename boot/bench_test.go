@@ -226,6 +226,35 @@ var variants = []variant{
 		links: map[string]string{
 			"/etc/systemd/system/multi-user.target.wants/spin-machine-console.service": "/usr/lib/systemd/system/spin-machine-console.service",
 		}}),
+	// Devices udev does not have to walk.
+	//
+	// `task boot:systemd` counted what udev coldplugs on this machine: 266 devices in a 51 ms
+	// window, with 18 occurrences of "Maximum number (14) of children reached" and, per
+	// worker, a failing dlopen of libnss_systemd.so.2 and a failing userdb group lookup. The
+	// families, counted 2026-09-26:
+	//
+	//     64 ttyN      16 memoryN     8 loopN      4 ttySN      4 cpuN      3 virtioN
+	//
+	// Three of those are for hardware this machine does not have. The 64 virtual consoles are
+	// CONFIG_VT on a machine whose QEMU has no VGA at all and whose console is ttyS0; the 8
+	// loop devices are never used; and only one of the four 16550s exists. This row switches
+	// off the two that are boot parameters, because a parameter costs nothing to test and a
+	// kernel config change invalidates every template in existence — worth knowing the saving
+	// is real before anybody pays for it.
+	//
+	// It is not visible: 235/584 against the baseline's 239/423 over 15 boots, 2026-09-26.
+	// That is the arithmetic working out rather than a surprise — 11 devices of 266 is 4% of
+	// udev's ~46 ms, about 2 ms, which this harness cannot resolve. What it establishes is the
+	// shape of the cost: it is per device and there is no one device that matters.
+	//
+	// So the prediction for CONFIG_VT=n, which removes the 64 ttys: 24% of the devices, and
+	// with 14 workers running in parallel somewhere between 5 and 12 ms of the 51 ms udev
+	// window. Worth a kernel build to find out, and worth knowing beforehand that it is ~10 ms
+	// of a 239 ms boot. Early userspace is 139 ms and it is not one expensive thing; it is
+	// 266 cheap ones.
+	labelled("fewer devices", variant{cpus: "2", memory: "2048",
+		files: gettyDropin(gettyEcho),
+		extra: "loop.max_loop=0 8250.nr_uarts=1"}),
 	// What a tmpfs /tmp and the boot's tmpfiles pass cost against the /tmp on the disk the
 	// image once shipped, which every copy of the disk carried. 20 boots of each, 2026-09-26,
 	// p50/p95 to a usable machine: baseline 223/230, this row 220/232 - 3 ms, within noise.
