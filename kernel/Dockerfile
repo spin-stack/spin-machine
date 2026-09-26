@@ -145,12 +145,16 @@ RUN <<EOT
     grep -q "CONFIG_RD_LZ4=y" .config || (echo "ERROR: CONFIG_RD_LZ4 not enabled (the lz4 initramfs cannot be unpacked)!" ; exit 1)
 
     # The filesystems the base image and the guest's overlay are made of. ext4 is what
-    # image/ produces and what a writable layer is formatted as; erofs is the read-only
-    # half of the containerd path that qcow2 replaces; overlayfs stacks them. A base image
-    # in a filesystem this kernel cannot mount is a VM that boots and finds no root, so
-    # changing image/mkosi.conf to xfs or squashfs starts here, not there.
+    # image/ produces and what a writable layer is formatted as; overlayfs stacks them. A
+    # base image in a filesystem this kernel cannot mount is a VM that boots and finds no
+    # root, so changing image/mkosi.conf to xfs or squashfs starts here, not there.
+    #
+    # erofs was here as the read-only half of a containerd path that qcow2 replaced, and
+    # nothing has mounted one since. It brought CONFIG_EROFS_FS_ZIP with LZMA at 16 streams,
+    # DEFLATE and ZSTD decompressors for an image format this machine never reads. Removed
+    # 2026-09-26; a kernel that needs it again adds the symbol and this assertion together.
     grep -q "CONFIG_EXT4_FS=y" .config || (echo "ERROR: CONFIG_EXT4_FS not enabled (the base image cannot be mounted)!" ; exit 1)
-    grep -q "CONFIG_EROFS_FS=y" .config || (echo "ERROR: CONFIG_EROFS_FS not enabled!" ; exit 1)
+    ! grep -q "CONFIG_EROFS_FS=y" .config || (echo "ERROR: CONFIG_EROFS_FS is back; it is dead weight here (see above)!" ; exit 1)
     grep -q "CONFIG_OVERLAY_FS=y" .config || (echo "ERROR: CONFIG_OVERLAY_FS not enabled!" ; exit 1)
 
     # PVH is the only boot path: there is no bootloader and no UEFI, and QEMU enters this
