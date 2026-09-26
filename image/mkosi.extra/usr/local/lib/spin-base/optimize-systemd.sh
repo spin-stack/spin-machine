@@ -129,13 +129,9 @@ MASK_UNITS=(
     sys-kernel-debug.mount
     sys-kernel-tracing.mount
 
-    # tmp.mount: /tmp is already in the image at mode 1777 (24ms).
-    tmp.mount
-
-    # tmpfiles-setup (19ms + 13ms + 11ms). The directories it would create are already
-    # there: /tmp is in the image at mode 1777 (image/build.sh makes it), /run is a tmpfs
-    # systemd mounts itself before any unit runs, and /dev is devtmpfs with udev on top.
-    systemd-tmpfiles-setup.service
+    # tmpfiles-setup for /dev (13ms + 11ms): /dev is devtmpfs with udev on top, and the nodes
+    # these would create are already there. The one for the rest of the filesystem is not
+    # masked, nor is tmp.mount - image/build.sh says why.
     systemd-tmpfiles-setup-dev.service
     systemd-tmpfiles-setup-dev-early.service
 

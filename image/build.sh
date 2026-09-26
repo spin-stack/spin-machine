@@ -301,11 +301,23 @@ done
 
 # A boot optimization that is invisible in a file listing and expensive when it regresses:
 # a masked unit is a symlink to /dev/null, and a package upgrade replacing one turns it
-# back on. Two of the ones optimize-systemd.sh masked for measured reasons.
-for u in systemd-random-seed.service tmp.mount; do
+# back on. One of the ones optimize-systemd.sh masked for measured reasons.
+for u in systemd-random-seed.service; do
     stat_in_image "/etc/systemd/system/$u" | grep -q '/dev/null' || {
         echo "ERROR: $u is not masked - optimize-systemd.sh masked it and something put it back" >&2
         exit 1; }
+done
+
+# And two that must never be masked, whatever they cost a boot. /tmp is where a machine's
+# services and its users leave what one boot needs - sockets, private directories, files
+# somebody meant to throw away - and on the disk it outlives the boot: every copy of the disk
+# carries it. tmp.mount makes it a tmpfs, so it ends with the boot; tmpfiles-setup is what
+# removes and recreates at boot what the distribution says does not carry over.
+for u in tmp.mount systemd-tmpfiles-setup.service; do
+    if stat_in_image "/etc/systemd/system/$u" | grep -q '/dev/null'; then
+        echo "ERROR: $u is masked - /tmp would be on the disk, and in every copy of it" >&2
+        exit 1
+    fi
 done
 
 # logind is deferred rather than masked, and the two halves of that only work together.

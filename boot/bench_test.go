@@ -168,6 +168,10 @@ var variants = []variant{
 	// of Type=simple was run against a real agetty whose sleep(1) buried it.
 	{label: "getty no idle", cpus: "2", memory: "2048",
 		files: gettyDropin("Type=simple\n" + gettyEcho)},
+	// What a tmpfs /tmp and the boot's tmpfiles pass cost against the /tmp on the disk the
+	// image once shipped, which every copy of the disk carried. 20 boots of each, 2026-09-26,
+	// p50/p95 to a usable machine: baseline 223/230, this row 220/232 - 3 ms, within noise.
+	labelled("tmp on disk", without("tmp.mount", "systemd-tmpfiles-setup.service")),
 }
 
 // TestBootCost boots each variant many times, interleaved, and prints what each phase cost.
