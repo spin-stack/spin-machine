@@ -55,8 +55,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # cache-key is required as of v2 and names the sticky disk the builder keeps its state
+      # on, so it is one key per thing built, for the same reason the BuildKit scopes in
+      # Taskfile.yml are: share one and each build is handed the last one's disk and starts by
+      # discarding it. v1 needed no key, so a run with none fails at this step rather than
+      # anywhere a build could explain it.
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v2
+        with:
+          cache-key: spin-machine/qemu
 
       # What makes `--cache-to type=gha` do anything at all.
       #

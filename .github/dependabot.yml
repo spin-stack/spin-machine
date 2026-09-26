@@ -22,6 +22,12 @@ updates:
   # Actions cannot change the machine: nothing they do reaches the QEMU binary,
   # the kernel or the initrd, so nothing they do reaches a fingerprint. These are
   # the updates that can be taken on their merits.
+  #
+  # Two groups, and the split is not tidiness. Grouped as one, a major arrived with
+  # a handful of harmless bumps: setup-docker-builder v2 made `cache-key` required,
+  # and a run without it does not stop — it reports the error, falls back to a local
+  # builder and carries on, so the PR was green and the builds quietly lost their
+  # cache. A major on its own is a PR with one changelog to read.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -29,6 +35,7 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # Base images, and the two files where a version is written plainly enough for
   # Dependabot to find it.
