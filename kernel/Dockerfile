@@ -155,6 +155,15 @@ RUN <<EOT
     # 2026-09-26; a kernel that needs it again adds the symbol and this assertion together.
     grep -q "CONFIG_EXT4_FS=y" .config || (echo "ERROR: CONFIG_EXT4_FS not enabled (the base image cannot be mounted)!" ; exit 1)
     ! grep -q "CONFIG_EROFS_FS=y" .config || (echo "ERROR: CONFIG_EROFS_FS is back; it is dead weight here (see above)!" ; exit 1)
+
+    # No virtual consoles. This machine's QEMU ships no VGA at all and its console is one
+    # 16550 on ttyS0, so CONFIG_VT builds 64 tty devices that nothing opens and that udev
+    # walks on every boot — a quarter of the 266 devices it coldplugs. Worth 2.09 ms of the
+    # kernel phase, measured 2026-09-26 with `task boot:floor`; `task boot:bench` cannot see
+    # it through the userspace after it, which is why a kernel-config change is measured there
+    # first. olddefconfig drops VT_CONSOLE, CONSOLE_TRANSLATIONS, VGA_CONSOLE and
+    # DUMMY_CONSOLE with it; UNIX98_PTYS does not depend on it, so ssh still has its ptys.
+    ! grep -q "CONFIG_VT=y" .config || (echo "ERROR: CONFIG_VT is back; there is no VGA and no virtual console here (see above)!" ; exit 1)
     grep -q "CONFIG_OVERLAY_FS=y" .config || (echo "ERROR: CONFIG_OVERLAY_FS not enabled!" ; exit 1)
 
     # PVH is the only boot path: there is no bootloader and no UEFI, and QEMU enters this
