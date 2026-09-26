@@ -144,6 +144,11 @@ template it would itself produce.
 
 ## Moving a VM to another machine
 
+This is the host-to-host case: one state file, carried somewhere else, resumed there. The
+other one — many VMs on one host restored from a single frozen machine — is the same two
+arguments with one migration capability added, and it is in
+[TEMPLATES.md](TEMPLATES.md).
+
 Stopping a VM here and resuming it there is a lifecycle, and this repository does not
 implement one — it builds the machine that lifecycle runs on, and offers the two arguments
 it needs: `Memory.File` (the guest's RAM lives in a file, so it can stay there while the
