@@ -41,11 +41,12 @@ jobs:
       - name: Set up Task
         uses: go-task/setup-task@v2
 
-      # One sticky disk per thing built; see the note in qemu.yml.
+      # One sticky disk per thing built, and no silent fallback; see the note in qemu.yml.
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v2
         with:
           cache-key: spin-machine/kernel
+          nofallback: true
 
       # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
       # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.

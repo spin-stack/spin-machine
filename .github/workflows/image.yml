@@ -43,12 +43,13 @@ jobs:
       - name: Set up Task
         uses: go-task/setup-task@v2
 
-      # One sticky disk per thing built; see the note in qemu.yml. This job builds e2fsprogs
-      # and the image builder, which is one job and so one disk.
+      # One sticky disk per thing built, and no silent fallback; see the note in qemu.yml. This
+      # job builds e2fsprogs and the image builder, which is one job and so one disk.
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v2
         with:
           cache-key: spin-machine/image
+          nofallback: true
 
       # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
       # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.

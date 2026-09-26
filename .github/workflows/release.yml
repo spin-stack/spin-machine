@@ -65,10 +65,14 @@ jobs:
       # overlap a lane, which sharing a key would make them contend for. The BuildKit scopes it
       # reads are still the lanes', so what main already compiled is not compiled again; see
       # the note in qemu.yml and CACHE_BACKEND in Taskfile.yml.
+      # And no silent fallback, which matters most here: a release that compiled QEMU and the
+      # kernel from cold because its builder quietly became a local one is hours, and it would
+      # look like nothing but a slow release.
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v2
         with:
           cache-key: spin-machine/release
+          nofallback: true
 
       # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
       # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.
