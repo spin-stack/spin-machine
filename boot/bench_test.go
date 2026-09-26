@@ -128,6 +128,38 @@ func without(units ...string) variant {
 
 func labelled(l string, v variant) variant { v.label = l; return v }
 
+// withDropin appends to the console unit's drop-in the swap already writes, so a row can vary
+// one directive without restating the configuration.
+func withDropin(v variant, body string) variant {
+	const path = "/etc/systemd/system/spin-machine-console.service.d/zz-bench.conf"
+	files := map[string]string{}
+	for k, val := range v.files {
+		files[k] = val
+	}
+	files[path] = files[path] + body
+	v.files = files
+	return v
+}
+
+// consoleSwap is the configuration behind the "console no dev" row: serial-getty@ttyS0
+// masked and the image's own device-independent console unit enabled in its place, with the
+// same cheap ExecStart the baseline uses so what differs is the unit and its ordering rather
+// than agetty.
+//
+// A function rather than a literal in the row because `task boot:systemd` measures the same
+// configuration to find out where its 340 ms goes, and two copies of it would be two things
+// to keep in step.
+func consoleSwap() variant {
+	return variant{cpus: "2", memory: "2048",
+		mask: []string{"serial-getty@ttyS0.service"},
+		files: map[string]string{
+			"/etc/systemd/system/spin-machine-console.service.d/zz-bench.conf": "[Service]\n" + gettyEcho,
+		},
+		links: map[string]string{
+			"/etc/systemd/system/multi-user.target.wants/spin-machine-console.service": "/usr/lib/systemd/system/spin-machine-console.service",
+		}}
+}
+
 func withFile(m map[string]string, path, content string) map[string]string {
 	m[path] = content
 	return m
@@ -223,14 +255,22 @@ var variants = []variant{
 	// that unit's Type=idle does not recover it either. This row exists to stop the swap being
 	// tried again on the strength of the chain: a critical chain is what finished last, never
 	// a list of savings.
-	labelled("console no dev", variant{cpus: "2", memory: "2048",
-		mask: []string{"serial-getty@ttyS0.service"},
-		files: map[string]string{
-			"/etc/systemd/system/spin-machine-console.service.d/zz-bench.conf": "[Service]\n" + gettyEcho,
-		},
-		links: map[string]string{
-			"/etc/systemd/system/multi-user.target.wants/spin-machine-console.service": "/usr/lib/systemd/system/spin-machine-console.service",
-		}}),
+	labelled("console no dev", consoleSwap()),
+	// The swap with the tty handling taken out, which was the third hypothesis for its cost
+	// and is wrong like the other two: 693 against the swap's 701 over 12 boots, 2026-09-26.
+	//
+	// What `task boot:systemd SPIN_SYSTEMD_VARIANT=console-swap` shows is not one blocking
+	// dependency but the whole of early userspace running about three times slower — udevd
+	// 120 ms against 34.5, udevadm 60 against 11, systemd-sysctl 39 against 3 — and its first
+	// logged line at 1009 ms against 409. Whatever the swap does, it degrades everything
+	// after it rather than waiting on something.
+	//
+	// Eliminated so far: the device dependency it was supposed to remove, the replacement
+	// unit's Type=idle, and its TTYReset/TTYVHangup — which both units carry anyway, so it
+	// could never have been a difference between them. The row stays because the cost is real
+	// and the cause is not known.
+	labelled("console no tty reset", withDropin(consoleSwap(),
+		"TTYReset=no\nTTYVHangup=no\n")),
 	// Devices udev does not have to walk. udev coldplugs 266 of them on this machine, and
 	// three families are for hardware it does not have: 64 virtual consoles (CONFIG_VT, on a
 	// machine whose QEMU ships no VGA), 8 unused loop devices, and three of the four 16550s.
