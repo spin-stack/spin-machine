@@ -219,6 +219,19 @@ RUN <<EOT
     # Anything here also costs a fleet-wide template rebuild: machine.Spec.Fingerprint
     # hashes this kernel by content. 154 us is not the price of the change.
 
+    # The memory-management options, which look like the largest remaining candidate and are
+    # not one. `task boot:initcalls` reports ksm_init at 2.00 ms, hugepage_init at 2.00 and
+    # kcompactd_init at 2.00 — and a kernel built with CONFIG_KSM and
+    # CONFIG_TRANSPARENT_HUGEPAGE off, together with the erofs removal, measures -0.50 ms
+    # against this one at `task boot:floor`: nothing, on an instrument that resolves the
+    # 2.09 ms CONFIG_VT=n is worth. Those round 2.00 values are what initcall_debug can
+    # resolve at CONFIG_HZ=1000, not what the initcalls cost.
+    #
+    # COMPACTION is not available at all: CONFIG_VIRTIO_MEM depends on CONTIG_ALLOC, which is
+    # def_bool (MEMORY_ISOLATION && COMPACTION) || CMA, so compaction is what this machine's
+    # memory resize path rides on. The VIRTIO_MEM assertion above is what says so, before a
+    # compile rather than after one.
+    #
     # The same question in its more reasonable form — keep virtio and ext4 built in, move
     # what this machine cannot use to modules in the base image — was measured on
     # 2026-09-10 and buys 0.57 ms. Every candidate, summed from initcall_debug with a
