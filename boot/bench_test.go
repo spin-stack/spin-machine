@@ -215,41 +215,14 @@ var variants = []variant{
 	// The login prompt's own dependency on udev, which every row above pays including the
 	// baseline: the drop-in they use sits on serial-getty@ttyS0, and that unit carries
 	// `BindsTo=dev-ttyS0.device`. systemd-getty-generator instantiates it from console=ttyS0,
-	// so nothing has to enable it for it to be on the critical path.
+	// so nothing has to enable it for it to be on the critical path, and a critical chain
+	// puts dev-ttyS0.device at 128 ms.
 	//
-	// Measured 2026-09-26 with `task boot:userspace`, 5 boots, p50 79 ms kernel + 139 ms
-	// userspace. The critical chain is the whole story:
-	//
-	//   multi-user.target @129ms
-	//   └─getty.target @129ms
-	//     └─serial-getty@ttyS0.service @129ms
-	//       └─dev-ttyS0.device @128ms
-	//
-	// and `blame` puts dev-vda.device at 109 ms, systemd-udevd at 33 and
-	// systemd-udev-trigger at 33. The prompt is waiting for udev's coldplug walk to announce
-	// a 16550 that is on the command line and cannot be absent.
-	//
-	// This row masks that unit and enables spin-machine-console.service, which the image
-	// already carries and which has no device dependency to wait for — the hole that unit's
-	// own comment says it is the wrong place to close. Same gettyEcho as the baseline, so
-	// what moves is the dependency and not agetty.
-	//
-	// It does not work, and that is why the row is here. 15 boots each, p50/p95 to a usable
-	// machine, 2026-09-26:
-	//
-	//     baseline          259/386        console no dev    601/834
-	//                                      console no idle   583/1040
-	//
-	// So the device dependency is not the cost: dropping it is 340 ms *worse*, and removing
-	// the replacement unit's Type=idle does not bring it back. `dev-ttyS0.device @128ms` on
-	// the critical chain is when udev got to the port, not something the prompt was waiting
-	// for — the same trap as `blame`, one line further down. Read a critical chain as what
-	// finished last, never as what was blocking.
-	//
-	// What the 340 ms is has not been established. It is suspiciously close to the 334 ms
-	// terminal-reset timeout that TERM=dumb exists to avoid (see machine/cmdline.go), and
-	// spin-machine-console.service carries TTYReset=yes and TTYVHangup=yes — but so does the
-	// unit it replaced, so that is a suspect and not an answer.
+	// Swapping it for spin-machine-console.service, which the image carries and which has no
+	// device dependency, is 340 ms *worse* — measured 2026-09-26, and not explained. Removing
+	// that unit's Type=idle does not recover it either. This row exists to stop the swap being
+	// tried again on the strength of the chain: a critical chain is what finished last, never
+	// a list of savings.
 	labelled("console no dev", variant{cpus: "2", memory: "2048",
 		mask: []string{"serial-getty@ttyS0.service"},
 		files: map[string]string{
@@ -258,73 +231,27 @@ var variants = []variant{
 		links: map[string]string{
 			"/etc/systemd/system/multi-user.target.wants/spin-machine-console.service": "/usr/lib/systemd/system/spin-machine-console.service",
 		}}),
-	// The same, with the unit's Type=idle removed, which is what rules Type=idle out as the
-	// explanation for the row above: 583 against 601, inside the spread of either. Kept as
-	// the record of a candidate eliminated, so the next person reading that 340 ms does not
-	// spend the boots again.
-	labelled("console no idle", variant{cpus: "2", memory: "2048",
-		mask: []string{"serial-getty@ttyS0.service"},
-		files: map[string]string{
-			"/etc/systemd/system/spin-machine-console.service.d/zz-bench.conf": "[Service]\nType=simple\n" + gettyEcho,
-		},
-		links: map[string]string{
-			"/etc/systemd/system/multi-user.target.wants/spin-machine-console.service": "/usr/lib/systemd/system/spin-machine-console.service",
-		}}),
-	// Devices udev does not have to walk.
+	// Devices udev does not have to walk. udev coldplugs 266 of them on this machine, and
+	// three families are for hardware it does not have: 64 virtual consoles (CONFIG_VT, on a
+	// machine whose QEMU ships no VGA), 8 unused loop devices, and three of the four 16550s.
+	// This row switches off the two that are boot parameters.
 	//
-	// `task boot:systemd` counted what udev coldplugs on this machine: 266 devices in a 51 ms
-	// window, with 18 occurrences of "Maximum number (14) of children reached" and, per
-	// worker, a failing dlopen of libnss_systemd.so.2 and a failing userdb group lookup. The
-	// families, counted 2026-09-26:
+	// Neither this nor CONFIG_VT=n, which removes a quarter of the devices, changes the time
+	// to a login prompt — measured 2026-09-26, and the kernel was built to be sure. udev's
+	// work overlaps the boot rather than delaying it, so a ranking of who spent time in early
+	// userspace is not a list of savings either.
 	//
-	//     64 ttyN      16 memoryN     8 loopN      4 ttySN      4 cpuN      3 virtioN
-	//
-	// Three of those are for hardware this machine does not have. The 64 virtual consoles are
-	// CONFIG_VT on a machine whose QEMU has no VGA at all and whose console is ttyS0; the 8
-	// loop devices are never used; and only one of the four 16550s exists. This row switches
-	// off the two that are boot parameters, because a parameter costs nothing to test and a
-	// kernel config change invalidates every template in existence — worth knowing the saving
-	// is real before anybody pays for it.
-	//
-	// It is not visible: 235/584 against the baseline's 239/423 over 15 boots, 2026-09-26.
-	// That is the arithmetic working out rather than a surprise — 11 devices of 266 is 4% of
-	// udev's ~46 ms, about 2 ms, which this harness cannot resolve. What it establishes is the
-	// shape of the cost: it is per device and there is no one device that matters.
-	//
-	// The prediction from that was CONFIG_VT=n — 64 of the 266 devices, 24%, so 5 to 12 ms of
-	// the 51 ms udev window with 14 workers in parallel. It was built and measured, and it is
-	// wrong. 15 boots each on a quiet host, 2026-09-26, p50/p95 to a usable machine:
-	//
-	//     baseline           228/237
-	//     fewer devices      225/238
-	//     fewer udev rules   228/234
-	//     kernel B (VT=n)    228/246
-	//
-	// Nothing. Not noise hiding it either: at a p95 of 237 a 10 ms saving would be visible.
-	// Removing a quarter of the devices udev walks, and nineteen of its rule files, changes
-	// the time to a login prompt by zero.
-	//
-	// Which means udev's 46 ms is not on the critical path. It runs up to 14 workers while
-	// other things happen, and taking work away from it gives the wall clock back to whatever
-	// it was overlapping with. That is the third time the same mistake has been made here in
-	// a different disguise: `blame` ranks units by their own duration, a critical chain ranks
-	// by what finished last, and `task boot:systemd` ranks writers by the time between their
-	// log lines. None of the three is a list of savings. The only way to find out what a boot
-	// costs is to take something out and measure, and every removal tried so far has bought
-	// nothing or cost a great deal.
+	// "Not at a login prompt" is the whole claim, and it is not the same as "not at all":
+	// `task boot:floor` puts CONFIG_VT=n at 2.09 ms of the kernel phase. This harness cannot
+	// see that, because it measures through ~139 ms of userspace whose own spread is wider.
+	// A kernel-config change belongs in boot:floor first, and only here once it is large
+	// enough that a login prompt could show it.
 	labelled("fewer devices", variant{cpus: "2", memory: "2048",
 		files: gettyDropin(gettyEcho),
 		extra: "loop.max_loop=0 8250.nr_uarts=1"}),
-	// The other half of udev's work: not how many devices, but how many rules each one is
-	// matched against. This masks the 19 rule files above and changes nothing else.
-	//
-	// It is the image-side lever, which is what makes it worth trying before the kernel one:
-	// no symbol moves, so no template is invalidated, and if it pays it pays in image/ where
-	// static configuration belongs.
-	//
-	// It does not pay — 228/234 against the baseline's 228/237. Kept because the row is the
-	// only thing that says so, and because it is cheap to re-run against a future image whose
-	// rule set is larger. See the numbers under "fewer devices".
+	// The other half of udev's work: not how many devices, but how many rule files each one
+	// is matched against. 19 of the 49 are for hardware this machine cannot have. No effect
+	// either, measured the same day; see the row above for why.
 	labelled("fewer udev rules", variant{cpus: "2", memory: "2048",
 		files: gettyDropin(gettyEcho),
 		links: maskedRules()}),
