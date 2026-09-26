@@ -13,6 +13,8 @@ version: '3'
 vars:
   KERNEL_VERSION:
     sh: sed -n 's/^ARG KERNEL_VERSION="\{0,1\}\([^"]*\)"\{0,1\}/\1/p' kernel/Dockerfile
+  KERNEL_SHA256:
+    sh: sed -n 's/^ARG KERNEL_SHA256=//p' kernel/Dockerfile
 
 tasks:
 
@@ -33,6 +35,29 @@ tasks:
           --output type=local,dest={{.OUTPUT_ABS}} \
           .
       - task: verify
+
+  minimal:
+    desc: >-
+      Build the floor kernel from kernel/minimal/ into _output/kernel-minimal/. An
+      experiment, not a release artefact: no BTF, BPF, ftrace, cgroups, ext4 or virtio, so
+      it cannot mount the base image or run systemd. What it is for is `task boot:floor`,
+      which compares it against the release kernel on a marker both can reach.
+    cmds:
+      - mkdir -p {{.OUTPUT_ABS}}
+      - |
+        docker buildx build \
+          --file kernel/minimal/Dockerfile \
+          --target extract \
+          --platform linux/amd64 \
+          --cache-from {{.KMIN_CACHE_FROM}} \
+          --cache-to {{.KMIN_CACHE_TO}} \
+          --build-arg KERNEL_VERSION={{.KERNEL_VERSION}} \
+          --build-arg KERNEL_SHA256={{.KERNEL_SHA256}} \
+          --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
+          --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
+          --output type=local,dest={{.OUTPUT_ABS}} \
+          .
+      - cmd: echo "✓ {{.OUTPUT_ABS}}/kernel-minimal/vmlinux"
 
   verify:
     desc: Assert the built kernel is one QEMU can enter and one this machine can boot.

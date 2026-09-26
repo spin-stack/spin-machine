@@ -140,7 +140,7 @@ type vm struct {
 	qmp    string
 }
 
-func (p *probe) start(t *testing.T, variant string, gen bool, incoming string) *vm {
+func (p *probe) start(t *testing.T, variant string, gen bool, incoming, kernel, initrd string) *vm {
 	t.Helper()
 	p.n++
 	qmp := filepath.Join(p.dir, fmt.Sprintf("qmp-%d.sock", p.n))
@@ -157,8 +157,8 @@ func (p *probe) start(t *testing.T, variant string, gen bool, incoming string) *
 		"-nodefaults", "-display", "none", "-serial", "stdio", "-monitor", "none",
 		"-qmp", "unix:" + qmp + ",server=on,wait=off",
 		"-bios", p.bios[variant],
-		"-kernel", p.kernel,
-		"-initrd", p.initrd,
+		"-kernel", orElse(p.kernel, kernel),
+		"-initrd", orElse(p.initrd, initrd),
 		"-append", "console=ttyS0 quiet loglevel=3 pci=lastbus=0 no_timer_check " +
 			"tsc=reliable rcupdate.rcu_expedited=1 TERM=dumb rdinit=/init",
 	}
@@ -218,7 +218,7 @@ func (v *vm) close() {
 
 func (p *probe) reach(t *testing.T, variant string, gen bool, marker string, timeout time.Duration) (float64, error) {
 	t.Helper()
-	v := p.start(t, variant, gen, "")
+	v := p.start(t, variant, gen, "", "", "")
 	defer v.close()
 	return v.wait(marker, timeout)
 }
@@ -242,7 +242,7 @@ func (p *probe) mustReach(t *testing.T, variant string, gen bool, marker string)
 // reports a fault.
 func (p *probe) mustPublishVMGenID(t *testing.T) {
 	t.Helper()
-	v := p.start(t, "patched", withVMGenID, "")
+	v := p.start(t, "patched", withVMGenID, "", "", "")
 	ms, err := v.wait("SPIN-READY", 8*time.Second)
 	if err != nil {
 		v.close()
@@ -263,7 +263,7 @@ func (p *probe) mustPublishVMGenID(t *testing.T) {
 	q.close()
 	v.close()
 
-	r := p.start(t, "patched", withVMGenID, state)
+	r := p.start(t, "patched", withVMGenID, state, "", "")
 	defer r.close()
 	q = dial(t, r.qmp, r)
 	defer q.close()
@@ -440,4 +440,13 @@ func pct(sorted []float64, p int) float64 {
 		i = 1
 	}
 	return sorted[i-1]
+}
+
+// orElse is the override or the default, and exists so that a probe varying one argument
+// of the machine line does not need a second copy of the whole line.
+func orElse(dflt, override string) string {
+	if override != "" {
+		return override
+	}
+	return dflt
 }
