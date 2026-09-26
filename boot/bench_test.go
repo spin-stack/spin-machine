@@ -168,6 +168,64 @@ var variants = []variant{
 	// of Type=simple was run against a real agetty whose sleep(1) buried it.
 	{label: "getty no idle", cpus: "2", memory: "2048",
 		files: gettyDropin("Type=simple\n" + gettyEcho)},
+	// The login prompt's own dependency on udev, which every row above pays including the
+	// baseline: the drop-in they use sits on serial-getty@ttyS0, and that unit carries
+	// `BindsTo=dev-ttyS0.device`. systemd-getty-generator instantiates it from console=ttyS0,
+	// so nothing has to enable it for it to be on the critical path.
+	//
+	// Measured 2026-09-26 with `task boot:userspace`, 5 boots, p50 79 ms kernel + 139 ms
+	// userspace. The critical chain is the whole story:
+	//
+	//   multi-user.target @129ms
+	//   └─getty.target @129ms
+	//     └─serial-getty@ttyS0.service @129ms
+	//       └─dev-ttyS0.device @128ms
+	//
+	// and `blame` puts dev-vda.device at 109 ms, systemd-udevd at 33 and
+	// systemd-udev-trigger at 33. The prompt is waiting for udev's coldplug walk to announce
+	// a 16550 that is on the command line and cannot be absent.
+	//
+	// This row masks that unit and enables spin-machine-console.service, which the image
+	// already carries and which has no device dependency to wait for — the hole that unit's
+	// own comment says it is the wrong place to close. Same gettyEcho as the baseline, so
+	// what moves is the dependency and not agetty.
+	//
+	// It does not work, and that is why the row is here. 15 boots each, p50/p95 to a usable
+	// machine, 2026-09-26:
+	//
+	//     baseline          259/386        console no dev    601/834
+	//                                      console no idle   583/1040
+	//
+	// So the device dependency is not the cost: dropping it is 340 ms *worse*, and removing
+	// the replacement unit's Type=idle does not bring it back. `dev-ttyS0.device @128ms` on
+	// the critical chain is when udev got to the port, not something the prompt was waiting
+	// for — the same trap as `blame`, one line further down. Read a critical chain as what
+	// finished last, never as what was blocking.
+	//
+	// What the 340 ms is has not been established. It is suspiciously close to the 334 ms
+	// terminal-reset timeout that TERM=dumb exists to avoid (see machine/cmdline.go), and
+	// spin-machine-console.service carries TTYReset=yes and TTYVHangup=yes — but so does the
+	// unit it replaced, so that is a suspect and not an answer.
+	labelled("console no dev", variant{cpus: "2", memory: "2048",
+		mask: []string{"serial-getty@ttyS0.service"},
+		files: map[string]string{
+			"/etc/systemd/system/spin-machine-console.service.d/zz-bench.conf": "[Service]\n" + gettyEcho,
+		},
+		links: map[string]string{
+			"/etc/systemd/system/multi-user.target.wants/spin-machine-console.service": "/usr/lib/systemd/system/spin-machine-console.service",
+		}}),
+	// The same, with the unit's Type=idle removed, which is what rules Type=idle out as the
+	// explanation for the row above: 583 against 601, inside the spread of either. Kept as
+	// the record of a candidate eliminated, so the next person reading that 340 ms does not
+	// spend the boots again.
+	labelled("console no idle", variant{cpus: "2", memory: "2048",
+		mask: []string{"serial-getty@ttyS0.service"},
+		files: map[string]string{
+			"/etc/systemd/system/spin-machine-console.service.d/zz-bench.conf": "[Service]\nType=simple\n" + gettyEcho,
+		},
+		links: map[string]string{
+			"/etc/systemd/system/multi-user.target.wants/spin-machine-console.service": "/usr/lib/systemd/system/spin-machine-console.service",
+		}}),
 	// What a tmpfs /tmp and the boot's tmpfiles pass cost against the /tmp on the disk the
 	// image once shipped, which every copy of the disk carried. 20 boots of each, 2026-09-26,
 	// p50/p95 to a usable machine: baseline 223/230, this row 220/232 - 3 ms, within noise.
