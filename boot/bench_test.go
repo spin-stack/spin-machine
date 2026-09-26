@@ -28,6 +28,7 @@ type variant struct {
 	links   map[string]string // symbolic links made in the overlay: path under / -> target
 	kernel  string            // a kernel other than the release's, for comparing configs
 	profile bool              // boot with `--profile`: initcall profiling, console silent
+	setup   string            // shell run with the overlay mounted, $MNT its root
 }
 
 // Masks are written into the overlay and never passed as `systemd.mask=`. That parameter is
@@ -293,6 +294,33 @@ var variants = []variant{
 	labelled("fewer udev rules", variant{cpus: "2", memory: "2048",
 		files: gettyDropin(gettyEcho),
 		links: maskedRules()}),
+	// What loading a unit file costs, measured by adding some.
+	//
+	// systemd reports "Loaded units and determined initial transaction in 212ms" on this
+	// machine, and what precedes it is "Modification times have changed, need to update cache"
+	// right after /run/systemd/generator.late — the generators write into the search path, so
+	// the cache systemd built moments earlier is stale and it rescans. That is how systemd
+	// starts, not a cache this image failed to pre-build: the persistent ones (ld.so.cache,
+	// the journal catalog, locale-archive) are built at image time and the services that would
+	// rebuild them are masked in optimize-systemd.sh.
+	//
+	// So the question is whether the *number* of units is what costs. The image carries 282 in
+	// /usr/lib/systemd/system and 65 in /etc/systemd/system, and this row adds 300 more that
+	// nothing wants. It costs nothing: 236 against the baseline's 246 over 12 boots,
+	// 2026-09-26, on a run whose p95s were wide enough that a per-unit cost of any size would
+	// still have shown at nearly double the count.
+	//
+	// What that does and does not settle, because the two are easy to confuse. systemd's unit
+	// cache holds names and modification times, not parsed units, and a unit nothing
+	// references is scanned and never loaded. So this measures the scan, and the scan is free.
+	// It does not measure parsing, which happens only for units something pulls in — and
+	// those cannot be added without also starting them, which would measure something else.
+	//
+	// The row stays because "we ship 282 unit files, that must be the boot" is a conclusion
+	// somebody will reach again, and this is the only thing that says it was measured.
+	labelled("300 more units", variant{cpus: "2", memory: "2048",
+		files: gettyDropin(gettyEcho),
+		setup: "for i in $(seq 1 300); do printf '[Unit]\\nDescription=filler %s\\n[Service]\\nType=oneshot\\nExecStart=/bin/true\\n' \"$i\" > \"$MNT/etc/systemd/system/spin-filler-$i.service\"; done"}),
 	// What a tmpfs /tmp and the boot's tmpfiles pass cost against the /tmp on the disk the
 	// image once shipped, which every copy of the disk carried. 20 boots of each, 2026-09-26,
 	// p50/p95 to a usable machine: baseline 223/230, this row 220/232 - 3 ms, within noise.
@@ -510,7 +538,7 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 	overlay := filepath.Join(dir, "overlay.qcow2")
 	mustRun(t, filepath.Join(out, "bin", "qemu-img"), "create", "-f", "qcow2",
 		"-F", "qcow2", "-b", filepath.Join(out, "image", "rootfs.qcow2"), overlay)
-	if len(v.mask) > 0 || len(v.files) > 0 {
+	if len(v.mask) > 0 || len(v.files) > 0 || len(v.links) > 0 || v.setup != "" {
 		editOverlay(t, overlay, v)
 	}
 
@@ -606,6 +634,20 @@ func editOverlay(t *testing.T, overlay string, v variant) {
 		cmd.Stdin = strings.NewReader(content)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("writing %s: %v\n%s", path, err, out)
+		}
+	}
+	// One shell with the overlay mounted, for a variant that needs hundreds of files rather
+	// than a handful. The files map writes each path through its own `sudo tee`, which is
+	// right for a drop-in and wrong for three hundred units: the setup would take longer than
+	// the boots it is preparing.
+	if v.setup != "" {
+		// MNT through sudo's own assignment rather than the child's environment: sudo resets
+		// the environment, so cmd.Env reached sh with MNT unset and the snippet failed under
+		// `set -u` — which is the good case. Without -u it would have written 300 unit files
+		// into the host's /etc/systemd/system.
+		cmd := exec.Command("sudo", "MNT="+mnt, "sh", "-euc", v.setup)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("setting up %s: %v\n%s", v.label, err, out)
 		}
 	}
 	for path, target := range v.links {
