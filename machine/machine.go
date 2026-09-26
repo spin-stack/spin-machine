@@ -201,8 +201,12 @@ func (d Disk) chainArgs(i int) ([]string, error) {
 		if d.DirectOverBacking {
 			file["cache"] = map[string]any{"direct": j == 0}
 		}
+		// discard on the format node as well as the file: a guest's discard arrives at the
+		// format node, and QEMU drops one on a node opened without unmap and tells the guest it
+		// worked - so fstrim freed nothing, and what the guest deleted stayed in the image.
 		format := map[string]any{
 			"driver": img.Format, "node-name": node, "file": node + "-file", "read-only": readOnly,
+			"discard": "unmap",
 		}
 		switch {
 		case j < len(d.Chain)-1:

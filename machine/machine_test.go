@@ -39,6 +39,31 @@ func argValue(args []string, flag string) string {
 	return ""
 }
 
+// Every node of a disk handed over as a chain passes the guest's discard on: the format node is
+// where it arrives, and one opened without unmap drops it and answers the guest that it worked.
+func TestAChainPassesTheGuestsDiscardOn(t *testing.T) {
+	s := spec(t)
+	s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}, {ID: 2, FDs: []FD{{Num: 11}}}}
+	s.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}, Serial: "root"}}
+	args, err := s.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := 0
+	for i, a := range args {
+		if a != "-blockdev" || i+1 == len(args) {
+			continue
+		}
+		nodes++
+		if !strings.Contains(args[i+1], `"discard":"unmap"`) {
+			t.Errorf("a node of the chain drops the guest's discard: %s", args[i+1])
+		}
+	}
+	if nodes != 4 {
+		t.Fatalf("the chain of two images is %d nodes, want a format and a file node each", nodes)
+	}
+}
+
 func TestArgsCarriesTheShape(t *testing.T) {
 	s := spec(t)
 	args, err := s.Args()
