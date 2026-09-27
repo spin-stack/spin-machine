@@ -34,12 +34,27 @@ import (
 	"github.com/spin-stack/spin-machine/machine"
 )
 
+// main is the only place the process ends. A command returns what happened and main
+// decides what it means: help asked for is not a failure, and QEMU's own exit status is
+// passed on as it was, since QEMU has already said why on stderr.
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	var code exitCode
+	switch {
+	case err == nil, errors.Is(err, flag.ErrHelp):
+	case errors.As(err, &code):
+		os.Exit(int(code))
+	default:
 		fmt.Fprintf(os.Stderr, "spin-machine: %v\n", err)
 		os.Exit(1)
 	}
 }
+
+// exitCode is a failure that has already been reported by the process that failed, and
+// has only a status left to pass on.
+type exitCode int
+
+func (c exitCode) Error() string { return fmt.Sprintf("exit status %d", int(c)) }
 
 const usage = `spin-machine - the machine this repository builds
 
@@ -117,9 +132,6 @@ func parse(cmd string, argv []string, register func(*flag.FlagSet)) error {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	register(fs)
 	if err := fs.Parse(argv); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
-		}
 		return err
 	}
 	if fs.NArg() > 0 {
@@ -316,7 +328,7 @@ func boot(s machine.Spec, scratch bool) error {
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			os.Exit(exit.ExitCode())
+			return exitCode(exit.ExitCode())
 		}
 		return fmt.Errorf("running %s: %w", s.QEMU, err)
 	}
@@ -388,12 +400,12 @@ func attach(o attachFlags) error {
 	}
 	defer func() { _ = c.Close() }()
 
-	if _, err := c.run("blockdev-add", map[string]any{
+	if err := c.run("blockdev-add", map[string]any{
 		"node-name": hotplugDriveID(o.port),
 		"driver":    o.format,
 		"read-only": o.readonly,
 		"file":      map[string]any{"driver": "file", "filename": path},
-	}); err != nil {
+	}, nil); err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
 	dev := map[string]any{
@@ -406,8 +418,8 @@ func attach(o attachFlags) error {
 	if o.serial != "" {
 		dev["serial"] = o.serial
 	}
-	if _, err := c.run("device_add", dev); err != nil {
-		_, _ = c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)})
+	if err := c.run("device_add", dev, nil); err != nil {
+		_ = c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)}, nil)
 		return fmt.Errorf("adding %s on port %d: %w", path, o.port, err)
 	}
 	fmt.Fprintf(os.Stderr, "attached %s on port %d (%s)\n", path, o.port, machine.HotplugPortID(o.port))
@@ -443,14 +455,14 @@ func detach(o detachFlags) error {
 
 	id := hotplugDiskID(o.port)
 	start := time.Now()
-	if _, err := c.run("device_del", map[string]any{"id": id}); err != nil {
+	if err := c.run("device_del", map[string]any{"id": id}, nil); err != nil {
 		return fmt.Errorf("removing the disk on port %d: %w", o.port, err)
 	}
 	if err := c.waitDeleted(id, o.timeout); err != nil {
 		return fmt.Errorf("the guest did not release the disk on port %d: %w", o.port, err)
 	}
 	took := time.Since(start)
-	if _, err := c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)}); err != nil {
+	if err := c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)}, nil); err != nil {
 		return fmt.Errorf("closing the disk on port %d: %w", o.port, err)
 	}
 	fmt.Fprintf(os.Stderr, "detached port %d in %.1fs\n", o.port, took.Seconds())
@@ -493,7 +505,7 @@ func save(o saveFlags) error {
 	}
 	defer func() { _ = c.Close() }()
 
-	if _, err := c.run("migrate", map[string]any{"uri": "file:" + to}); err != nil {
+	if err := c.run("migrate", map[string]any{"uri": "file:" + to}, nil); err != nil {
 		return fmt.Errorf("starting the save: %w", err)
 	}
 
@@ -503,17 +515,20 @@ func save(o saveFlags) error {
 	// asked for rather than assumed.
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
-		r, err := c.run("query-migrate", nil)
-		if err != nil {
+		var m struct {
+			Status    string `json:"status"`
+			ErrorDesc string `json:"error-desc"`
+		}
+		if err := c.run("query-migrate", nil, &m); err != nil {
 			return err
 		}
-		switch status, _ := r["status"].(string); status {
+		switch m.Status {
 		case "completed":
 			fmt.Fprintf(os.Stderr, "saved to %s\n", to)
-			_, _ = c.run("quit", nil)
+			_ = c.run("quit", nil, nil)
 			return nil
 		case "failed", "cancelled":
-			return fmt.Errorf("the save %s: %v", status, r["error-desc"])
+			return fmt.Errorf("the save %s: %s", m.Status, m.ErrorDesc)
 		}
 		if time.Now().After(deadline) {
 			return errors.New("the save did not finish within five minutes")
@@ -528,21 +543,52 @@ type qmpConn struct {
 	c      net.Conn
 	dec    *json.Decoder
 	enc    *json.Encoder
-	events []map[string]any
+	events []qmpMessage
 }
+
+// qmpMessage is anything QEMU sends after its greeting: an event, or the reply to
+// the command in flight, which carries either a return value or an error.
+type qmpMessage struct {
+	Event string `json:"event"`
+	Data  struct {
+		Device string `json:"device"`
+	} `json:"data"`
+	Return json.RawMessage `json:"return"`
+	Error  *qmpError       `json:"error"`
+}
+
+// qmpError is QEMU refusing a command, in its own words: "GenericError: Bus 'rp0'
+// not found" rather than a Go map of them.
+type qmpError struct {
+	Class string `json:"class"`
+	Desc  string `json:"desc"`
+}
+
+func (e *qmpError) Error() string { return e.Class + ": " + e.Desc }
 
 func dialQMP(socket string) (*qmpConn, error) {
 	c, err := net.Dial("unix", socket)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to QMP at %s: %w", socket, err)
 	}
-	q := &qmpConn{c: c, dec: json.NewDecoder(c), enc: json.NewEncoder(c)}
-
-	var greeting map[string]any
-	if err := q.dec.Decode(&greeting); err != nil {
-		return nil, fmt.Errorf("reading the QMP greeting: %w", err)
+	q, err := newQMP(c)
+	if err != nil {
+		return nil, fmt.Errorf("QMP at %s: %w", socket, err)
 	}
-	if _, err := q.run("qmp_capabilities", nil); err != nil {
+	return q, nil
+}
+
+// newQMP reads the greeting and negotiates capabilities on c. It owns c from here:
+// a monitor that fails the handshake is closed, not handed back half open.
+func newQMP(c net.Conn) (*qmpConn, error) {
+	q := &qmpConn{c: c, dec: json.NewDecoder(c), enc: json.NewEncoder(c)}
+	var greeting json.RawMessage
+	if err := q.dec.Decode(&greeting); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("reading the greeting: %w", err)
+	}
+	if err := q.run("qmp_capabilities", nil, nil); err != nil {
+		_ = c.Close()
 		return nil, err
 	}
 	return q, nil
@@ -550,40 +596,42 @@ func dialQMP(socket string) (*qmpConn, error) {
 
 func (q *qmpConn) Close() error { return q.c.Close() }
 
-func (q *qmpConn) run(cmd string, args map[string]any) (map[string]any, error) {
+// run sends cmd and waits for its reply, decoding the return value into out when out
+// is not nil.
+func (q *qmpConn) run(cmd string, args map[string]any, out any) error {
 	req := map[string]any{"execute": cmd}
 	if args != nil {
 		req["arguments"] = args
 	}
 	if err := q.enc.Encode(req); err != nil {
-		return nil, fmt.Errorf("sending %s: %w", cmd, err)
+		return fmt.Errorf("sending %s: %w", cmd, err)
 	}
 	for {
-		var resp map[string]any
-		if err := q.dec.Decode(&resp); err != nil {
-			return nil, fmt.Errorf("reading the reply to %s: %w", cmd, err)
+		var m qmpMessage
+		if err := q.dec.Decode(&m); err != nil {
+			return fmt.Errorf("reading the reply to %s: %w", cmd, err)
 		}
-		if _, isEvent := resp["event"]; isEvent {
-			q.events = append(q.events, resp)
+		switch {
+		case m.Event != "":
+			q.events = append(q.events, m)
 			continue
+		case m.Error != nil:
+			return fmt.Errorf("%s: %w", cmd, m.Error)
+		case out != nil:
+			if err := json.Unmarshal(m.Return, out); err != nil {
+				return fmt.Errorf("decoding the reply to %s: %w", cmd, err)
+			}
 		}
-		if e, bad := resp["error"]; bad {
-			return nil, fmt.Errorf("%s: %v", cmd, e)
-		}
-		ret, _ := resp["return"].(map[string]any)
-		return ret, nil
+		return nil
 	}
 }
 
 // waitDeleted returns once QEMU reports DEVICE_DELETED for the device id — which
 // may already have arrived while a command's reply was being read.
 func (q *qmpConn) waitDeleted(id string, timeout time.Duration) error {
-	deleted := func(ev map[string]any) bool {
-		data, _ := ev["data"].(map[string]any)
-		return ev["event"] == "DEVICE_DELETED" && data["device"] == id
-	}
-	for _, ev := range q.events {
-		if deleted(ev) {
+	deleted := func(m qmpMessage) bool { return m.Event == "DEVICE_DELETED" && m.Data.Device == id }
+	for _, m := range q.events {
+		if deleted(m) {
 			return nil
 		}
 	}
@@ -592,15 +640,15 @@ func (q *qmpConn) waitDeleted(id string, timeout time.Duration) error {
 	}
 	defer func() { _ = q.c.SetReadDeadline(time.Time{}) }()
 	for {
-		var ev map[string]any
-		if err := q.dec.Decode(&ev); err != nil {
+		var m qmpMessage
+		if err := q.dec.Decode(&m); err != nil {
 			var ne net.Error
 			if errors.As(err, &ne) && ne.Timeout() {
 				return fmt.Errorf("no DEVICE_DELETED for %s within %s", id, timeout)
 			}
 			return fmt.Errorf("waiting for DEVICE_DELETED: %w", err)
 		}
-		if deleted(ev) {
+		if deleted(m) {
 			return nil
 		}
 	}
