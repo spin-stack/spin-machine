@@ -174,8 +174,8 @@ tasks:
 
   tools:
     desc: >-
-      Build spin-machine (starts a VM of this machine, prints its fingerprint) and the
-      debug initramfs `task shell` boots.
+      Build spin-machine: boots a VM of this machine, prints its fingerprint, and gives a
+      running one a disk or saves it (`spin-machine -h`).
     sources:
       - machine/**/*.go
       - cmd/**/*.go
@@ -337,7 +337,7 @@ tasks:
   shell:
     desc: >-
       Boot this machine and get a shell inside the base image, to see how it feels and what
-      it is missing. `task shell INIT=/sbin/init` boots systemd instead of a bare shell.
+      it is missing. `task shell INIT=/bin/bash` boots a bare shell instead of systemd.
     aliases: [vm]
     interactive: true
     cmds:

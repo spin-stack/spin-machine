@@ -43,7 +43,7 @@ not call `Fingerprint` itself.
 
 ```
 machine/    what the machine is: PCI slot map, shape, memory backing, kernel command line
-cmd/        spin-machine: boot one, print its fingerprint
+cmd/        spin-machine: boot one, print its fingerprint, attach/detach/save a running one
 CLAUDE.md   how to work in here
 qemu/       Dockerfile + devices.mak
 kernel/     Dockerfile + config-<version>-<arch>
@@ -198,8 +198,8 @@ process is systemd. Booting a bare shell answers a different question — `syste
 in it replies *"System has not been booted with systemd as init system (PID 1)"*, which is
 true and useless.
 
-It boots this QEMU and this kernel over a throwaway qcow2 overlay on `rootfs.qcow2`, through
-`spin-machine boot`, with the serial console on stdio.
+It is `spin-machine boot` with no `--disk`: this QEMU and this kernel over `rootfs.qcow2`
+under a throwaway overlay (QEMU's `-snapshot`), with the serial console on stdio.
 
 It boots with no initrd at all: `root=/dev/vda rw init=/sbin/init`, which the kernel can
 serve because virtio-blk and ext4 are built in and `image/build.sh` writes a partitionless

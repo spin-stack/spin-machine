@@ -179,7 +179,7 @@ func runCacheMode(t *testing.T, out, work, probe, base string, mode cacheMode, n
 	var cmds []*exec.Cmd
 	for i, o := range overlays {
 		args := append([]string{"boot", "--release", out, "--disk", o, "--memory", "512", "--cpus", "1",
-			"--console", "file:" + consoles[i], "--append", "root=/dev/vda rw init=/sbin/init"}, mode.flags...)
+			"--console", "file:" + consoles[i], "--append", "init=/sbin/init"}, mode.flags...)
 		cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {

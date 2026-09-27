@@ -65,15 +65,10 @@ tasks:
           test -f "$f" || { echo "missing $f — run: task build" >&2; exit 1; }
         done
 
-        # A throwaway overlay, which is both the safe thing and the honest one: it is the
-        # exact shape a container's writable layer has (`qemu-img create -f qcow2 -F qcow2
-        # -b base`), so everything typed in this shell is written where a container's
+        # No --disk: spin-machine boots the base under a throwaway overlay (QEMU's
+        # -snapshot), so everything typed in this shell is written where a container's
         # writes would go, and the base — which every VM maps read-only, many at once —
-        # cannot be touched.
-        scratch=$(mktemp -d)/scratch.qcow2
-        trap 'rm -rf "$(dirname "$scratch")"' EXIT
-        "$out/bin/qemu-img" create -f qcow2 -F qcow2 -b "$out/image/rootfs.qcow2" "$scratch" >/dev/null
-
+        # cannot be touched. The hash around the session checks that rather than trusts it.
         before=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)
 
         echo "booting {{.INIT}} in the base image — {{.MEMORY}} MiB, {{.CPUS}} vCPU"
@@ -84,9 +79,9 @@ tasks:
         echo "  leave with: 'poweroff -f', or Ctrl-A then X"
         echo
 
-        # root=/dev/vda straight into the image, with no initrd at all. The kernel has
-        # virtio-blk and ext4 built in and build.sh writes a partitionless filesystem, so
-        # there is nothing for one to do: mounting root is the kernel's job here and
+        # Root is /dev/vda straight into the image (the CLI's default), with no initrd at
+        # all. The kernel has virtio-blk and ext4 built in and build.sh writes a
+        # partitionless filesystem, so there is nothing for one to do: mounting root is the kernel's job here and
         # systemd mounts the rest.
         #
         # Booting a debug initramfs here is a second init, and the two reasons for one are
@@ -103,9 +98,8 @@ tasks:
         # than a guest at a tenth of the speed.
         "$out/bin/spin-machine" boot \
           --release "$out" \
-          --disk "$scratch" \
           --memory {{.MEMORY}} --cpus {{.CPUS}} \
-          --append "root=/dev/vda rw init={{.INIT}}" || true
+          --init {{.INIT}} || true
 
         echo
         after=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)
@@ -114,4 +108,4 @@ tasks:
           echo "   every overlay in existence is now built on a file that moved." >&2
           exit 1
         fi
-        echo "rootfs.qcow2 unchanged; the overlay held $(du -h "$scratch" | cut -f1) of writes and is gone"
+        echo "rootfs.qcow2 unchanged; the overlay's writes are gone"

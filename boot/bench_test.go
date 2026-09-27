@@ -458,7 +458,7 @@ func TestBootTrace(t *testing.T) {
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), "boot",
 		"--release", out, "--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
 		"--console", "file:/dev/stdout",
-		"--append", "root=/dev/vda rw init=/sbin/init loglevel=7 systemd.show_status=true "+
+		"--append", "init=/sbin/init loglevel=7 systemd.show_status=true "+
 			"systemd.log_level=info systemd.log_target=console")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
@@ -542,7 +542,7 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 		editOverlay(t, overlay, v)
 	}
 
-	cmdline := "root=/dev/vda rw init=/sbin/init"
+	cmdline := "init=/sbin/init"
 	if os.Getenv("DEBUG") == "1" {
 		// Every message is a write to a serial port, and that write is inside the wall
 		// clock being measured. On by choice, off by default, and the same in every variant

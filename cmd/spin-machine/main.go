@@ -9,8 +9,14 @@
 // gives this repository a way to run its own artefacts without borrowing a
 // runtime from somewhere else — `boot` is what `task shell` runs.
 //
+// It is also how a check of this machine is done by hand. Whatever a caller does
+// to a running machine through the contract this repository promises — a disk on
+// a hotplug port, a save to a file — is a command here, so trying it needs no
+// script of its own.
+//
 // It is not a container runtime and does not want to become one. There is no
-// supervision, no QMP, no lifecycle: it execs QEMU and gets out of the way.
+// supervision and no lifecycle: `boot` execs QEMU and gets out of the way, and the
+// commands that act on a running VM are one QMP conversation each.
 package main
 
 import (
@@ -23,7 +29,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spin-stack/spin-machine/machine"
@@ -36,65 +41,97 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `spin-machine - the machine this repository builds
+const usage = `spin-machine - the machine this repository builds
 
 Usage:
   spin-machine boot        [flags]   start a VM and wait for it
-  spin-machine save        [flags]   stop a running VM and write its state to a file
-  spin-machine args        [flags]   print the QEMU command line it would run
+  spin-machine args        [flags]   print the QEMU command line boot would run
   spin-machine fingerprint [flags]   print the machine's identity
+  spin-machine attach      [flags]   give a running VM a disk on a hotplug port
+  spin-machine detach      [flags]   take it back, once the guest has let it go
+  spin-machine save        [flags]   stop a running VM and write its state to a file
 
-Flags:
-`)
-	flags(flag.NewFlagSet("", flag.ContinueOnError), &options{}).PrintDefaults()
-}
+spin-machine <command> -h lists a command's flags.
+`
 
 func run(argv []string) error {
 	if len(argv) == 0 {
-		usage()
+		fmt.Fprint(os.Stderr, usage)
 		return errors.New("no command given")
 	}
 	cmd, argv := argv[0], argv[1:]
 
-	var o options
-	fs := flags(flag.NewFlagSet(cmd, flag.ExitOnError), &o)
-	if err := fs.Parse(argv); err != nil {
-		return err
-	}
-
-	spec, err := o.spec()
-	if err != nil {
-		return err
-	}
-
 	switch cmd {
-	case "boot":
-		return boot(spec, &o)
-	case "save":
-		return save(&o)
-	case "args":
-		args, err := spec.Args()
+	case "boot", "args", "fingerprint":
+		var o machineFlags
+		if err := parse(cmd, argv, o.register); err != nil {
+			return err
+		}
+		spec, err := o.spec()
 		if err != nil {
 			return err
 		}
-		fmt.Println(strings.Join(append([]string{spec.QEMU}, args...), " \\\n  "))
-		return nil
-	case "fingerprint":
-		return fingerprint(spec)
+		switch cmd {
+		case "boot":
+			return boot(spec, o.scratch())
+		case "args":
+			args, err := qemuArgs(spec, o.scratch())
+			if err != nil {
+				return err
+			}
+			fmt.Println(strings.Join(append([]string{spec.QEMU}, args...), " \\\n  "))
+			return nil
+		default:
+			return fingerprint(spec)
+		}
+	case "attach":
+		var o attachFlags
+		if err := parse(cmd, argv, o.register); err != nil {
+			return err
+		}
+		return attach(o)
+	case "detach":
+		var o detachFlags
+		if err := parse(cmd, argv, o.register); err != nil {
+			return err
+		}
+		return detach(o)
+	case "save":
+		var o saveFlags
+		if err := parse(cmd, argv, o.register); err != nil {
+			return err
+		}
+		return save(o)
 	case "-h", "--help", "help":
-		usage()
+		fmt.Print(usage)
 		return nil
 	default:
-		usage()
+		fmt.Fprint(os.Stderr, usage)
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 }
 
-// options is everything this command lets a caller choose. It is deliberately
-// thin: the machine's shape comes from the package, and what is left is which
-// release to boot, how big, and what to put in it.
-type options struct {
+// parse gives each command its own flags, so `save -h` lists what save takes and not
+// what a boot does.
+func parse(cmd string, argv []string, register func(*flag.FlagSet)) error {
+	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	register(fs)
+	if err := fs.Parse(argv); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("%s: unexpected argument %q", cmd, fs.Arg(0))
+	}
+	return nil
+}
+
+// machineFlags is everything boot, args and fingerprint let a caller choose. It is
+// deliberately thin: the machine's shape comes from the package, and what is left is
+// which release to boot, how big, and what to put in it.
+type machineFlags struct {
 	release string
 
 	qemu     string
@@ -110,37 +147,36 @@ type options struct {
 	diskCache         string
 	directOverBacking bool
 
-	memoryMB int
-	maxMemMB int
-	cpuModel string
-	cpus     int
-	maxCPUs  int
-	memFile  string
-	memShare bool
+	memoryMB     int
+	maxMemMB     int
+	cpuModel     string
+	cpus         int
+	maxCPUs      int
+	memFile      string
+	memShare     bool
+	hotplugPorts int
 
 	vsockCID int
 	qmp      string
 	console  string
-
 	incoming string
-	saveTo   string
-	init     string
-	root     string
-	profile  bool
-	extra    string
-	verbose  bool
+
+	init    string
+	root    string
+	profile bool
+	extra   string
 }
 
-func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
+func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.release, "release", "_output", "an unpacked release tree; every path below defaults out of it")
 	fs.StringVar(&o.qemu, "qemu", "", "QEMU binary (default: <release>/bin/qemu-system-x86_64)")
 	fs.StringVar(&o.kernel, "kernel", "", "kernel image (default: <release>/vmlinux)")
 	fs.StringVar(&o.initrd, "initrd", "", "initrd (default: none)")
 	fs.StringVar(&o.firmware, "firmware", "", "firmware directory (default: <release>/qemu)")
 
-	fs.StringVar(&o.disk, "disk", "", "disk image (default: <release>/rootfs.qcow2)")
+	fs.StringVar(&o.disk, "disk", "", "disk image, opened as given (default: the base image under a throwaway overlay; - for no disk)")
 	fs.StringVar(&o.diskFormat, "disk-format", "qcow2", "format of the disk image; never guessed")
-	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only")
+	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only, and mount root ro")
 	fs.StringVar(&o.serial, "disk-serial", "", "virtio-blk serial the guest can resolve the disk by")
 	fs.StringVar(&o.diskCache, "disk-cache", "", "QEMU cache mode for the disk (default: QEMU's, which is writeback)")
 	fs.BoolVar(&o.directOverBacking, "disk-direct-over-backing", false,
@@ -153,28 +189,33 @@ func flags(fs *flag.FlagSet, o *options) *flag.FlagSet {
 	fs.IntVar(&o.maxCPUs, "max-cpus", 0, "vCPU hotplug ceiling (0: no hotplug)")
 	fs.StringVar(&o.memFile, "memory-file", "", "back guest RAM with this file instead of anonymous memory")
 	fs.BoolVar(&o.memShare, "memory-share", false, "map the memory file shared, which is what freezing a template needs")
+	fs.IntVar(&o.hotplugPorts, "hotplug-ports", 0,
+		fmt.Sprintf("empty PCIe root ports a device can be attached to while the VM runs (0-%d)", machine.MaxHotplugPorts))
 
 	fs.IntVar(&o.vsockCID, "vsock-cid", 0, "give the machine a vhost-vsock device with this context id")
-	fs.StringVar(&o.qmp, "qmp", "", "listen for QMP on this Unix socket; `save` connects to one")
+	fs.StringVar(&o.qmp, "qmp", "", "listen for QMP on this Unix socket; attach, detach and save connect to it")
 	fs.StringVar(&o.incoming, "incoming", "", "resume from a saved state instead of booting, e.g. file:/path/state")
-	fs.StringVar(&o.saveTo, "to", "", "save: where to write the state")
-	fs.StringVar(&o.console, "console", "mon:stdio", "QEMU chardev for the serial console, or empty for none")
+	fs.StringVar(&o.console, "console", "mon:stdio",
+		"QEMU chardev for the serial console, e.g. file:/path or unix:/path,server=on,wait=off; empty for none")
 
-	fs.StringVar(&o.init, "init", "", "what the kernel runs as PID 1 inside the guest")
-	fs.StringVar(&o.root, "root", "", "block device the kernel mounts as root, e.g. /dev/vda")
+	fs.StringVar(&o.init, "init", "", "what the kernel runs as PID 1 inside the guest (default: the kernel's, /sbin/init)")
+	fs.StringVar(&o.root, "root", "/dev/vda", "block device the kernel mounts as root; empty to stay on the initrd")
 	fs.BoolVar(&o.profile, "profile", false, "boot with initcall profiling: silent console, full ring buffer")
 	fs.StringVar(&o.extra, "append", "", "extra kernel command line arguments")
-	fs.BoolVar(&o.verbose, "verbose", false, "print the QEMU command line before running it")
-	return fs
 }
 
+// scratch is whether the disk is the base image under an overlay QEMU makes and
+// throws away. The base is never written (rule 2 in CLAUDE.md), and a command that
+// booted it read-write by default made every caller build an overlay of its own.
+func (o *machineFlags) scratch() bool { return o.disk == "" }
+
 // spec turns the flags into a machine, filling in every path from the release
-// tree so that the common case is one flag.
+// tree so that the common case is no flags at all.
 //
 // The tree is opened rather than assumed, so a release missing a part says so
 // here, naming the file — and not three seconds later as a QEMU that exits for
 // want of an option ROM.
-func (o *options) spec() (machine.Spec, error) {
+func (o *machineFlags) spec() (machine.Spec, error) {
 	rel, err := machine.Open(o.release)
 	if err != nil {
 		return machine.Spec{}, err
@@ -200,15 +241,14 @@ func (o *options) spec() (machine.Spec, error) {
 		File:   o.memFile,
 		Shared: o.memShare,
 	}
+	s.HotplugPorts = o.hotplugPorts
 	s.VsockCID = o.vsockCID
 	s.QMPSocket = o.qmp
 	s.Incoming = o.incoming
 	s.Serial = o.console
 
-	// The base image is what this boots unless told otherwise, and "-" is how a
-	// caller asks for a machine with no disk at all.
 	disk := o.disk
-	if disk == "" {
+	if o.scratch() {
 		if disk, err = rel.Rootfs(); err != nil {
 			return machine.Spec{}, err
 		}
@@ -226,7 +266,10 @@ func (o *options) spec() (machine.Spec, error) {
 
 	c := machine.DefaultCmdline()
 	c.Init = o.init
-	c.Root = o.root
+	if disk != "-" {
+		c.Root = o.root
+		c.RootReadonly = o.readonly
+	}
 	if o.profile {
 		c = c.Profiling()
 	}
@@ -244,21 +287,32 @@ func (o *options) spec() (machine.Spec, error) {
 	return s, nil
 }
 
-func boot(s machine.Spec, o *options) error {
+// qemuArgs is the machine's command line, with -snapshot when the disk is the base
+// image. -snapshot puts every drive under a temporary qcow2 overlay that QEMU unlinks
+// as soon as it is open, and opens the base beneath it read-only: nothing to create
+// beforehand, nothing to clean up after, and a command line `args` prints that is
+// as safe to run as the one `boot` runs. It is a host-side detail: the guest sees the
+// same disk, and nothing about it is in the fingerprint.
+func qemuArgs(s machine.Spec, scratch bool) ([]string, error) {
 	args, err := s.Args()
+	if err != nil {
+		return nil, err
+	}
+	if scratch && len(s.Disks) > 0 {
+		args = append(args, "-snapshot")
+	}
+	return args, nil
+}
+
+func boot(s machine.Spec, scratch bool) error {
+	args, err := qemuArgs(s, scratch)
 	if err != nil {
 		return err
 	}
-	if o.verbose {
-		fmt.Fprintln(os.Stderr, strings.Join(append([]string{s.QEMU}, args...), " "))
-	}
-
+	// The console is on this terminal, so QEMU keeps the process group and the
+	// signals reach it the way the user expects.
 	cmd := exec.Command(s.QEMU, args...) // #nosec G204 -- a binary and arguments this caller chose
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	// The console is on this terminal, so QEMU has to keep it: no new process
-	// group, and signals reach it the way the user expects.
-	cmd.SysProcAttr = &syscall.SysProcAttr{}
-
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
@@ -294,6 +348,125 @@ func fingerprint(s machine.Spec) error {
 	return enc.Encode(out)
 }
 
+// The ids a disk on hotplug port i goes by, so that detach finds what attach made
+// from the port number alone.
+func hotplugDiskID(port int) string  { return machine.HotplugPortID(port) + "-disk" }
+func hotplugDriveID(port int) string { return machine.HotplugPortID(port) + "-drive" }
+
+type attachFlags struct {
+	qmp      string
+	port     int
+	disk     string
+	format   string
+	readonly bool
+	serial   string
+}
+
+func (o *attachFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
+	fs.IntVar(&o.port, "port", 0, "hotplug port, 0 to --hotplug-ports minus one")
+	fs.StringVar(&o.disk, "disk", "", "disk image (required)")
+	fs.StringVar(&o.format, "disk-format", "raw", "format of the disk image; never guessed")
+	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only")
+	fs.StringVar(&o.serial, "disk-serial", "", "virtio-blk serial the guest can resolve the disk by")
+}
+
+// attach puts a virtio-blk disk on a hotplug root port, the way a caller of this
+// machine gives it a disk after a restore. It returns when QEMU has the device; the
+// guest's pciehp finds it on its own, and whether it did is read from the guest.
+func attach(o attachFlags) error {
+	if o.qmp == "" || o.disk == "" {
+		return errors.New("attach: --qmp and --disk are required")
+	}
+	path, err := filepath.Abs(o.disk)
+	if err != nil {
+		return err
+	}
+	c, err := dialQMP(o.qmp)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+
+	if _, err := c.run("blockdev-add", map[string]any{
+		"node-name": hotplugDriveID(o.port),
+		"driver":    o.format,
+		"read-only": o.readonly,
+		"file":      map[string]any{"driver": "file", "filename": path},
+	}); err != nil {
+		return fmt.Errorf("opening %s: %w", path, err)
+	}
+	dev := map[string]any{
+		"driver":         "virtio-blk-pci",
+		"id":             hotplugDiskID(o.port),
+		"drive":          hotplugDriveID(o.port),
+		"bus":            machine.HotplugPortID(o.port),
+		"disable-legacy": "on",
+	}
+	if o.serial != "" {
+		dev["serial"] = o.serial
+	}
+	if _, err := c.run("device_add", dev); err != nil {
+		_, _ = c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)})
+		return fmt.Errorf("adding %s on port %d: %w", path, o.port, err)
+	}
+	fmt.Fprintf(os.Stderr, "attached %s on port %d (%s)\n", path, o.port, machine.HotplugPortID(o.port))
+	return nil
+}
+
+type detachFlags struct {
+	qmp     string
+	port    int
+	timeout time.Duration
+}
+
+func (o *detachFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
+	fs.IntVar(&o.port, "port", 0, "hotplug port the disk was attached on")
+	fs.DurationVar(&o.timeout, "timeout", 30*time.Second, "how long the guest has to let the disk go")
+}
+
+// detach asks for the disk on a port back and waits for the guest to give it. A
+// device_del is a request: QEMU presses the slot's attention button and the device
+// goes only when the guest's pciehp powers the slot off, about five seconds later
+// by the PCIe spec's own wait. A guest that never answers is the failure worth
+// seeing, so it is an error and not a return on the request.
+func detach(o detachFlags) error {
+	if o.qmp == "" {
+		return errors.New("detach: --qmp is required")
+	}
+	c, err := dialQMP(o.qmp)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+
+	id := hotplugDiskID(o.port)
+	start := time.Now()
+	if _, err := c.run("device_del", map[string]any{"id": id}); err != nil {
+		return fmt.Errorf("removing the disk on port %d: %w", o.port, err)
+	}
+	if err := c.waitDeleted(id, o.timeout); err != nil {
+		return fmt.Errorf("the guest did not release the disk on port %d: %w", o.port, err)
+	}
+	took := time.Since(start)
+	if _, err := c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)}); err != nil {
+		return fmt.Errorf("closing the disk on port %d: %w", o.port, err)
+	}
+	fmt.Fprintf(os.Stderr, "detached port %d in %.1fs\n", o.port, took.Seconds())
+	return nil
+}
+
+type saveFlags struct {
+	qmp string
+	to  string
+}
+
+func (o *saveFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
+	fs.StringVar(&o.to, "to", "", "where to write the state (required)")
+}
+
 // save stops a running VM and writes everything needed to resume it elsewhere.
 //
 // It is `migrate` to a file, which is the same mechanism a live migration uses
@@ -305,14 +478,11 @@ func fingerprint(s machine.Spec) error {
 // whatever file backs it. That is right for many VMs on one host sharing a
 // template and wrong for the thing this is for: one file that can be copied to
 // another machine and resumed there.
-func save(o *options) error {
-	if o.qmp == "" {
-		return errors.New("-qmp is required: this asks a running VM to save itself")
+func save(o saveFlags) error {
+	if o.qmp == "" || o.to == "" {
+		return errors.New("save: --qmp and --to are required")
 	}
-	if o.saveTo == "" {
-		return errors.New("-to is required")
-	}
-	to, err := filepath.Abs(o.saveTo)
+	to, err := filepath.Abs(o.to)
 	if err != nil {
 		return err
 	}
@@ -352,12 +522,13 @@ func save(o *options) error {
 	}
 }
 
-// qmpConn is the smallest QMP client that can drive a save: one command at a
-// time, events discarded.
+// qmpConn is the smallest QMP client these commands need: one command at a time,
+// and the events that arrive in between kept for whoever waits on one.
 type qmpConn struct {
-	c   net.Conn
-	dec *json.Decoder
-	enc *json.Encoder
+	c      net.Conn
+	dec    *json.Decoder
+	enc    *json.Encoder
+	events []map[string]any
 }
 
 func dialQMP(socket string) (*qmpConn, error) {
@@ -393,6 +564,7 @@ func (q *qmpConn) run(cmd string, args map[string]any) (map[string]any, error) {
 			return nil, fmt.Errorf("reading the reply to %s: %w", cmd, err)
 		}
 		if _, isEvent := resp["event"]; isEvent {
+			q.events = append(q.events, resp)
 			continue
 		}
 		if e, bad := resp["error"]; bad {
@@ -400,5 +572,36 @@ func (q *qmpConn) run(cmd string, args map[string]any) (map[string]any, error) {
 		}
 		ret, _ := resp["return"].(map[string]any)
 		return ret, nil
+	}
+}
+
+// waitDeleted returns once QEMU reports DEVICE_DELETED for the device id — which
+// may already have arrived while a command's reply was being read.
+func (q *qmpConn) waitDeleted(id string, timeout time.Duration) error {
+	deleted := func(ev map[string]any) bool {
+		data, _ := ev["data"].(map[string]any)
+		return ev["event"] == "DEVICE_DELETED" && data["device"] == id
+	}
+	for _, ev := range q.events {
+		if deleted(ev) {
+			return nil
+		}
+	}
+	if err := q.c.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	defer func() { _ = q.c.SetReadDeadline(time.Time{}) }()
+	for {
+		var ev map[string]any
+		if err := q.dec.Decode(&ev); err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				return fmt.Errorf("no DEVICE_DELETED for %s within %s", id, timeout)
+			}
+			return fmt.Errorf("waiting for DEVICE_DELETED: %w", err)
+		}
+		if deleted(ev) {
+			return nil
+		}
 	}
 }

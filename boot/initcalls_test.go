@@ -138,7 +138,7 @@ func bootUntil(t *testing.T, out string, v variant, kernel, marker string, timeo
 		"-F", "qcow2", "-b", filepath.Join(out, "image", "rootfs.qcow2"), overlay)
 	editOverlay(t, overlay, v)
 
-	cmdline := "root=/dev/vda rw init=/sbin/init"
+	cmdline := "init=/sbin/init"
 	if v.extra != "" {
 		cmdline += " " + v.extra
 	}
