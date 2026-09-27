@@ -148,6 +148,32 @@ machine at start-up.
 - **A tarball with something missing is worse than no tarball**: it installs, and the
   missing piece surfaces somewhere else. `hack/release` refuses rather than warning.
 
+## Trying the machine
+
+`spin-machine` (`cmd/spin-machine`, built by `task tools`) is how this machine is run by
+hand. A one-off check goes through it: do not write a Python or shell harness that rebuilds
+its command line, speaks QMP, or makes overlays itself. A harness like that tests itself and
+not the definition, and it is thrown away with what it found. If the CLI cannot do what the
+check needs, and the check is part of the machine's contract (a device on a hotplug port, a
+save, a restore), add it to the CLI. If the check should be repeated, it belongs in `boot/`
+as a Task target.
+
+- **Rebuild it first.** `_output/bin/spin-machine` is whatever `task tools` last built, so
+  a change to `machine/` is invisible until the tool is rebuilt. `spin-machine args` shows
+  the command line that will actually run.
+- **The base is safe by default.** Without `--disk`, `boot` puts the base image under a
+  throwaway overlay (QEMU's `-snapshot`), and root is `/dev/vda`. `--disk` opens the named
+  file as given, so point it at an overlay and never at `rootfs.qcow2`.
+- **Driving a guest.** `--init /bin/sh` gives a shell with nothing mounted; its console is
+  on stdin/stdout, or on a socket with `--console unix:PATH,server=on,wait=off`. `--qmp
+  PATH` opens the socket that `attach`, `detach` and `save` talk to.
+
+```sh
+spin-machine boot --hotplug-ports 2 --qmp /tmp/q.sock --init /bin/sh &
+spin-machine attach --qmp /tmp/q.sock --port 0 --disk disk.raw   # vdb, in the guest
+spin-machine detach --qmp /tmp/q.sock --port 0                   # waits for the guest
+```
+
 ## Taskfiles
 
 Each part's targets live beside what they build — `qemu/Taskfile.yml`, `kernel/Taskfile.yml`,
