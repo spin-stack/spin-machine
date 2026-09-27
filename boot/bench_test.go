@@ -553,9 +553,11 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 		args = append(args, "--kernel", v.kernel)
 	}
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
-	// Its own process group, so the machine can be taken down as a whole. spin-machine execs
-	// QEMU as a child and killing the parent leaves the child running: the first version of
-	// this left one `qemu-system-x86_64` per boot alive, each still holding an overlay open.
+	// Its own process group, so the machine can be taken down as a whole. spin-machine
+	// execs QEMU in place now, so the pid is QEMU's; the group stays because it is what
+	// makes that not matter. When spin-machine ran QEMU as a child, killing the parent left
+	// the child running: the first version of this left one `qemu-system-x86_64` per boot
+	// alive, each still holding an overlay open.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

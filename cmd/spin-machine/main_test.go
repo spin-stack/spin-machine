@@ -6,10 +6,13 @@ import (
 	"bufio"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +30,9 @@ func TestQMP(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		replies []string
+		// silent is a monitor that accepted and never greets: one whose single
+		// connection is somebody else's.
+		silent bool
 		// do is what the client does once the handshake is through.
 		do      func(*qmpConn) error
 		wantErr string
@@ -78,13 +84,29 @@ func TestQMP(t *testing.T) {
 		name:    "a refused handshake",
 		replies: []string{`{"error": {"class": "CommandNotFound", "desc": "not in this mode"}}`},
 		wantErr: "qmp_capabilities: CommandNotFound: not in this mode",
+	}, {
+		// A monitor serves one client and queues the next without a word. Waiting on
+		// its greeting without a deadline was a command that hung forever and said
+		// nothing.
+		name:    "a monitor that never greets",
+		silent:  true,
+		wantErr: "no greeting within",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, monitor := net.Pipe()
 			released := make(chan error, 1)
-			go func() { released <- serve(monitor, tc.replies) }()
+			if tc.silent {
+				go func() {
+					// Holds the connection until the client lets it go.
+					_, err := io.Copy(io.Discard, monitor)
+					_ = monitor.Close()
+					released <- err
+				}()
+			} else {
+				go func() { released <- serve(monitor, tc.replies) }()
+			}
 
-			q, err := newQMP(client)
+			q, err := newQMP(client, 100*time.Millisecond)
 			if err == nil && tc.do != nil {
 				err = tc.do(q)
 			}
@@ -137,15 +159,6 @@ func serve(c net.Conn, replies []string) error {
 // How a command ends. Only main ends the process: a command that exited on its own
 // took the test binary with it, and skipped whatever its caller would have done next.
 func TestHowACommandEnds(t *testing.T) {
-	// A QEMU that exits with a status of its own, as one that refused its arguments
-	// does after saying why.
-	dir := t.TempDir()
-	qemu := filepath.Join(dir, "qemu")
-	if err := os.WriteFile(qemu, []byte("#!/bin/sh\nexit 7\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	failing := machine.Spec{QEMU: qemu, Kernel: qemu, Firmware: dir, BootCPUs: 1, Memory: machine.Memory{SizeMB: 64}}
-
 	for _, tc := range []struct {
 		name string
 		do   func() error
@@ -156,24 +169,67 @@ func TestHowACommandEnds(t *testing.T) {
 		do:   func() error { return run([]string{"save", "-h"}) },
 		is:   func(err error) bool { return errors.Is(err, flag.ErrHelp) },
 	}, {
-		name: "QEMU's exit status is passed on as it was",
-		do:   func() error { return boot(failing, false) },
-		is: func(err error) bool {
-			var code exitCode
-			return errors.As(err, &code) && code == 7
-		},
-	}, {
 		name: "an unknown command is an error",
 		do:   func() error { return run([]string{"frobnicate"}) },
+		is:   func(err error) bool { return err != nil && !errors.Is(err, flag.ErrHelp) },
+	}, {
+		// Returned once, naming the command, and not also printed by the flag package
+		// under a usage listing.
+		name: "a flag nobody defined names its command",
+		do:   func() error { return run([]string{"save", "--nope"}) },
 		is: func(err error) bool {
-			var code exitCode
-			return err != nil && !errors.As(err, &code) && !errors.Is(err, flag.ErrHelp)
+			return err != nil && strings.HasPrefix(err.Error(), "save: flag provided but not defined")
 		},
+	}, {
+		// Refused before a monitor is dialled: the socket here does not exist, so an
+		// error about it would mean the port was never looked at.
+		name: "a port no machine has",
+		do: func() error {
+			return run([]string{"attach", "--qmp", "/nonexistent", "--disk", "d", "--port", "9"})
+		},
+		is: func(err error) bool { return err != nil && strings.Contains(err.Error(), "port 9") },
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.do(); !tc.is(err) {
 				t.Errorf("returned %v (%T)", err, err)
 			}
 		})
+	}
+}
+
+// boot becomes QEMU. Run as a child of this test, because a process that execs is not
+// there afterwards to report: the child's pid is the one QEMU writes down, and its exit
+// status is QEMU's, with nothing in between to lose either.
+func TestBootBecomesQEMU(t *testing.T) {
+	if qemu := os.Getenv("SPIN_MACHINE_TEST_QEMU"); qemu != "" {
+		dir := filepath.Dir(qemu)
+		err := boot(machine.Spec{QEMU: qemu, Kernel: qemu, Firmware: dir, BootCPUs: 1,
+			Memory: machine.Memory{SizeMB: 64}}, false)
+		// Reached only if the exec failed.
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(100)
+	}
+
+	dir := t.TempDir()
+	qemu := filepath.Join(dir, "qemu")
+	pidFile := filepath.Join(dir, "pid")
+	script := "#!/bin/sh\necho $$ > " + pidFile + "\nexit 7\n"
+	if err := os.WriteFile(qemu, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestBootBecomesQEMU$")
+	cmd.Env = append(os.Environ(), "SPIN_MACHINE_TEST_QEMU="+qemu)
+	err := cmd.Run()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 7 {
+		t.Fatalf("boot ended with %v, want QEMU's own exit status 7", err)
+	}
+	pid, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(string(pid)), strconv.Itoa(cmd.Process.Pid); got != want {
+		t.Errorf("QEMU ran as pid %s and spin-machine as %s: a child, not an exec", got, want)
 	}
 }

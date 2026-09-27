@@ -24,37 +24,28 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spin-stack/spin-machine/machine"
 )
 
-// main is the only place the process ends. A command returns what happened and main
-// decides what it means: help asked for is not a failure, and QEMU's own exit status is
-// passed on as it was, since QEMU has already said why on stderr.
+// main is the only place the process ends, except that boot becomes QEMU and QEMU ends
+// it. A command returns what happened and main decides what it means: help asked for is
+// not a failure.
 func main() {
-	err := run(os.Args[1:])
-	var code exitCode
-	switch {
-	case err == nil, errors.Is(err, flag.ErrHelp):
-	case errors.As(err, &code):
-		os.Exit(int(code))
-	default:
+	if err := run(os.Args[1:]); err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintf(os.Stderr, "spin-machine: %v\n", err)
 		os.Exit(1)
 	}
 }
-
-// exitCode is a failure that has already been reported by the process that failed, and
-// has only a status left to pass on.
-type exitCode int
-
-func (c exitCode) Error() string { return fmt.Sprintf("exit status %d", int(c)) }
 
 const usage = `spin-machine - the machine this repository builds
 
@@ -128,11 +119,22 @@ func run(argv []string) error {
 
 // parse gives each command its own flags, so `save -h` lists what save takes and not
 // what a boot does.
+//
+// The flag package prints a parse error itself and then returns it, and main prints
+// what it is returned: the same error twice, the second time under a usage listing
+// nobody asked for. So the package prints nothing, help goes to stdout because it was
+// asked for, and an error is returned once with the command it belongs to.
 func parse(cmd string, argv []string, register func(*flag.FlagSet)) error {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	register(fs)
 	if err := fs.Parse(argv); err != nil {
-		return err
+		if errors.Is(err, flag.ErrHelp) {
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			return err
+		}
+		return fmt.Errorf("%s: %w (spin-machine %s -h lists its flags)", cmd, err, cmd)
 	}
 	if fs.NArg() > 0 {
 		return fmt.Errorf("%s: unexpected argument %q", cmd, fs.Arg(0))
@@ -318,21 +320,26 @@ func qemuArgs(s machine.Spec, scratch bool) ([]string, error) {
 	return args, nil
 }
 
+// boot becomes QEMU: it returns only if the exec failed.
+//
+// Exec and not a child. A child leaves this process between whoever started the machine
+// and the machine: a signal meant for the VM reaches a Go program that dies of it and
+// leaves QEMU running, orphaned, holding its disks — the boot benchmarks once left one
+// QEMU per boot that way. After an exec the pid the caller holds is QEMU's, its exit
+// status is QEMU's, and the terminal, the process group and the signals are QEMU's
+// without anything here to pass them on.
 func boot(s machine.Spec, scratch bool) error {
 	args, err := qemuArgs(s, scratch)
 	if err != nil {
 		return err
 	}
-	// The console is on this terminal, so QEMU keeps the process group and the
-	// signals reach it the way the user expects.
-	cmd := exec.Command(s.QEMU, args...) // #nosec G204 -- a binary and arguments this caller chose
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return exitCode(exit.ExitCode())
-		}
-		return fmt.Errorf("running %s: %w", s.QEMU, err)
+	qemu, err := exec.LookPath(s.QEMU)
+	if err != nil {
+		return fmt.Errorf("finding QEMU: %w", err)
+	}
+	// #nosec G204 -- a binary and arguments this caller chose
+	if err := syscall.Exec(qemu, append([]string{qemu}, args...), os.Environ()); err != nil {
+		return fmt.Errorf("executing %s: %w", qemu, err)
 	}
 	return nil
 }
@@ -378,7 +385,7 @@ type attachFlags struct {
 
 func (o *attachFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
-	fs.IntVar(&o.port, "port", 0, "hotplug port, 0 to --hotplug-ports minus one")
+	fs.IntVar(&o.port, "port", 0, "hotplug port, 0 to the VM's --hotplug-ports minus one")
 	fs.StringVar(&o.disk, "disk", "", "disk image (required)")
 	fs.StringVar(&o.format, "disk-format", "raw", "format of the disk image; never guessed")
 	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only")
@@ -392,9 +399,12 @@ func attach(o attachFlags) error {
 	if o.qmp == "" || o.disk == "" {
 		return errors.New("attach: --qmp and --disk are required")
 	}
+	if err := checkPort(o.port); err != nil {
+		return fmt.Errorf("attach: %w", err)
+	}
 	path, err := filepath.Abs(o.disk)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolving %s: %w", o.disk, err)
 	}
 	c, err := dialQMP(o.qmp)
 	if err != nil {
@@ -449,6 +459,9 @@ func detach(o detachFlags) error {
 	if o.qmp == "" {
 		return errors.New("detach: --qmp is required")
 	}
+	if err := checkPort(o.port); err != nil {
+		return fmt.Errorf("detach: %w", err)
+	}
 	c, err := dialQMP(o.qmp)
 	if err != nil {
 		return err
@@ -471,14 +484,26 @@ func detach(o detachFlags) error {
 	return nil
 }
 
+// checkPort refuses a port no machine can have, here rather than as QEMU's "Bus 'rp-1'
+// not found". Whether this VM was started with that many is QEMU's to answer, and it
+// does, in the same words.
+func checkPort(port int) error {
+	if port < 0 || port >= machine.MaxHotplugPorts {
+		return fmt.Errorf("port %d: a machine has ports 0 to %d at most", port, machine.MaxHotplugPorts-1)
+	}
+	return nil
+}
+
 type saveFlags struct {
-	qmp string
-	to  string
+	qmp     string
+	to      string
+	timeout time.Duration
 }
 
 func (o *saveFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
 	fs.StringVar(&o.to, "to", "", "where to write the state (required)")
+	fs.DurationVar(&o.timeout, "timeout", 5*time.Minute, "how long the save may take")
 }
 
 // save stops a running VM and writes everything needed to resume it elsewhere.
@@ -498,7 +523,7 @@ func save(o saveFlags) error {
 	}
 	to, err := filepath.Abs(o.to)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolving %s: %w", o.to, err)
 	}
 
 	c, err := dialQMP(o.qmp)
@@ -515,7 +540,7 @@ func save(o saveFlags) error {
 	// query-migrate, and the completion event is not delivered for every
 	// transport. A save that fails leaves a truncated file, so its status is
 	// asked for rather than assumed.
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(o.timeout)
 	for {
 		var m struct {
 			Status    string `json:"status"`
@@ -527,25 +552,32 @@ func save(o saveFlags) error {
 		switch m.Status {
 		case "completed":
 			fmt.Fprintf(os.Stderr, "saved to %s\n", to)
+			// The state is written and complete; what is left is a stopped VM nobody
+			// will resume in place. quit's reply may never arrive — QEMU can close
+			// the monitor before sending it — so an error here says nothing about the
+			// save, which is the thing this command was for.
 			_ = c.run("quit", nil, nil)
 			return nil
 		case "failed", "cancelled":
 			return fmt.Errorf("the save %s: %s", m.Status, m.ErrorDesc)
 		}
 		if time.Now().After(deadline) {
-			return errors.New("the save did not finish within five minutes")
+			return fmt.Errorf("the save did not finish within %s", o.timeout)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-// qmpConn is the smallest QMP client these commands need: one command at a time,
-// and the events that arrive in between kept for whoever waits on one.
+// qmpConn is the smallest QMP client these commands need: one command at a time, and
+// the one event anything here waits on kept when it arrives in between.
 type qmpConn struct {
-	c      net.Conn
-	dec    *json.Decoder
-	enc    *json.Encoder
-	events []qmpMessage
+	c   net.Conn
+	dec *json.Decoder
+	enc *json.Encoder
+	// deleted is the id of every device QEMU has reported DEVICE_DELETED for. Only that
+	// event is kept: a save polls for minutes, and every other event it sees is one
+	// nothing reads.
+	deleted []string
 }
 
 // qmpMessage is anything QEMU sends after its greeting: an event, or the reply to
@@ -568,12 +600,17 @@ type qmpError struct {
 
 func (e *qmpError) Error() string { return e.Class + ": " + e.Desc }
 
+// handshakeTimeout bounds the greeting and qmp_capabilities. QEMU writes the greeting
+// as it accepts, so the only monitor that takes longer is one that has not accepted:
+// its one connection is somebody else's, and the kernel queued this one behind it.
+const handshakeTimeout = 5 * time.Second
+
 func dialQMP(socket string) (*qmpConn, error) {
 	c, err := net.Dial("unix", socket)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to QMP at %s: %w", socket, err)
 	}
-	q, err := newQMP(c)
+	q, err := newQMP(c, handshakeTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("QMP at %s: %w", socket, err)
 	}
@@ -582,18 +619,42 @@ func dialQMP(socket string) (*qmpConn, error) {
 
 // newQMP reads the greeting and negotiates capabilities on c. It owns c from here:
 // a monitor that fails the handshake is closed, not handed back half open.
-func newQMP(c net.Conn) (*qmpConn, error) {
+//
+// The handshake has a deadline and nothing after it does. A monitor serves one client
+// and queues the next without a word, so without one a second `spin-machine attach`
+// against a VM whose launcher holds its monitor waits forever and says nothing.
+func newQMP(c net.Conn, timeout time.Duration) (*qmpConn, error) {
 	q := &qmpConn{c: c, dec: json.NewDecoder(c), enc: json.NewEncoder(c)}
-	var greeting json.RawMessage
-	if err := q.dec.Decode(&greeting); err != nil {
-		_ = c.Close()
-		return nil, fmt.Errorf("reading the greeting: %w", err)
-	}
-	if err := q.run("qmp_capabilities", nil, nil); err != nil {
+	if err := q.handshake(timeout); err != nil {
 		_ = c.Close()
 		return nil, err
 	}
 	return q, nil
+}
+
+func (q *qmpConn) handshake(timeout time.Duration) error {
+	if err := q.c.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("setting the handshake deadline: %w", err)
+	}
+	var greeting json.RawMessage
+	if err := q.dec.Decode(&greeting); err != nil {
+		if isTimeout(err) {
+			return fmt.Errorf("no greeting within %s: another client may hold the monitor, which serves one at a time", timeout)
+		}
+		return fmt.Errorf("reading the greeting: %w", err)
+	}
+	if err := q.run("qmp_capabilities", nil, nil); err != nil {
+		return err
+	}
+	if err := q.c.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("clearing the handshake deadline: %w", err)
+	}
+	return nil
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 func (q *qmpConn) Close() error { return q.c.Close() }
@@ -614,8 +675,10 @@ func (q *qmpConn) run(cmd string, args map[string]any, out any) error {
 			return fmt.Errorf("reading the reply to %s: %w", cmd, err)
 		}
 		switch {
+		case m.Event == "DEVICE_DELETED":
+			q.deleted = append(q.deleted, m.Data.Device)
+			continue
 		case m.Event != "":
-			q.events = append(q.events, m)
 			continue
 		case m.Error != nil:
 			return fmt.Errorf("%s: %w", cmd, m.Error)
@@ -631,26 +694,22 @@ func (q *qmpConn) run(cmd string, args map[string]any, out any) error {
 // waitDeleted returns once QEMU reports DEVICE_DELETED for the device id — which
 // may already have arrived while a command's reply was being read.
 func (q *qmpConn) waitDeleted(id string, timeout time.Duration) error {
-	deleted := func(m qmpMessage) bool { return m.Event == "DEVICE_DELETED" && m.Data.Device == id }
-	for _, m := range q.events {
-		if deleted(m) {
-			return nil
-		}
+	if slices.Contains(q.deleted, id) {
+		return nil
 	}
 	if err := q.c.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return err
+		return fmt.Errorf("setting a deadline for DEVICE_DELETED: %w", err)
 	}
 	defer func() { _ = q.c.SetReadDeadline(time.Time{}) }()
 	for {
 		var m qmpMessage
 		if err := q.dec.Decode(&m); err != nil {
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
+			if isTimeout(err) {
 				return fmt.Errorf("no DEVICE_DELETED for %s within %s", id, timeout)
 			}
 			return fmt.Errorf("waiting for DEVICE_DELETED: %w", err)
 		}
-		if deleted(m) {
+		if m.Event == "DEVICE_DELETED" && m.Data.Device == id {
 			return nil
 		}
 	}
