@@ -255,7 +255,9 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 	}
 	s.HotplugPorts = o.hotplugPorts
 	s.VsockCID = o.vsockCID
-	s.QMPSocket = o.qmp
+	if o.qmp != "" {
+		s.Monitors = []machine.Monitor{{Socket: o.qmp}}
+	}
 	s.Incoming = o.incoming
 	s.Serial = o.console
 
@@ -294,7 +296,7 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 	if o.console == "" {
 		c.Console = ""
 	}
-	s.Cmdline = c.String()
+	s.Cmdline = c
 
 	return s, nil
 }

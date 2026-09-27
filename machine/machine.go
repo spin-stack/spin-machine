@@ -12,7 +12,7 @@
 // to move with the binary and the kernel it was written for.
 //
 // The rule that follows: Fingerprint hashes the QEMU binary, the kernel and the
-// initrd by content, together with the four arguments that decide the machine's
+// initrd by content, together with the five arguments that decide the machine's
 // shape. Two machines with the same fingerprint can exchange templates. Two with
 // different fingerprints cannot, and a release in which any of the three files
 // moved has a different fingerprint by construction.
@@ -24,6 +24,7 @@
 package machine
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -101,9 +103,20 @@ func HotplugPortID(i int) string {
 const virtioModern = "disable-legacy=on"
 
 // qemuOpt escapes a value for a QEMU option string, which splits on a single comma
-// and reads a doubled one as a literal. Every value a caller supplies goes through it:
-// a disk path "a,readonly=off" is otherwise a second option, not part of the path.
+// and reads a doubled one as a literal. Every free-form value a caller supplies goes
+// through it: a disk path "a,readonly=off" is otherwise a second option, not part of
+// the path. A value picked from a fixed set — a disk's format and cache mode, the
+// accelerator, a CPU model name — is not escaped but refused by Validate when it is not
+// one of the set, because an escaped "qcow2,,x" is still not a format.
 func qemuOpt(v string) string { return strings.ReplaceAll(v, ",", ",,") }
+
+// diskFormats are the formats a Disk or an Image may name: the two this machine's images
+// are. Anything else is either a typo QEMU reports as a missing driver or a driver
+// nobody here has thought about the safety of.
+var diskFormats = []string{"qcow2", "raw"}
+
+// cacheModes are QEMU's -drive cache= values.
+var cacheModes = []string{"none", "writeback", "writethrough", "directsync", "unsafe"}
 
 // MemoryBackendID names the RAM object when guest memory is file-backed.
 //
@@ -187,14 +200,17 @@ type Disk struct {
 //
 // JSON, not key=value: "no backing" is JSON null, which key=value cannot say — backing=null
 // names a node called null — and an opaque path needs no comma escaping.
-func (d Disk) chainArgs(i int) ([]string, error) {
+func (d Disk) chainArgs(i int) []string {
+	nodeName := func(j int) string {
+		if j == 0 {
+			return fmt.Sprintf("blk%d", i)
+		}
+		return fmt.Sprintf("blk%d-%d", i, j)
+	}
 	var args []string
 	for j := len(d.Chain) - 1; j >= 0; j-- {
 		img := d.Chain[j]
-		node := fmt.Sprintf("blk%d", i)
-		if j > 0 {
-			node = fmt.Sprintf("blk%d-%d", i, j)
-		}
+		node := nodeName(j)
 		readOnly := d.Readonly || j > 0
 		// drop-cache off, on every layer.
 		//
@@ -213,41 +229,76 @@ func (d Disk) chainArgs(i int) ([]string, error) {
 		// where invalidate_mapping_pages mostly declines to free anything, and has been measured
 		// at 251 ms elsewhere against a colder one. With this off the call is not made at all and
 		// cont goes from 8.9 ms to 2.8.
-		file := map[string]any{
-			"driver": "file", "node-name": node + "-file",
-			"filename": fmt.Sprintf("/dev/fdset/%d", img.FDSet),
-			"aio":      "io_uring", "discard": "unmap", "read-only": readOnly,
-			"drop-cache": false,
+		file := fileNode{
+			Driver: "file", NodeName: node + "-file",
+			Filename: fmt.Sprintf("/dev/fdset/%d", img.FDSet),
+			AIO:      "io_uring", Discard: "unmap", ReadOnly: readOnly,
 		}
 		if j == 0 && d.Locking {
-			file["locking"] = "on"
+			file.Locking = "on"
 		}
 		if d.DirectOverBacking {
-			file["cache"] = map[string]any{"direct": j == 0}
+			file.Cache = &nodeCache{Direct: j == 0}
 		}
 		// discard on the format node as well as the file: a guest's discard arrives at the
 		// format node, and QEMU drops one on a node opened without unmap and tells the guest it
 		// worked - so fstrim freed nothing, and what the guest deleted stayed in the image.
-		format := map[string]any{
-			"driver": img.Format, "node-name": node, "file": node + "-file", "read-only": readOnly,
-			"discard": "unmap",
+		format := formatNode{
+			Driver: img.Format, NodeName: node, File: node + "-file", ReadOnly: readOnly,
+			Discard: "unmap",
 		}
 		switch {
 		case j < len(d.Chain)-1:
-			format["backing"] = fmt.Sprintf("blk%d-%d", i, j+1)
+			// A node name this function made, ASCII with nothing to escape.
+			format.Backing = json.RawMessage(`"` + nodeName(j+1) + `"`)
 		case img.Format != "raw":
 			// Or QEMU opens whatever the header names.
-			format["backing"] = nil
+			format.Backing = json.RawMessage("null")
 		}
-		for _, n := range []map[string]any{file, format} {
-			b, err := json.Marshal(n)
-			if err != nil {
-				return nil, fmt.Errorf("encoding blockdev %s: %w", n["node-name"], err)
-			}
-			args = append(args, "-blockdev", string(b))
-		}
+		args = append(args, "-blockdev", encodeNode(file), "-blockdev", encodeNode(format))
 	}
-	return args, nil
+	return args
+}
+
+// fileNode and formatNode are the two -blockdev nodes of one chain image. Structs and
+// not maps, so that what can be in a node is a type and not a convention.
+type fileNode struct {
+	Driver   string `json:"driver"`
+	NodeName string `json:"node-name"`
+	Filename string `json:"filename"`
+	AIO      string `json:"aio"`
+	Discard  string `json:"discard"`
+	ReadOnly bool   `json:"read-only"`
+	// DropCache is always false; see chainArgs. Not omitempty: false is the point.
+	DropCache bool       `json:"drop-cache"`
+	Locking   string     `json:"locking,omitempty"`
+	Cache     *nodeCache `json:"cache,omitempty"`
+}
+
+type nodeCache struct {
+	Direct bool `json:"direct"`
+}
+
+type formatNode struct {
+	Driver   string `json:"driver"`
+	NodeName string `json:"node-name"`
+	File     string `json:"file"`
+	ReadOnly bool   `json:"read-only"`
+	Discard  string `json:"discard"`
+	// Backing has three states and a pointer has two: absent (a raw image, which has
+	// no backing option at all), null (the last image, which must not follow its
+	// header) and a node name.
+	Backing json.RawMessage `json:"backing,omitempty"`
+}
+
+// encodeNode is a node as QEMU reads it. json.Marshal fails only for a value it cannot
+// represent — a channel, a function, a cycle, a RawMessage that is not JSON — and these
+// nodes hold strings, bools and the RawMessages chainArgs writes, so there is no error
+// to return: a signature that carried one would make every caller handle a case that
+// cannot happen.
+func encodeNode(n any) string {
+	b, _ := json.Marshal(n)
+	return string(b)
 }
 
 // driveArg is disk i as one -drive, for a disk given by Path: QEMU opens the image
@@ -376,6 +427,24 @@ type Memory struct {
 	Shared bool
 }
 
+// Monitor is one QMP monitor: a Unix socket QEMU creates and listens on, or one the
+// caller already made and listens on, handed over as a descriptor for a QEMU that may
+// not create a socket where the caller would connect to it. Set one or the other.
+type Monitor struct {
+	Socket string
+	FD     int
+}
+
+func (m Monitor) validate() error {
+	switch {
+	case (m.Socket == "") == (m.FD == 0):
+		return errors.New("a monitor is either a socket path or a descriptor, and this is both or neither")
+	case m.FD != 0 && m.FD < 3:
+		return fmt.Errorf("a monitor descriptor of %d is stdin, stdout or stderr", m.FD)
+	}
+	return nil
+}
+
 // Spec is one virtual machine.
 type Spec struct {
 	// The three files whose contents define the machine.
@@ -447,7 +516,7 @@ type Spec struct {
 	// emulated would present as a fleet that is inexplicably slow, not as one that failed.
 	//
 	// It has to be set together with QEMUTCG: the ordinary build has no TCG compiled in and
-	// refuses accel=tcg outright, which is the good failure. And "host" is not a CPU model
+	// refuses -accel tcg outright, which is the good failure. And "host" is not a CPU model
 	// TCG can present — QEMU refuses it with "CPU model 'host' requires KVM or HVF" — so
 	// the default below is "max" here and "host" under KVM.
 	//
@@ -491,18 +560,23 @@ type Spec struct {
 	VsockFD int
 
 	// KVMFDSet is /dev/kvm as a descriptor set, for the same QEMU. Only under KVM, which
-	// is the accelerator that opens a device. The shape still says accel=kvm: where the
-	// accelerator's descriptor came from is not the machine a template is loaded into.
+	// is the accelerator that opens a device. The shape still says kvm: where the
+	// accelerator's descriptor came from is not the machine a template is loaded into, so
+	// it is added to -accel by Args and is in neither Shape nor the fingerprint.
 	KVMFDSet int
 
-	// QMPSocket is a Unix socket path QEMU listens on for QMP. Required to do
-	// anything to a running machine, including shutting it down.
-	QMPSocket string
-	// QMPFD is QMPSocket already listening, handed to QEMU as a descriptor, for a
-	// QEMU that may not create a socket where the caller would connect to it. Set
-	// one or the other; QMPFD2 is the same for QMPSocket2.
-	QMPFD  int
-	QMPFD2 int
+	// Monitors are the QMP monitors this machine listens on. At least one is needed to
+	// do anything to a running machine, including shutting it down.
+	//
+	// More than one because a QMP socket serves one client: QEMU's socket chardev
+	// accepts one connection and the next one waits, so two components cannot share a
+	// path. Two monitors are two chardevs, and QEMU serves both at once — each with its
+	// own greeting, its own capabilities handshake and its own command stream. The case
+	// that asked for it is a machine whose lifecycle and whose disk are owned by
+	// different things: whoever launched it holds the first monitor for as long as it
+	// runs, and whatever owns the storage under it has to be able to seal a layer
+	// without asking the launcher to relay commands it does not understand.
+	Monitors []Monitor
 
 	// FDSets are the descriptor sets the command line names: a Disk's Chain,
 	// SerialFDSet.
@@ -515,30 +589,16 @@ type Spec struct {
 	// with EINVAL on one (measured, QEMU 11.1.1).
 	SerialFDSet int
 
-	// QMPSocket2 is a second monitor, on its own socket, for a second thing that drives
-	// this machine.
-	//
-	// It exists because a QMP socket serves one client: QEMU's socket chardev accepts one
-	// connection and the next one waits, so two components cannot share a path. Two
-	// monitors are two chardevs, and QEMU serves both at once — each with its own
-	// greeting, its own capabilities handshake and its own command stream.
-	//
-	// The case it is for is a machine whose lifecycle and whose disk are owned by
-	// different things: whoever launched it holds the first monitor for as long as it
-	// runs, and whatever owns the storage under it has to be able to seal a layer without
-	// asking the launcher to relay commands it does not understand.
-	//
-	// Empty for a machine with one driver, which is every machine that does not have that
-	// split.
-	QMPSocket2 string
-
 	// Serial is a QEMU chardev spec for the console — "file:/path/console.log",
 	// "mon:stdio", or empty for no console at all. The kernel prints to the ISA
 	// 16550 the machine has; nothing else uses it.
 	Serial string
 
-	// Cmdline is the kernel command line. Build it with Cmdline.String().
-	Cmdline string
+	// Cmdline is the kernel command line. A typed value rather than a rendered string,
+	// so that what String always adds — pci=lastbus=0 and the rest — cannot be left
+	// out by a caller who built the line some other way, and so that Validate can see
+	// what the line is made of.
+	Cmdline Cmdline
 
 	// IncomingDefer starts QEMU with no machine state, waiting to be told over
 	// QMP where to load it from.
@@ -560,17 +620,20 @@ type Spec struct {
 	Incoming string
 }
 
-// Shape is the four arguments that decide what machine a guest sees: the chipset
-// and its options, the CPU model, the vCPU count with its hotplug ceiling, and
-// the memory size with its ceiling.
+// Shape is the five arguments that decide what machine a guest sees: the chipset
+// and its options, the accelerator, the CPU model, the vCPU count with its hotplug
+// ceiling, and the memory size with its ceiling.
 //
 // It is one type with one constructor because it has two consumers that must
 // never disagree: the command line QEMU is given, and the fingerprint that
 // decides which templates this machine may restore from. If the fingerprint
 // stopped describing the command line, a VM would restore from a template of
-// another machine and the failure would be silent.
+// another machine and the failure would be silent. Args passes each field as it
+// is; the only thing it adds is where /dev/kvm came from (KVMFDSet), which is the
+// host's business and not the guest's.
 type Shape struct {
 	Machine string
+	Accel   string
 	CPU     string
 	SMP     string
 	Memory  string
@@ -638,7 +701,8 @@ func (s Spec) Shape() Shape {
 	cpu += ",-vmx,-svm"
 
 	return Shape{
-		Machine: s.machineOpts(true),
+		Machine: s.machineOpts(),
+		Accel:   accel,
 		CPU:     cpu,
 		SMP:     smpArg(s.BootCPUs, s.MaxCPUs),
 		Memory:  memoryArg(s.Memory.SizeMB, s.Memory.MaxMB),
@@ -653,16 +717,12 @@ func (s Spec) accel() string {
 	return s.Accel
 }
 
-// machineOpts is the -machine string. withAccel is false when the accelerator is given
-// its own -accel carrying the /dev/kvm descriptor (KVMFDSet): QEMU refuses the two
-// together — "The -accel and "-machine accel=" options are incompatible" (11.1.1). It is
-// built without accel= rather than edited out of Shape's string, so the two cannot drift
-// apart when an option is added or reordered.
-func (s Spec) machineOpts(withAccel bool) string {
-	accel := ""
-	if withAccel {
-		accel = "accel=" + s.accel()
-	}
+// machineOpts is the -machine string. It never carries accel=: the accelerator is always
+// its own -accel, because that is the only form that can also carry the /dev/kvm
+// descriptor (KVMFDSet), and QEMU refuses the two together — "The -accel and
+// "-machine accel=" options are incompatible" (11.1.1). One form for every machine is
+// one string for the fingerprint to hash and the command line to carry.
+func (s Spec) machineOpts() string {
 	backend := ""
 	if s.Memory.File != "" {
 		backend = "memory-backend=" + MemoryBackendID
@@ -717,9 +777,18 @@ func (s Spec) machineOpts(withAccel bool) string {
 	// controller and TCG has none, but QEMU accepts the option and ignores it rather than
 	// refusing — measured against 11.1.1 — so the shape is one string and not two.
 	return strings.Join(nonEmpty(
-		"q35", accel, "kernel-irqchip=on", "hpet=off", "acpi=on",
+		"q35", "kernel-irqchip=on", "hpet=off", "acpi=on",
 		"sata=off", "smbus=off", backend,
 	), ",")
+}
+
+// accelArg is -accel: the accelerator, and under KVM the descriptor set /dev/kvm is in
+// when the caller opened it (Validate refuses one for any other accelerator).
+func accelArg(accel string, kvmFDSet int) string {
+	if kvmFDSet == 0 {
+		return accel
+	}
+	return fmt.Sprintf("%s,device=/dev/fdset/%d", accel, kvmFDSet)
 }
 
 // derivedFromHost reports whether a CPU model takes its feature set from the
@@ -781,14 +850,20 @@ func nonEmpty(values ...string) []string {
 func (s Spec) Validate() error {
 	switch {
 	case s.QEMU == "":
-		return fmt.Errorf("no QEMU binary")
+		return errors.New("no QEMU binary")
 	case s.Kernel == "":
-		return fmt.Errorf("no kernel")
+		return errors.New("no kernel")
 	case s.Firmware == "":
 		// The machine boots by entering a PVH ELF kernel through pvh.bin, which
 		// QEMU finds under this directory. Without it the failure is a rom-open
 		// error that reads like something else entirely.
-		return fmt.Errorf("no firmware directory: QEMU has no pvh.bin to enter the kernel through")
+		return errors.New("no firmware directory: QEMU has no pvh.bin to enter the kernel through")
+	case s.Accel != "" && s.Accel != "kvm" && s.Accel != "tcg":
+		return fmt.Errorf("accelerator %q: this machine runs under kvm or tcg", s.Accel)
+	// A model name, and only that. The options after it are the machine's (Shape), and a
+	// comma here would add options the fingerprint hashes as part of a name.
+	case strings.ContainsAny(s.CPU, ", \t\n"):
+		return fmt.Errorf("CPU model %q is not a model name: its options are the machine's", s.CPU)
 	case s.BootCPUs < 1:
 		return fmt.Errorf("BootCPUs is %d", s.BootCPUs)
 	case s.MaxCPUs != 0 && s.MaxCPUs < s.BootCPUs:
@@ -809,7 +884,7 @@ func (s Spec) Validate() error {
 	case s.Memory.SizeMB < 1:
 		return fmt.Errorf("memory is %d MB", s.Memory.SizeMB)
 	case s.Memory.Shared && s.Memory.File == "":
-		return fmt.Errorf("Memory.Shared with no Memory.File to share")
+		return errors.New("Memory.Shared with no Memory.File to share")
 	case len(s.Disks) > MaxDisks:
 		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), MaxDisks)
 	case len(s.NICs) > MaxNICs:
@@ -817,10 +892,14 @@ func (s Spec) Validate() error {
 	case s.HotplugPorts < 0 || s.HotplugPorts > MaxHotplugPorts:
 		return fmt.Errorf("%d root ports for devices arriving later, and the slot range holds %d",
 			s.HotplugPorts, MaxHotplugPorts)
-	case s.QMPSocket != "" && s.QMPFD != 0, s.QMPSocket2 != "" && s.QMPFD2 != 0:
-		return fmt.Errorf("a monitor is given both a socket path and a descriptor")
-	case s.QMPFD != 0 && s.QMPFD < 3, s.QMPFD2 != 0 && s.QMPFD2 < 3:
-		return fmt.Errorf("a monitor descriptor below 3 is stdin, stdout or stderr")
+	}
+	if err := s.Cmdline.validate(); err != nil {
+		return fmt.Errorf("kernel command line: %w", err)
+	}
+	for i, m := range s.Monitors {
+		if err := m.validate(); err != nil {
+			return fmt.Errorf("monitor %d: %w", i, err)
+		}
 	}
 	sets, err := s.fdSets()
 	if err != nil {
@@ -828,17 +907,17 @@ func (s Spec) Validate() error {
 	}
 	switch {
 	case s.SerialFDSet != 0 && s.Serial != "":
-		return fmt.Errorf("a console given both as a chardev and as a descriptor set")
+		return errors.New("a console given both as a chardev and as a descriptor set")
 	case s.SerialFDSet != 0 && !sets[s.SerialFDSet]:
 		return fmt.Errorf("the console is descriptor set %d, which Spec.FDSets does not have", s.SerialFDSet)
 	case s.KVMFDSet != 0 && s.Accel != "" && s.Accel != "kvm":
-		return fmt.Errorf("a /dev/kvm descriptor for accel=%s, which opens no device", s.Accel)
+		return fmt.Errorf("a /dev/kvm descriptor for -accel %s, which opens no device", s.Accel)
 	case s.KVMFDSet != 0 && !sets[s.KVMFDSet]:
 		return fmt.Errorf("/dev/kvm is descriptor set %d, which Spec.FDSets does not have", s.KVMFDSet)
 	case s.VsockFD != 0 && s.VsockCID == 0:
-		return fmt.Errorf("a /dev/vhost-vsock descriptor for a machine with no vsock")
+		return errors.New("a /dev/vhost-vsock descriptor for a machine with no vsock")
 	case s.VsockFD != 0 && s.VsockFD < 3:
-		return fmt.Errorf("a /dev/vhost-vsock descriptor below 3 is stdin, stdout or stderr")
+		return errors.New("a /dev/vhost-vsock descriptor below 3 is stdin, stdout or stderr")
 	}
 	for i, n := range s.NICs {
 		if err := n.validate(); err != nil {
@@ -879,7 +958,7 @@ func (n NIC) validate() error {
 	case n.TapFD < 3:
 		return fmt.Errorf("a TAP descriptor of %d is stdin, stdout or stderr", n.TapFD)
 	case n.VhostFD != 0 && n.VhostFD < 3:
-		return fmt.Errorf("a /dev/vhost-net descriptor below 3 is stdin, stdout or stderr")
+		return errors.New("a /dev/vhost-net descriptor below 3 is stdin, stdout or stderr")
 	}
 	// Parsed, not only required: the MAC is written into a QEMU option string, and
 	// anything net.ParseMAC accepts as 48 bits has no comma in it.
@@ -892,13 +971,21 @@ func (n NIC) validate() error {
 func (d Disk) validate(sets map[int]bool) error {
 	switch {
 	case d.Path == "" && len(d.Chain) == 0:
-		return fmt.Errorf("no path and no chain")
+		return errors.New("no path and no chain")
 	case d.Path != "" && len(d.Chain) != 0:
-		return fmt.Errorf("both a path and a chain: which one the guest reads is not a guess")
+		return errors.New("both a path and a chain: which one the guest reads is not a guess")
 	case d.Path != "" && d.Format == "":
 		return fmt.Errorf("%s has no format: it is not guessed", d.Path)
+	case d.Path != "" && !slices.Contains(diskFormats, d.Format):
+		return fmt.Errorf("%s: format %q is not one of %v", d.Path, d.Format, diskFormats)
 	case len(d.Chain) != 0 && (d.Cache != "" || d.Format != ""):
-		return fmt.Errorf("a chain carries a format per image and takes QEMU's caching")
+		return errors.New("a chain carries a format per image and takes QEMU's caching")
+	case d.Cache != "" && !slices.Contains(cacheModes, d.Cache):
+		return fmt.Errorf("cache mode %q is not one of %v", d.Cache, cacheModes)
+	// cache= is itself a setting of cache.direct, so the two together are one option
+	// given twice with nothing to say which wins.
+	case d.Cache != "" && d.DirectOverBacking:
+		return fmt.Errorf("cache=%s and DirectOverBacking both decide cache.direct", d.Cache)
 	}
 	for j, img := range d.Chain {
 		switch {
@@ -906,6 +993,8 @@ func (d Disk) validate(sets map[int]bool) error {
 			return fmt.Errorf("image %d is in descriptor set %d, which Spec.FDSets does not have", j, img.FDSet)
 		case img.Format == "":
 			return fmt.Errorf("image %d has no format: it is not guessed", j)
+		case !slices.Contains(diskFormats, img.Format):
+			return fmt.Errorf("image %d: format %q is not one of %v", j, img.Format, diskFormats)
 		case img.Format == "raw" && j != len(d.Chain)-1:
 			return fmt.Errorf("image %d is raw, which has no backing, and images follow it", j)
 		}
@@ -920,7 +1009,8 @@ func (s Spec) Args() ([]string, error) {
 	}
 
 	shape := s.Shape()
-	args := []string{
+	args := make([]string, 0, 64)
+	args = append(args,
 		"-L", s.Firmware,
 
 		// Every device this machine has is named below. Without -nodefaults QEMU
@@ -937,16 +1027,32 @@ func (s Spec) Args() ([]string, error) {
 		// done from outside rather than from inside QEMU.
 		"-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
 
-		"-machine", s.machineOpts(s.KVMFDSet == 0),
+		"-machine", shape.Machine,
+		"-accel", accelArg(shape.Accel, s.KVMFDSet),
 		"-cpu", shape.CPU,
 		"-smp", shape.SMP,
 		"-m", shape.Memory,
-	}
+	)
+	args = s.appendMemory(args)
+	args = appendChipset(args)
+	args = s.appendBoot(args)
+	args = s.appendDevices(args)
+	args = s.appendDisks(args)
+	args = s.appendNICs(args)
+	args = s.appendConsole(args)
+	args = s.appendMonitors(args)
+	args = s.appendFDSets(args)
+	args = s.appendIncoming(args)
+	return args, nil
+}
 
-	if s.KVMFDSet != 0 {
-		args = append(args, "-accel", fmt.Sprintf("kvm,device=/dev/fdset/%d", s.KVMFDSet))
-	}
+// The append functions below each add one part of the machine to a command line, and
+// Args calls them in a fixed order so that the same spec is the same command line, byte
+// for byte. Appending into one slice rather than returning a slice each keeps the
+// command line in one backing array rather than one per part.
 
+// appendMemory is the object that backs guest RAM, when it is a file.
+func (s Spec) appendMemory(args []string) []string {
 	if s.Memory.File != "" {
 		// A restore opens the file read-only. QEMU otherwise opens it read-write even to
 		// map it private, so every VM restored from a template could write the template
@@ -961,7 +1067,11 @@ func (s Spec) Args() ([]string, error) {
 			fmt.Sprintf("memory-backend-file,id=%s,size=%dM,mem-path=%s,%s",
 				MemoryBackendID, s.Memory.SizeMB, qemuOpt(s.Memory.File), backing))
 	}
+	return args
+}
 
+// appendChipset is the chipset's globals and what a reset does, which no spec changes.
+func appendChipset(args []string) []string {
 	// S3 and S4 are suspend states this machine cannot come back from and that a
 	// guest can ask for by accident. Disabling them in the chipset means the
 	// request never reaches the point of stopping the VM.
@@ -982,16 +1092,22 @@ func (s Spec) Args() ([]string, error) {
 	// that returns immediately, which produced a reboot loop rather than the
 	// expected exit. A VM here is cattle; something that wants a fresh machine
 	// starts one.
-	args = append(args, "-no-reboot")
+	return append(args, "-no-reboot")
+}
 
+// appendBoot is what the machine boots: the kernel, the initrd, and its command line.
+func (s Spec) appendBoot(args []string) []string {
 	args = append(args, "-kernel", s.Kernel)
 	if s.Initrd != "" {
 		args = append(args, "-initrd", s.Initrd)
 	}
-	if s.Cmdline != "" {
-		args = append(args, "-append", s.Cmdline)
-	}
+	return append(args, "-append", s.Cmdline.String())
+}
 
+// appendDevices is every device this machine has whatever it is given: vmgenid, the
+// RNG and the balloon, and the vsock, the virtio-mem region and the root ports when the
+// spec asks for them.
+func (s Spec) appendDevices(args []string) []string {
 	// The VM Generation ID, whose value QEMU randomises for every VM it starts.
 	//
 	// It exists for restores. Every VM restored from a template starts with the
@@ -1071,14 +1187,14 @@ func (s Spec) Args() ([]string, error) {
 		args = append(args, "-device", fmt.Sprintf("pcie-root-port,id=%s,chassis=%d,addr=0x%x",
 			HotplugPortID(i), i+1, SlotHotplugBase+i))
 	}
+	return args
+}
 
+// appendDisks is each disk, by path or as a chain, on its fixed slot.
+func (s Spec) appendDisks(args []string) []string {
 	for i, d := range s.Disks {
 		if len(d.Chain) != 0 {
-			chain, err := d.chainArgs(i)
-			if err != nil {
-				return nil, err
-			}
-			args = append(args, chain...)
+			args = append(args, d.chainArgs(i)...)
 		} else {
 			args = append(args, "-drive", d.driveArg(i))
 		}
@@ -1089,7 +1205,11 @@ func (s Spec) Args() ([]string, error) {
 		}
 		args = append(args, "-device", dev)
 	}
+	return args
+}
 
+// appendNICs is each NIC and its TAP backend, on its fixed slot.
+func (s Spec) appendNICs(args []string) []string {
 	for i, n := range s.NICs {
 		// romfile= loads no option ROM. The card is only ever driven by a guest
 		// that already has the driver compiled in, and it never boots from the
@@ -1112,7 +1232,11 @@ func (s Spec) Args() ([]string, error) {
 		}
 		args = append(args, "-netdev", netdev, "-device", dev)
 	}
+	return args
+}
 
+// appendConsole is the serial console: a descriptor set, a chardev, or none.
+func (s Spec) appendConsole(args []string) []string {
 	switch {
 	case s.SerialFDSet != 0:
 		args = append(args,
@@ -1123,26 +1247,30 @@ func (s Spec) Args() ([]string, error) {
 	default:
 		args = append(args, "-serial", "none")
 	}
+	return args
+}
 
-	for _, sock := range []string{s.QMPSocket, s.QMPSocket2} {
-		if sock == "" {
+// appendMonitors is each QMP monitor, in the order the spec lists them.
+func (s Spec) appendMonitors(args []string) []string {
+	for i, m := range s.Monitors {
+		if m.Socket != "" {
+			args = append(args, "-qmp", fmt.Sprintf("unix:%s,server=on,wait=off", qemuOpt(m.Socket)))
 			continue
 		}
-		args = append(args, "-qmp",
-			fmt.Sprintf("unix:%s,server=on,wait=off", qemuOpt(sock)))
-	}
-	// A monitor on a socket the caller made and listens on: QEMU accepts on the descriptor
-	// and never needs a place in the filesystem to put a socket.
-	for i, fd := range []int{s.QMPFD, s.QMPFD2} {
-		if fd == 0 {
-			continue
-		}
+		// A monitor on a socket the caller made and listens on: QEMU accepts on the descriptor
+		// and never needs a place in the filesystem to put a socket.
+		//
 		// -object monitor-qmp and not -mon, which QEMU 11.1 warns is deprecated.
-		id := fmt.Sprintf("qmpfd%d", i)
+		id := fmt.Sprintf("qmp%d", i)
 		args = append(args,
-			"-chardev", fmt.Sprintf("socket,id=%s,fd=%d,server=on,wait=off", id, fd),
+			"-chardev", fmt.Sprintf("socket,id=%s,fd=%d,server=on,wait=off", id, m.FD),
 			"-object", fmt.Sprintf("monitor-qmp,id=mon-%s,chardev=%s", id, id))
 	}
+	return args
+}
+
+// appendFDSets is every descriptor set the command line names.
+func (s Spec) appendFDSets(args []string) []string {
 	// An opaque is a path in practice, so it is escaped like one.
 	for _, set := range s.FDSets {
 		for _, fd := range set.FDs {
@@ -1153,7 +1281,11 @@ func (s Spec) Args() ([]string, error) {
 			args = append(args, "-add-fd", spec)
 		}
 	}
+	return args
+}
 
+// appendIncoming is -incoming, when the machine is to be restored rather than booted.
+func (s Spec) appendIncoming(args []string) []string {
 	// -incoming, in whichever of its two forms this machine was given. Validate has
 	// already refused a spec carrying both.
 	//
@@ -1166,14 +1298,13 @@ func (s Spec) Args() ([]string, error) {
 	} else if s.Incoming != "" {
 		args = append(args, "-incoming", s.Incoming)
 	}
-
-	return args, nil
+	return args
 }
 
 // Fingerprint identifies the machine this spec describes, by content.
 //
 // It hashes the QEMU binary, the kernel and the initrd — the files, not their
-// paths — together with the four arguments that decide the machine's shape. Two
+// paths — together with the five arguments that decide the machine's shape. Two
 // machines with the same fingerprint present the same thing to a guest and can
 // exchange templates; two with different fingerprints cannot, and a restore
 // across them is undefined rather than an error.
@@ -1235,20 +1366,12 @@ func (s Spec) fingerprint(sumFile func(string) (string, error), hostCPU func() (
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Identity is everything the fingerprint hashes except the contents of those
-// three files: the machine's shape, its device topology, and the host's own CPU
-// when the guest is being shown it.
-//
-// It is separate because reading the three files is the expensive half — 76 MB
-// of SHA-256, 29 ms on a machine measured — and a caller that memoises that half
-// needs the other half whole to key the memo on. Under-keying it is the failure
-// that has no symptom: a stale fingerprint is a template that matches a machine
-// it does not describe, and a restore into it is undefined rather than an error.
-// So there is no list here for a caller to keep in step; there is this.
-func (s Spec) Identity() (string, error) {
-	return s.identity(HostCPUModel)
-}
-
+// identity is everything the fingerprint hashes except the contents of those three
+// files: the machine's shape, its device topology, and the host's own CPU when the
+// guest is being shown it. It is recomputed on every fingerprint, cached or not, so
+// that FingerprintCache memoises only the expensive half — 76 MB of SHA-256, 29 ms
+// on a machine measured — and never keys a hash on a list of inputs someone has to
+// keep in step with this one.
 func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 	shape := s.TemplateShape()
 
@@ -1257,6 +1380,7 @@ func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 		_, _ = fmt.Fprintf(&b, "%s=%d:%s\n", key, len(value), value)
 	}
 	write("machine", shape.Machine)
+	write("accel", shape.Accel)
 	write("cpu", shape.CPU)
 	write("smp", shape.SMP)
 	write("memory", shape.Memory)
@@ -1268,7 +1392,7 @@ func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 	// instructions this silicon has, and it never asks again — so a template
 	// taken here describes a CPU the next machine may not have, and restoring it
 	// there is a guest executing an instruction that does not exist. Nothing
-	// about the QEMU binary, the kernel or the four shape arguments differs
+	// about the QEMU binary, the kernel or the five shape arguments differs
 	// between two hosts, so without this a Zen 4 template and a Skylake template
 	// have the same fingerprint and each machine happily accepts the other's.
 	//
@@ -1384,19 +1508,28 @@ func (s Spec) topology() string {
 // and kernel mitigations, so hashing them would invalidate every template on a
 // machine that has not meaningfully changed. The model is the coarse identity
 // that separates one host's silicon from another's, which is what this is for.
+//
+// It reads only as far as the first processor's model name, which is in the first
+// few hundred bytes: /proc/cpuinfo is generated on read, one block per CPU, so on a
+// large host reading all of it costs a block per core for a line the first one has.
 func HostCPUModel() (string, error) {
-	b, err := os.ReadFile("/proc/cpuinfo")
+	f, err := os.Open("/proc/cpuinfo")
 	if err != nil {
 		return "", fmt.Errorf("reading /proc/cpuinfo: %w", err)
 	}
-	for _, line := range strings.Split(string(b), "\n") {
-		name, ok := strings.CutPrefix(line, "model name")
+	defer func() { _ = f.Close() }()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		name, ok := strings.CutPrefix(sc.Text(), "model name")
 		if !ok {
 			continue
 		}
 		if _, value, found := strings.Cut(name, ":"); found {
 			return strings.TrimSpace(value), nil
 		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("reading /proc/cpuinfo: %w", err)
 	}
 	return "", errors.New("no model name in /proc/cpuinfo")
 }

@@ -3,6 +3,7 @@
 package machine
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -31,6 +32,11 @@ type Cmdline struct {
 
 	// Init is the program the kernel runs as PID 1, and InitArgs what follows it
 	// after a "--". Empty leaves both out, and the kernel picks its default.
+	//
+	// An argument that is empty or holds whitespace is written in double quotes, which
+	// the kernel's parser (next_arg in lib/cmdline.c) strips, so init receives it as one
+	// argument. An argument holding a double quote cannot be written at all — the
+	// parser has no escape — and Validate refuses it.
 	Init     string
 	InitArgs []string
 
@@ -40,8 +46,10 @@ type Cmdline struct {
 	Root         string
 	RootReadonly bool
 
-	// Extra is appended verbatim, last, so a caller can say something this
-	// machine has no opinion about.
+	// Extra is appended verbatim, before init, so a caller can say something this
+	// machine has no opinion about. Each element is one or more parameters as the
+	// kernel reads them; a "--" among them is refused, because everything after one
+	// is init's and not the kernel's.
 	Extra []string
 }
 
@@ -196,14 +204,63 @@ func (c Cmdline) String() string {
 	parts = append(parts, c.Extra...)
 
 	if c.Init != "" {
-		init := "init=" + c.Init
+		parts = append(parts, "init="+c.Init)
 		if len(c.InitArgs) > 0 {
-			init += " -- " + strings.Join(c.InitArgs, " ")
+			parts = append(parts, "--")
+			for _, a := range c.InitArgs {
+				if a == "" || strings.ContainsFunc(a, isSpace) {
+					a = `"` + a + `"`
+				}
+				parts = append(parts, a)
+			}
 		}
-		parts = append(parts, init)
 	}
 
 	return strings.Join(parts, " ")
+}
+
+// maxCmdline is COMMAND_LINE_SIZE on x86 (arch/x86/include/uapi/asm/setup.h), counting
+// the terminating NUL. The kernel copies the command line into a buffer of that size
+// and truncates the rest without a word, and what is last here is init and its
+// arguments: a long line boots a guest whose PID 1 is not the one asked for.
+const maxCmdline = 2048
+
+// validate refuses a command line the kernel would read as something else.
+func (c Cmdline) validate() error {
+	for _, f := range []struct{ name, value string }{
+		{"console", c.Console}, {"init", c.Init}, {"root", c.Root},
+	} {
+		if strings.ContainsFunc(f.value, isSpace) || strings.Contains(f.value, `"`) {
+			return fmt.Errorf("%s %q: one kernel parameter cannot hold whitespace or a quote", f.name, f.value)
+		}
+	}
+	if len(c.InitArgs) > 0 && c.Init == "" {
+		return errors.New("InitArgs with no Init: String would drop them without a word")
+	}
+	for _, a := range c.InitArgs {
+		if strings.Contains(a, `"`) {
+			return fmt.Errorf("init argument %q holds a double quote, which the kernel's parser cannot carry", a)
+		}
+	}
+	for _, e := range c.Extra {
+		if slices.Contains(strings.FieldsFunc(e, isSpace), "--") {
+			return fmt.Errorf("extra parameter %q holds --, which would hand the rest of the line to init", e)
+		}
+	}
+	if n := len(c.String()); n >= maxCmdline {
+		return fmt.Errorf("%d bytes, and the kernel keeps %d and drops the rest silently", n, maxCmdline-1)
+	}
+	return nil
+}
+
+// isSpace is the kernel's isspace for the bytes a command line holds: what next_arg
+// splits on.
+func isSpace(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	}
+	return false
 }
 
 // Profiling turns a command line into one that measures the boot it performs.

@@ -4,7 +4,9 @@ package machine
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,7 +149,7 @@ func (r *Release) Spec() Spec {
 func readEnv(path string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return map[string]string{}, nil
 		}
 		return nil, fmt.Errorf("reading the release manifest: %w", err)

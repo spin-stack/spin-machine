@@ -3,6 +3,8 @@
 package machine
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,10 +149,11 @@ func TestArgs(t *testing.T) {
 			s.VsockCID = 7
 			s.NICs = []NIC{nic()}
 		},
-		want:   []string{"q35,accel=kvm,", "vhost-vsock-pci,guest-cid=7,disable-legacy=on,addr=0x2 ", "tap,id=net0,fd=3,vhost=on "},
-		absent: []string{"-accel", "vhostfd"},
+		want:   []string{"-accel kvm ", "vhost-vsock-pci,guest-cid=7,disable-legacy=on,addr=0x2 ", "tap,id=net0,fd=3,vhost=on "},
+		absent: []string{"device=/dev/fdset", "vhostfd"},
 	}, {
-		// -machine loses accel=: QEMU refuses it beside -accel.
+		// The accelerator is always its own -accel and never accel= in -machine: QEMU
+		// refuses the two together, and only -accel can carry /dev/kvm's descriptor.
 		name: "devices handed over",
 		set: func(s *Spec) {
 			s.VsockCID = 7
@@ -181,7 +184,7 @@ func TestArgs(t *testing.T) {
 		set: func(s *Spec) {
 			s.Disks = []Disk{{Path: "/img/a,readonly=off", Format: "raw", Serial: "x,addr=0x2"}}
 			s.Memory.File = "/mem/a,share=on"
-			s.QMPSocket = "/run/q,wait=on"
+			s.Monitors = []Monitor{{Socket: "/run/q,wait=on"}}
 			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3, Opaque: "/o,p"}}}}
 		},
 		want: []string{
@@ -227,6 +230,7 @@ func TestArgsCarriesTheShape(t *testing.T) {
 	sh := s.Shape()
 	for _, c := range []struct{ flag, want string }{
 		{"-machine", sh.Machine},
+		{"-accel", sh.Accel},
 		{"-cpu", sh.CPU},
 		{"-smp", sh.SMP},
 		{"-m", sh.Memory},
@@ -287,6 +291,59 @@ func TestEveryNodeOfAChain(t *testing.T) {
 			}
 			if n != tc.count {
 				t.Errorf("a chain of two images has %d of these nodes, want %d", n, tc.count)
+			}
+		})
+	}
+}
+
+// Where each node of a chain takes its backing from. Each image's backing is the node
+// under it, and the last image's is null, so QEMU follows no name a header holds; a raw
+// image has no backing option at all, and naming one is an error QEMU raises at open.
+func TestAChainsBacking(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		chain []Image
+		// want is each format node's "backing", top first; absent is the key missing.
+		want []any
+	}{
+		{"qcow2 over qcow2", []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}, []any{"blk0-1", nil}},
+		{"qcow2 over raw", []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "raw"}}, []any{"blk0-1", "absent"}},
+		{"raw alone", []Image{{FDSet: 1, Format: "raw"}}, []any{"absent"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec(t)
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}, {ID: 2, FDs: []FD{{Num: 11}}}}
+			s.Disks = []Disk{{Chain: tc.chain}}
+			args, err := s.Args()
+			if err != nil {
+				t.Fatal(err)
+			}
+			backing := map[string]any{}
+			for i, a := range args {
+				if a != "-blockdev" {
+					continue
+				}
+				var node map[string]any
+				if err := json.Unmarshal([]byte(args[i+1]), &node); err != nil {
+					t.Fatalf("a -blockdev that is not JSON: %s", args[i+1])
+				}
+				if node["driver"] == "file" {
+					continue
+				}
+				b, ok := node["backing"]
+				if !ok {
+					b = "absent"
+				}
+				backing[node["node-name"].(string)] = b
+			}
+			for j, want := range tc.want {
+				name := "blk0"
+				if j > 0 {
+					name = fmt.Sprintf("blk0-%d", j)
+				}
+				if got := backing[name]; got != want {
+					t.Errorf("%s has backing %v, want %v", name, got, want)
+				}
 			}
 		})
 	}
@@ -364,7 +421,7 @@ func TestFingerprint(t *testing.T) {
 				s.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:00:00:02", VhostFD: 15}}
 				s.VsockCID = 42
 				s.Serial, s.SerialFDSet = "", 2
-				s.QMPSocket, s.QMPFD = "", 12
+				s.Monitors = []Monitor{{FD: 12}}
 				s.KVMFDSet, s.VsockFD = 3, 14
 			}},
 
@@ -437,6 +494,8 @@ func TestCmdline(t *testing.T) {
 	withInit := DefaultCmdline()
 	withInit.Init = "/sbin/custom-init"
 	withInit.InitArgs = []string{"-vsock-rpc-port=1025"}
+	quoted := withInit
+	quoted.InitArgs = []string{"-name", "two words", ""}
 
 	for _, tc := range []struct {
 		name   string
@@ -463,6 +522,13 @@ func TestCmdline(t *testing.T) {
 		name:   "init and its arguments",
 		c:      withInit,
 		suffix: "init=/sbin/custom-init -- -vsock-rpc-port=1025",
+	}, {
+		// An argument with a space is one argument to init only in quotes, which the
+		// kernel's parser strips; unquoted it is two. And an empty one is otherwise
+		// nothing at all.
+		name:   "init arguments that need quotes",
+		c:      quoted,
+		suffix: `init=/sbin/custom-init -- -name "two words" ""`,
 	}, {
 		// A profiling boot goes silent, not verbose: registering a console replays the
 		// whole ring into it inside an initcall, and the profile then measures itself.
@@ -560,8 +626,33 @@ func TestValidateRefuses(t *testing.T) {
 			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}, {ID: 1, FDs: []FD{{Num: 4}}}}
 		}},
 		{"a descriptor set holding stdin", func(s *Spec) { s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 0}}}} }},
-		{"a monitor given a path and a descriptor", func(s *Spec) { s.QMPSocket, s.QMPFD = "/qmp", 3 }},
-		{"a monitor on stderr", func(s *Spec) { s.QMPFD = 2 }},
+		{"a monitor given a path and a descriptor", func(s *Spec) { s.Monitors = []Monitor{{Socket: "/qmp", FD: 3}} }},
+		{"a monitor given neither", func(s *Spec) { s.Monitors = []Monitor{{Socket: "/qmp"}, {}} }},
+		{"a monitor on stderr", func(s *Spec) { s.Monitors = []Monitor{{FD: 2}} }},
+		// A value from a fixed set is refused, not escaped: an escaped "qcow2,,x" is
+		// still not a format, and an unescaped one is a second option.
+		{"a disk format that is not one", func(s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "qcow2,readonly=off"}} }},
+		{"a chain image format that is not one", func(s *Spec) {
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}}
+			s.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "vmdk"}}}}
+		}},
+		{"a cache mode that is not one", func(s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw", Cache: "none,aio=threads"}} }},
+		{"a cache mode and O_DIRECT over backing", func(s *Spec) {
+			s.Disks = []Disk{{Path: "/a", Format: "qcow2", Cache: "none", DirectOverBacking: true}}
+		}},
+		{"a CPU model with options", func(s *Spec) { s.CPU = "Skylake-Server-v4,enforce=off" }},
+		{"an accelerator this machine does not run under", func(s *Spec) { s.Accel = "xen" }},
+		// The kernel command line: each of these boots a guest that is told something
+		// other than what the caller wrote.
+		{"a root device with a space", func(s *Spec) { s.Cmdline.Root = "/dev/vda quiet" }},
+		{"init arguments with no init", func(s *Spec) { s.Cmdline.InitArgs = []string{"-v"} }},
+		{"an init argument with a quote", func(s *Spec) {
+			s.Cmdline.Init, s.Cmdline.InitArgs = "/sbin/init", []string{`a"b`}
+		}},
+		{"an extra parameter that ends the kernel's part", func(s *Spec) { s.Cmdline.Extra = []string{"quiet -- x"} }},
+		{"a command line the kernel would truncate", func(s *Spec) {
+			s.Cmdline.Extra = []string{strings.Repeat("x", maxCmdline)}
+		}},
 		{"/dev/kvm in a set nobody gave", func(s *Spec) { s.KVMFDSet = 1 }},
 		{"/dev/kvm for an emulator", func(s *Spec) {
 			s.Accel, s.KVMFDSet = "tcg", 1

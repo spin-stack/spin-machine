@@ -72,8 +72,8 @@ func TestAChainOverDescriptorsIsReadWithoutAPathAndSealedUnderAnOverlay(t *testi
 
 	spec := Spec{
 		QEMU: qemu, Kernel: kernel, Firmware: firmware,
-		BootCPUs: 1, Memory: Memory{SizeMB: 512}, Cmdline: DefaultCmdline().String(),
-		QMPFD: 7,
+		BootCPUs: 1, Memory: Memory{SizeMB: 512}, Cmdline: DefaultCmdline(),
+		Monitors: []Monitor{{FD: 7}},
 		FDSets: []FDSet{
 			{ID: 1, FDs: []FD{{Num: 3, Opaque: top}}},
 			{ID: 2, FDs: []FD{{Num: 4, Opaque: base}}},

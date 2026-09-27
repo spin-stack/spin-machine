@@ -28,7 +28,7 @@ default unless it says otherwise; an experiment may depart from a default when i
 and makes its scope and result clear.
 
 1. **A release is one machine.** `machine.Spec.Fingerprint` hashes the QEMU binary, the
-   kernel and the initrd by content, together with the four arguments that decide the
+   kernel and the initrd by content, together with the five arguments that decide the
    machine's shape. Two machines with the same fingerprint may exchange templates; two
    without may not, and a restore across them is undefined rather than an error. A content
    change to any of those three files invalidates every template in existence. That is the

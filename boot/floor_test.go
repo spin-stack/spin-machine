@@ -69,7 +69,7 @@ func TestKernelFloor(t *testing.T) {
 	}
 	// A named CPU model instead of the host's, which the machine already supports for a
 	// different reason: `-cpu host` shows the guest this host's silicon, so a template cannot
-	// move between machines, and Spec.Identity hashes the host CPU only in that case. What it
+	// move between machines, and Spec.Fingerprint hashes the host CPU only in that case. What it
 	// costs at boot was never measured, and QEMU has to enumerate the host's CPUID and build
 	// the guest's from it either way — this says whether the migratable choice is also the
 	// cheaper one.

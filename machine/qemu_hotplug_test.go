@@ -54,8 +54,8 @@ func TestARootPortTakesADeviceWhoseBackendIsAnInheritedDescriptor(t *testing.T) 
 		Firmware:     firmware,
 		BootCPUs:     2,
 		Memory:       Memory{SizeMB: 512},
-		Cmdline:      DefaultCmdline().String(),
-		QMPSocket:    socket,
+		Cmdline:      DefaultCmdline(),
+		Monitors:     []Monitor{{Socket: socket}},
 		HotplugPorts: 1,
 	}
 	args, err := spec.Args()

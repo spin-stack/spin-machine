@@ -12,7 +12,7 @@ The four are one thing, and the reason is not tidiness. A VM restored from a tem
 loads device and CPU state into a machine that has to be the same shape as the one the
 template was frozen from, and nothing checks that at run time. So the machine's identity
 is computed from the things that decide its shape — `machine.Spec.Fingerprint` hashes the
-QEMU binary, the kernel and the initrd *by content*, together with the four arguments that
+QEMU binary, the kernel and the initrd *by content*, together with the five arguments that
 decide what a guest sees. Two machines with the same fingerprint can exchange templates.
 Two with different fingerprints cannot, and a release in which any of the three files moved
 has a different fingerprint by construction.

@@ -47,13 +47,13 @@ import (
 // Each rewrite is reported and printed with -v, so a reader can see exactly how
 // far the claim reaches — and each is here because the alternative is worse:
 //
-//   - accel=kvm -> accel=tcg. The KVM-only binary refuses to start without
-//     /dev/kvm and CI has none, so the TCG build is the only one that can answer
-//     the question at all. Nothing else in the machine string moves;
-//     kernel-irqchip=on, hpet=off, acpi=on, sata=off and smbus=off are accepted
-//     by both, which is itself worth knowing — every case below asks that of
-//     whichever machine string Shape currently produces, so an option added
-//     there is under this check without a case being written for it.
+//   - -accel kvm -> tcg. The KVM-only binary refuses to start without /dev/kvm
+//     and CI has none, so the TCG build is the only one that can answer the
+//     question at all. The machine string does not move; kernel-irqchip=on,
+//     hpet=off, acpi=on, sata=off and smbus=off are accepted by both, which is
+//     itself worth knowing — every case below asks that of whichever machine
+//     string Shape currently produces, so an option added there is under this
+//     check without a case being written for it.
 //
 //   - -cpu host -> max. "host" is a KVM-only value by construction — QEMU says
 //     "CPU model 'host' requires KVM or HVF" and exits — and max is the other
@@ -74,19 +74,20 @@ func tcgOnly(args []string) ([]string, []string, error) {
 	for i := 0; i+1 < len(out); i++ {
 		value := out[i+1]
 		switch out[i] {
-		case "-machine":
-			if strings.Contains(value, "accel=tcg") {
+		case "-accel":
+			switch value {
+			case "tcg":
 				// Already emulated, because the spec asked to be. Nothing to stand
 				// in for, and the check below is satisfied: what it guards against
 				// is running a KVM machine while believing this is emulation.
-				accel = true
-				continue
+			case "kvm":
+				out[i+1] = "tcg"
+				rewrites = append(rewrites, "-accel kvm -> tcg")
+			default:
+				// kvm with a /dev/kvm descriptor, which TCG has no use for and this
+				// check has no descriptor to hand over.
+				return nil, nil, fmt.Errorf("-accel %s cannot be stood in for by the TCG binary", value)
 			}
-			if !strings.Contains(value, "accel=kvm") {
-				continue
-			}
-			out[i+1] = strings.Replace(value, "accel=kvm", "accel=tcg", 1)
-			rewrites = append(rewrites, "-machine accel=kvm -> accel=tcg")
 			accel = true
 		case "-cpu":
 			model, rest, _ := strings.Cut(value, ",")
@@ -113,11 +114,11 @@ func tcgOnly(args []string) ([]string, []string, error) {
 		}
 	}
 
-	// Loudly, rather than by testing a machine nobody runs: if the machine string
-	// stops saying accel=kvm, this check has been quietly answering a different
+	// Loudly, rather than by testing a machine nobody runs: if the command line
+	// stops saying -accel kvm, this check has been quietly answering a different
 	// question.
 	if !accel {
-		return nil, nil, fmt.Errorf("the machine string names neither accel=kvm nor accel=tcg, so this check cannot say which accelerator it just exercised")
+		return nil, nil, fmt.Errorf("the command line names neither -accel kvm nor -accel tcg, so this check cannot say which accelerator it just exercised")
 	}
 	return out, rewrites, nil
 }
@@ -157,7 +158,7 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			Firmware: firmware,
 			BootCPUs: 2,
 			Memory:   Memory{SizeMB: 512},
-			Cmdline:  DefaultCmdline().String(),
+			Cmdline:  DefaultCmdline(),
 		}
 	}
 
@@ -243,7 +244,7 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 		// instructions executed by QEMU itself.
 		//
 		// Worth starting and not only rendering, because the two arguments it
-		// changes are ones QEMU refuses rather than ignores. accel=tcg is absent
+		// changes are ones QEMU refuses rather than ignores. -accel tcg is absent
 		// from the ordinary build — "invalid accelerator tcg" — which is why this
 		// names the TCG one; and "host" is not a model an emulator can present,
 		// so a shape that kept the KVM default would die with "CPU model 'host'
@@ -271,7 +272,7 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 		// only dialled it, and the greeting is written by the chardev.
 		name: "two monitors",
 		spec: func(s Spec) Spec {
-			s.QMPSocket2 = qmpSocket(t)
+			s.Monitors = []Monitor{{Socket: qmpSocket(t)}}
 			return s
 		},
 	}, {
@@ -290,7 +291,7 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			}
 			s.Memory.File, s.Memory.Shared = mem, true
 			s.Disks = []Disk{{Path: rawDisk(t, "a,readonly=off.raw"), Format: "raw", Serial: "a,b"}}
-			s.QMPSocket2 = qmpSocket(t) + ",wait=on"
+			s.Monitors = []Monitor{{Socket: qmpSocket(t) + ",wait=on"}}
 			return s
 		},
 	}, {
@@ -360,10 +361,12 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			}
 
 			s := c.spec(base())
-			s.QMPSocket = qmpSocket(t)
-			sockets := []string{s.QMPSocket}
-			if s.QMPSocket2 != "" {
-				sockets = append(sockets, s.QMPSocket2)
+			// Every machine gets a first monitor, and a case that is about monitors adds
+			// its own after it.
+			s.Monitors = append([]Monitor{{Socket: qmpSocket(t)}}, s.Monitors...)
+			var sockets []string
+			for _, m := range s.Monitors {
+				sockets = append(sockets, m.Socket)
 			}
 
 			args, err := s.Args()

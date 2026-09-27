@@ -59,8 +59,8 @@ func TestAMachineTakesItsDevicesAsDescriptors(t *testing.T) {
 			socket := qmpSocket(t)
 			spec := Spec{
 				QEMU: qemu, Kernel: kernel, Firmware: filepath.Join(out, firmwareDir),
-				BootCPUs: 1, Memory: Memory{SizeMB: 256}, Cmdline: DefaultCmdline().String(),
-				QMPSocket: socket,
+				BootCPUs: 1, Memory: Memory{SizeMB: 256}, Cmdline: DefaultCmdline(),
+				Monitors: []Monitor{{Socket: socket}},
 				// Descriptors 3 and 4, in the order above.
 				FDSets:   []FDSet{{ID: 1, FDs: []FD{{Num: 3, Opaque: tc.kvm}}}},
 				KVMFDSet: 1,
