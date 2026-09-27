@@ -275,6 +275,25 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			return s
 		},
 	}, {
+		// Paths with commas in them, which QEMU splits an option string on. Started
+		// and not only rendered: that a doubled comma reads back as one is QEMU's
+		// parser's contract, so it is QEMU that is asked. Undoubled, the disk's name
+		// is a readonly= QEMU cannot parse and the socket's is a wait= it obeys.
+		name: "commas in paths",
+		spec: func(s Spec) Spec {
+			mem := filepath.Join(t.TempDir(), "memory,share=on")
+			if err := os.WriteFile(mem, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Truncate(mem, 512<<20); err != nil {
+				t.Fatal(err)
+			}
+			s.Memory.File, s.Memory.Shared = mem, true
+			s.Disks = []Disk{{Path: rawDisk(t, "a,readonly=off.raw"), Format: "raw", Serial: "a,b"}}
+			s.QMPSocket2 = qmpSocket(t) + ",wait=on"
+			return s
+		},
+	}, {
 		name: "nic",
 		spec: func(s Spec) Spec {
 			s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:12:34:56"}}
@@ -504,7 +523,7 @@ func answers(t *testing.T, socket string, fail func(string, error), done <-chan 
 // (qemu:verify asserts it) and refuses to start without /dev/kvm, which is a
 // device CI does not have and a check must not require.
 //
-// The two paths out of a release tree, and not machine.Open, because Open asks
+// The two paths out of a release tree, and not machine.OpenRelease, because it asks
 // for a whole machine and this needs half of one: the lane that runs this check
 // on every push has a QEMU and deliberately no kernel and no base image, both of
 // which are tens of minutes to build.

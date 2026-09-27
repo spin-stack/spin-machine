@@ -170,7 +170,7 @@ type machineFlags struct {
 func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.release, "release", "_output", "an unpacked release tree; every path below defaults out of it")
 	fs.StringVar(&o.qemu, "qemu", "", "QEMU binary (default: <release>/bin/qemu-system-x86_64)")
-	fs.StringVar(&o.kernel, "kernel", "", "kernel image (default: <release>/vmlinux)")
+	fs.StringVar(&o.kernel, "kernel", "", "kernel image (default: <release>/kernel/vmlinux)")
 	fs.StringVar(&o.initrd, "initrd", "", "initrd (default: none)")
 	fs.StringVar(&o.firmware, "firmware", "", "firmware directory (default: <release>/qemu)")
 
@@ -216,7 +216,7 @@ func (o *machineFlags) scratch() bool { return o.disk == "" }
 // here, naming the file — and not three seconds later as a QEMU that exits for
 // want of an option ROM.
 func (o *machineFlags) spec() (machine.Spec, error) {
-	rel, err := machine.Open(o.release)
+	rel, err := machine.OpenRelease(o.release)
 	if err != nil {
 		return machine.Spec{}, err
 	}

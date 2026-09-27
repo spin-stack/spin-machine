@@ -25,32 +25,34 @@ func tree(t *testing.T, files ...string) string {
 	return dir
 }
 
-var whole = []string{qemuName, qemuImgName, kernelName, firmwareDir + "/pvh.bin"}
+var whole = []string{qemuName, qemuImgName, kernelName, filepath.Join(firmwareDir, "pvh.bin")}
 
-func TestOpenNamesWhatIsMissing(t *testing.T) {
+func TestOpenReleaseNamesWhatIsMissing(t *testing.T) {
 	// One file at a time, because a release with a hole in it is the failure
 	// this exists to turn into a sentence: the message has to say which file.
 	for _, absent := range whole {
-		var kept []string
-		for _, f := range whole {
-			if f != absent {
-				kept = append(kept, f)
+		t.Run(absent, func(t *testing.T) {
+			var kept []string
+			for _, f := range whole {
+				if f != absent {
+					kept = append(kept, f)
+				}
 			}
-		}
-		if _, err := Open(tree(t, kept...)); err == nil {
-			t.Errorf("Open succeeded on a tree with no %s", absent)
-		} else if !strings.Contains(err.Error(), filepath.Base(absent)) {
-			t.Errorf("missing %s: error does not name it: %v", absent, err)
-		}
+			if _, err := OpenRelease(tree(t, kept...)); err == nil {
+				t.Errorf("OpenRelease succeeded on a tree with no %s", absent)
+			} else if !strings.Contains(err.Error(), filepath.Base(absent)) {
+				t.Errorf("error does not name %s: %v", absent, err)
+			}
+		})
 	}
 }
 
-func TestOpenAcceptsAMachineWithoutTheOptionalParts(t *testing.T) {
+func TestOpenReleaseAcceptsAMachineWithoutTheOptionalParts(t *testing.T) {
 	// The TCG binary and the base image are not required, and asking for one
-	// that is absent must fail where it is asked for rather than at Open.
-	r, err := Open(tree(t, whole...))
+	// that is absent must fail where it is asked for rather than at OpenRelease.
+	r, err := OpenRelease(tree(t, whole...))
 	if err != nil {
-		t.Fatalf("Open on a whole machine: %v", err)
+		t.Fatalf("OpenRelease on a whole machine: %v", err)
 	}
 	if _, err := r.Rootfs(); err == nil {
 		t.Error("Rootfs returned a path for an image that is not there")
@@ -58,27 +60,66 @@ func TestOpenAcceptsAMachineWithoutTheOptionalParts(t *testing.T) {
 	if _, err := r.QEMUTCG(); err == nil {
 		t.Error("QEMUTCG returned a path for a binary that is not there")
 	}
-	if v := r.Version(); v != "" {
-		t.Errorf("Version of a tree with no manifest = %q, want empty", v)
+}
+
+// machine.env, as hack/release writes it and as it can arrive damaged.
+func TestOpenReleaseReadsTheManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// manifest is machine.env's content; nil is a tree with no manifest, which a
+		// developer's build directory is.
+		manifest *string
+		version  string
+		kernel   string
+		// wantErr is a part of the error, which must say where the damage is.
+		wantErr string
+	}{
+		{name: "no manifest"},
+		{name: "comments, blank lines and spaces",
+			manifest: new("# a comment\n\nversion=v20260908.01\nkernel_version = 6.19.2\n"),
+			version:  "v20260908.01", kernel: "6.19.2"},
+		// A truncated or hand-edited manifest is refused rather than read past: the
+		// version it would report is of a file nobody wrote.
+		{name: "a line that is not key=value",
+			manifest: new("version=v20260908.01\nkernel_version\n"),
+			wantErr:  "machine.env:2"},
+		{name: "a value with no key",
+			manifest: new("=v20260908.01\n"),
+			wantErr:  "machine.env:1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tree(t, whole...)
+			if tc.manifest != nil {
+				if err := os.WriteFile(filepath.Join(dir, manifest), []byte(*tc.manifest), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r, err := OpenRelease(dir)
+			switch {
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("OpenRelease accepted a damaged manifest, version %q", r.Version())
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("error does not say where the damage is (%s): %v", tc.wantErr, err)
+			case tc.wantErr != "":
+				return
+			case err != nil:
+				t.Fatal(err)
+			}
+			if got := r.Version(); got != tc.version {
+				t.Errorf("Version = %q, want %q", got, tc.version)
+			}
+			if got := r.env["kernel_version"]; got != tc.kernel {
+				t.Errorf("kernel_version = %q, want %q", got, tc.kernel)
+			}
+		})
 	}
 }
 
 func TestSpecTakesItsPathsFromTheRelease(t *testing.T) {
-	dir := tree(t, append(whole, rootfsName, "machine.env")...)
-	if err := os.WriteFile(filepath.Join(dir, "machine.env"),
-		[]byte("# a comment\nversion=v20260908.01\nkernel_version = 6.19.2\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	r, err := Open(dir)
+	dir := tree(t, append(whole, rootfsName)...)
+	r, err := OpenRelease(dir)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if got := r.Version(); got != "v20260908.01" {
-		t.Errorf("Version = %q", got)
-	}
-	if got := r.env["kernel_version"]; got != "6.19.2" {
-		t.Errorf("kernel_version = %q, want the value with its spaces trimmed", got)
 	}
 
 	s := r.Spec()

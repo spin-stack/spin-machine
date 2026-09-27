@@ -39,203 +39,163 @@ func argValue(args []string, flag string) string {
 	return ""
 }
 
-// Every node of a disk handed over as a chain passes the guest's discard on: the format node is
-// where it arrives, and one opened without unmap drops it and answers the guest that it worked.
-func TestAChainPassesTheGuestsDiscardOn(t *testing.T) {
-	s := spec(t)
-	s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}, {ID: 2, FDs: []FD{{Num: 11}}}}
-	s.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}, Serial: "root"}}
-	args, err := s.Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	nodes := 0
-	for i, a := range args {
-		if a != "-blockdev" || i+1 == len(args) {
-			continue
-		}
-		nodes++
-		if !strings.Contains(args[i+1], `"discard":"unmap"`) {
-			t.Errorf("a node of the chain drops the guest's discard: %s", args[i+1])
-		}
-	}
-	if nodes != 4 {
-		t.Fatalf("the chain of two images is %d nodes, want a format and a file node each", nodes)
-	}
-}
+// nic is a NIC Validate accepts, for a test about something else.
+func nic() NIC { return NIC{TapFD: 3, MAC: "52:54:00:00:00:01"} }
 
-func TestArgsCarriesTheShape(t *testing.T) {
-	s := spec(t)
-	args, err := s.Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sh := s.Shape()
-	for flag, want := range map[string]string{
-		"-machine": sh.Machine,
-		"-cpu":     sh.CPU,
-		"-smp":     sh.SMP,
-		"-m":       sh.Memory,
-	} {
-		if got := argValue(args, flag); got != want {
-			t.Errorf("%s = %q, want %q", flag, got, want)
-		}
-	}
-}
-
-// A machine given no display, no default devices and no way to spawn a helper is
-// most of what makes this machine what it is, and none of it is visible in a
-// guest until something is wrong.
-func TestArgsHasTheMachineWideFlags(t *testing.T) {
-	args, err := spec(t).Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(args, " ")
-	for _, want := range []string{"-nodefaults", "-sandbox on,obsolete=deny", "vmgenid,guid=auto"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("missing %q in %s", want, joined)
-		}
-	}
-}
-
-// Every image a disk is made of is opened with drop-cache off, and the layers below the top
-// are the ones that matter.
+// What Args puts on the command line, one machine per row. Each row is the whole
+// line joined with spaces and a trailing one, so a want ending in a space pins the
+// end of an argument.
 //
-// QEMU's default drops the host's page cache for a node when the machine is activated after
-// an incoming migration — see the note in chainArgs. A sealed read-only layer cannot have a
-// stale cache, and it is one file that every VM on the host reads through, so dropping it is
-// paid by all of them. The default is on, so this is the kind of thing that comes back when
-// a drive string is rewritten and shows up as a slow restore on a busy host rather than as
-// an error anywhere.
-func TestEveryImageIsOpenedWithoutDroppingTheHostCache(t *testing.T) {
-	s := spec(t)
-	s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 5}}}, {ID: 2, FDs: []FD{{Num: 6}}}}
-	s.Disks = []Disk{
-		{Path: "/images/one.qcow2", Format: "qcow2"},
-		{Chain: []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}},
-	}
-	args, err := s.Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var drive string
-	var fileNodes int
-	for i, a := range args {
-		switch {
-		case a == "-drive":
-			drive = args[i+1]
-		case a == "-blockdev" && strings.Contains(args[i+1], `"driver":"file"`):
-			fileNodes++
-			if !strings.Contains(args[i+1], `"drop-cache":false`) {
-				t.Errorf("file node without drop-cache off: %s", args[i+1])
-			}
-		}
-	}
-	if !strings.Contains(drive, "file.drop-cache=off") {
-		t.Errorf("the drive does not turn drop-cache off on its own node: %s", drive)
-	}
-	// Both layers of the chain, not just the one the guest writes to.
-	if fileNodes != 2 {
-		t.Errorf("expected a file node per image of the chain, got %d", fileNodes)
-	}
-	// And not on a child the image may not have: naming backing.file here makes QEMU open a
-	// backing file whether the header has one or not, and it refuses when it does not.
-	if strings.Contains(drive, "backing.file.drop-cache") {
-		t.Errorf("the drive names a backing child it cannot know exists: %s", drive)
-	}
-}
-
-// The slot map is the reason the kernel can be told pci=lastbus=0. A device that
-// moved off its slot is a device the guest may not find, with no error.
-func TestDevicesSitOnTheirFixedSlots(t *testing.T) {
-	s := spec(t)
-	s.VsockCID = 7
-	s.Disks = []Disk{{Path: "/a.qcow2", Format: "qcow2"}, {Path: "/b.raw", Format: "raw"}}
-	s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
-
-	args, err := s.Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(args, " ")
-	for _, want := range []string{
-		"vhost-vsock-pci,guest-cid=7,disable-legacy=on,addr=0x2",
-		"virtio-rng-pci,disable-legacy=on,addr=0x3",
-		// The only way a running VM gives memory back. Without it the answer to
-		// "how is memory reclaimed?" is "the VM exits".
-		"virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on,disable-legacy=on,addr=0x4",
-		"virtio-blk-pci,drive=blk0,disable-legacy=on,addr=0x5",
-		"virtio-blk-pci,drive=blk1,disable-legacy=on,addr=0x6",
-		"virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01,romfile=,disable-legacy=on,addr=0x10",
-		// The two that are invisible in a guest until something is slow: without
-		// them QEMU hands every block request to a worker pool and copies every
-		// packet through userspace, and nothing reports either.
-		"aio=io_uring",
-		"tap,id=net0,fd=3,vhost=on",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("missing %q in %s", want, joined)
-		}
-	}
-}
-
-// host_mtu is how the guest is told what it may send, and the only way of telling
-// it that it cannot then ignore: virtnet_probe assigns the announced value to both
-// dev->mtu and dev->max_mtu, so the guest boots with it and the kernel refuses to
-// raise it. Root inside the machine can discard a DHCP option or a kernel
-// parameter; this it cannot.
-func TestTheGuestIsToldItsMTUOnTheDevice(t *testing.T) {
-	s := spec(t)
-	s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01", MTU: 1400}}
-
-	args, err := s.Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01,romfile=,disable-legacy=on,addr=0x10,host_mtu=1400") {
-		t.Errorf("the NIC does not announce its MTU: %s", joined)
-	}
-
-	// And a machine with nothing to announce says nothing, rather than announcing
-	// zero — which QEMU takes as "no MTU" but only after the guest has read a
-	// config field the feature bit says is valid.
-	s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
-	args, err = s.Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if joined := strings.Join(args, " "); strings.Contains(joined, "host_mtu") {
-		t.Errorf("a NIC with no MTU still names one: %s", joined)
-	}
-}
-
-// A device handed over as a descriptor is named by it on the command line, and one that
-// is not is left for QEMU to open: a node that exists only where it runs.
-func TestADeviceHandedOverIsNamedByItsDescriptor(t *testing.T) {
+// Every string here is something whose absence is invisible in a guest until it is
+// slow or wrong — none of them fails loudly when it goes.
+func TestArgs(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		given  bool
+		set    func(*Spec)
 		want   []string
 		absent []string
-	}{
-		{"opened by QEMU", false,
-			[]string{"q35,accel=kvm,", "vhost-vsock-pci,guest-cid=7,disable-legacy=on,addr=0x2 ", "tap,id=net0,fd=3,vhost=on "},
-			[]string{"-accel", "vhostfd"}},
+	}{{
+		// A machine given no display, no default devices and no way to spawn a helper
+		// is most of what makes this machine what it is.
+		name: "machine-wide flags",
+		want: []string{"-nodefaults", "-sandbox on,obsolete=deny", "vmgenid,guid=auto"},
+		// Anonymous RAM names no backend; the virtio-mem device is only for a ceiling.
+		absent: []string{"memory-backend", "virtio-mem", "-incoming"},
+	}, {
+		// The slot map is the reason the kernel can be told pci=lastbus=0. A device
+		// that moved off its slot is a device the guest may not find, with no error.
+		name: "fixed slots",
+		set: func(s *Spec) {
+			s.VsockCID = 7
+			s.Disks = []Disk{{Path: "/a.qcow2", Format: "qcow2"}, {Path: "/b.raw", Format: "raw"}}
+			s.NICs = []NIC{nic()}
+		},
+		want: []string{
+			"vhost-vsock-pci,guest-cid=7,disable-legacy=on,addr=0x2 ",
+			"virtio-rng-pci,disable-legacy=on,addr=0x3 ",
+			// The only way a running VM gives memory back. Without it the answer to
+			// "how is memory reclaimed?" is "the VM exits".
+			"virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on,disable-legacy=on,addr=0x4 ",
+			"virtio-blk-pci,drive=blk0,disable-legacy=on,addr=0x5 ",
+			"virtio-blk-pci,drive=blk1,disable-legacy=on,addr=0x6 ",
+			"virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01,romfile=,disable-legacy=on,addr=0x10 ",
+			// Without these QEMU hands every block request to a worker pool and copies
+			// every packet through userspace, and nothing reports either.
+			"aio=io_uring",
+			"tap,id=net0,fd=3,vhost=on ",
+		},
+	}, {
+		// host_mtu is how the guest is told what it may send, and the only way of
+		// telling it that it cannot then ignore: virtnet_probe assigns the announced
+		// value to both dev->mtu and dev->max_mtu. Root inside the machine can discard
+		// a DHCP option or a kernel parameter; this it cannot.
+		name: "an announced MTU",
+		set: func(s *Spec) {
+			n := nic()
+			n.MTU = 1400
+			s.NICs = []NIC{n}
+		},
+		want: []string{"virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01,romfile=,disable-legacy=on,addr=0x10,host_mtu=1400 "},
+	}, {
+		// And nothing to announce says nothing, rather than announcing zero — which
+		// QEMU takes as "no MTU" but only after the guest has read a config field the
+		// feature bit says is valid.
+		name:   "no MTU",
+		set:    func(s *Spec) { s.NICs = []NIC{nic()} },
+		absent: []string{"host_mtu"},
+	}, {
+		// Growing a VM is virtio-mem, not ACPI DIMM slots: -m carries the ceiling and
+		// no slots=, and the device holds the region between boot memory and ceiling
+		// with nothing plugged until somebody asks.
+		name: "a memory ceiling",
+		set:  func(s *Spec) { s.Memory.SizeMB, s.Memory.MaxMB = 2048, 8192 },
+		want: []string{
+			"-m 2048,maxmem=8192M ",
+			"memory-backend-ram,id=mem.growth,size=6144M ",
+			"virtio-mem-pci,id=vmem0,memdev=mem.growth,requested-size=0,disable-legacy=on,addr=0x1e ",
+		},
+		absent: []string{"slots="},
+	}, {
+		name:   "fixed memory",
+		set:    func(s *Spec) { s.Memory.SizeMB = 2048 },
+		want:   []string{"-m 2048 "},
+		absent: []string{"maxmem", "virtio-mem"},
+	}, {
+		// A template's source maps its file shared and writes it. File-backed RAM is
+		// in the machine string too, which is why it is in the shape and not only in
+		// an -object.
+		name: "the template's source",
+		set:  func(s *Spec) { s.Memory.File, s.Memory.Shared = "/tmp/pc.ram", true },
+		want: []string{
+			"memory-backend=" + MemoryBackendID,
+			"memory-backend-file,id=" + MemoryBackendID + ",size=512M,mem-path=/tmp/pc.ram,share=on ",
+		},
+		absent: []string{"readonly=on"},
+	}, {
+		// A restore maps the same file private and opens it read-only, so no VM
+		// restored from a template can change it for the next, and a QEMU that does
+		// not own the file can still restore from it.
+		name:   "a restore",
+		set:    func(s *Spec) { s.Memory.File = "/tmp/pc.ram" },
+		want:   []string{"mem-path=/tmp/pc.ram,share=off,readonly=on,rom=off "},
+		absent: []string{"rom=on"},
+	}, {
+		// A device handed over as a descriptor is named by it on the command line, and
+		// one that is not is left for QEMU to open.
+		name: "devices QEMU opens",
+		set: func(s *Spec) {
+			s.VsockCID = 7
+			s.NICs = []NIC{nic()}
+		},
+		want:   []string{"q35,accel=kvm,", "vhost-vsock-pci,guest-cid=7,disable-legacy=on,addr=0x2 ", "tap,id=net0,fd=3,vhost=on "},
+		absent: []string{"-accel", "vhostfd"},
+	}, {
 		// -machine loses accel=: QEMU refuses it beside -accel.
-		{"handed over", true,
-			[]string{"-machine q35,kernel-irqchip=on,", "-accel kvm,device=/dev/fdset/1 ", "addr=0x2,vhostfd=5 ", "tap,id=net0,fd=3,vhost=on,vhostfd=6 "},
-			[]string{"accel=kvm"}},
-	} {
+		name: "devices handed over",
+		set: func(s *Spec) {
+			s.VsockCID = 7
+			s.NICs = []NIC{nic()}
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 4}}}}
+			s.KVMFDSet, s.VsockFD, s.NICs[0].VhostFD = 1, 5, 6
+		},
+		want: []string{
+			"-machine q35,kernel-irqchip=on,", "-accel kvm,device=/dev/fdset/1 ",
+			"addr=0x2,vhostfd=5 ", "tap,id=net0,fd=3,vhost=on,vhostfd=6 ",
+		},
+		absent: []string{"accel=kvm"},
+	}, {
+		// A disk given by path turns drop-cache off on its own node and not on a child
+		// the image may not have: naming backing.file makes QEMU open a backing file
+		// whether the header has one or not, and it refuses when it does not. The
+		// chain form is in TestEveryNodeOfAChain.
+		name:   "a disk by path",
+		set:    func(s *Spec) { s.Disks = []Disk{{Path: "/images/one.qcow2", Format: "qcow2"}} },
+		want:   []string{"file.drop-cache=off"},
+		absent: []string{"backing.file.drop-cache"},
+	}, {
+		// A value a caller supplies is a value, not more options. QEMU splits an option
+		// string on a single comma, so "a,readonly=off" as a path was a path "a" and a
+		// second option. Doubled, it is one value; TestQEMUAcceptsEveryArgument asks
+		// QEMU to open such paths.
+		name: "commas in values",
+		set: func(s *Spec) {
+			s.Disks = []Disk{{Path: "/img/a,readonly=off", Format: "raw", Serial: "x,addr=0x2"}}
+			s.Memory.File = "/mem/a,share=on"
+			s.QMPSocket = "/run/q,wait=on"
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3, Opaque: "/o,p"}}}}
+		},
+		want: []string{
+			"file=/img/a,,readonly=off,if=none,",
+			",serial=x,,addr=0x2 ",
+			"mem-path=/mem/a,,share=on,share=off,",
+			"unix:/run/q,,wait=on,server=on,wait=off ",
+			"opaque=/o,,p ",
+		},
+	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := spec(t)
-			s.VsockCID = 7
-			s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
-			if tc.given {
-				s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 4}}}}
-				s.KVMFDSet, s.VsockFD, s.NICs[0].VhostFD = 1, 5, 6
+			if tc.set != nil {
+				tc.set(&s)
 			}
 			args, err := s.Args()
 			if err != nil {
@@ -256,465 +216,292 @@ func TestADeviceHandedOverIsNamedByItsDescriptor(t *testing.T) {
 	}
 }
 
-// A disk's format is stated, never guessed: a wrong guess is a guest that boots
-// and finds a disk full of nothing.
-func TestDiskFormatIsRequired(t *testing.T) {
+// The command line and the fingerprint read one Shape. If they read two, a VM could
+// restore from a template of a machine it is not.
+func TestArgsCarriesTheShape(t *testing.T) {
 	s := spec(t)
-	s.Disks = []Disk{{Path: "/a.qcow2"}}
-	if _, err := s.Args(); err == nil {
-		t.Fatal("a disk with no format was accepted")
-	}
-}
-
-// Growing a VM is virtio-mem now, not ACPI DIMM slots. -m carries the ceiling and
-// no slots=, the device appears, and nothing is plugged until somebody asks.
-func TestMemoryCeilingGivesAVirtioMemDeviceAndNoSlots(t *testing.T) {
-	s := spec(t)
-	s.Memory.SizeMB = 2048
-	s.Memory.MaxMB = 8192
-
-	if got := s.Shape().Memory; got != "2048,maxmem=8192M" {
-		t.Errorf("-m is %q; slots are ACPI DIMM sockets and this machine plugs none", got)
-	}
-
 	args, err := s.Args()
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(args, " ")
-	for _, want := range []string{
-		// The region between the boot memory and the ceiling, and nothing else.
-		"memory-backend-ram,id=mem.growth,size=6144M",
-		"virtio-mem-pci,id=vmem0,memdev=mem.growth,requested-size=0,disable-legacy=on,addr=0x1e",
+	sh := s.Shape()
+	for _, c := range []struct{ flag, want string }{
+		{"-machine", sh.Machine},
+		{"-cpu", sh.CPU},
+		{"-smp", sh.SMP},
+		{"-m", sh.Memory},
 	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("missing %q in %s", want, joined)
+		if got := argValue(args, c.flag); got != c.want {
+			t.Errorf("%s = %q, want %q", c.flag, got, c.want)
+		}
+	}
+}
+
+// Every node of a disk handed over as a chain, and the layers below the top are the
+// ones that matter.
+//
+// discard=unmap on every node: the format node is where a guest's discard arrives,
+// and one opened without unmap drops it and answers the guest that it worked.
+//
+// drop-cache off on every file node: QEMU's default drops the host's page cache for a
+// node when the machine is activated after an incoming migration — see the note in
+// chainArgs. A sealed read-only layer cannot have a stale cache, and it is one file
+// that every VM on the host reads through, so dropping it is paid by all of them. It
+// comes back when a node is rewritten and shows up as a slow restore on a busy host
+// rather than as an error anywhere.
+func TestEveryNodeOfAChain(t *testing.T) {
+	s := spec(t)
+	s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}, {ID: 2, FDs: []FD{{Num: 11}}}}
+	s.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}, Serial: "root"}}
+	args, err := s.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nodes []string
+	for i, a := range args {
+		if a == "-blockdev" && i+1 < len(args) {
+			nodes = append(nodes, args[i+1])
 		}
 	}
 
-	// A VM that cannot grow gets neither, and its -m says so.
-	fixed := spec(t)
-	fixed.Memory.SizeMB = 2048
-	if got := fixed.Shape().Memory; got != "2048" {
-		t.Errorf("-m is %q for a machine with no ceiling", got)
-	}
-	args, err = fixed.Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(strings.Join(args, " "), "virtio-mem") {
-		t.Error("a machine with no memory ceiling was given a virtio-mem device")
-	}
-}
-
-// File-backed RAM changes the machine string, which is why it is in the shape
-// and not only in an -object.
-func TestMemoryFileChangesTheShape(t *testing.T) {
-	s := spec(t)
-	if strings.Contains(s.Shape().Machine, MemoryBackendID) {
-		t.Fatal("anonymous RAM should not name a memory backend")
-	}
-	s.Memory.File = "/tmp/pc.ram"
-	if !strings.Contains(s.Shape().Machine, "memory-backend="+MemoryBackendID) {
-		t.Fatalf("file-backed RAM is not in the machine string: %s", s.Shape().Machine)
-	}
-	args, err := s.Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(strings.Join(args, " "), "memory-backend-file,id="+MemoryBackendID) {
-		t.Error("no memory-backend-file object")
-	}
-}
-
-// A template's source maps its file shared and writes it; a restore maps the same file
-// private and opens it read-only, so no VM restored from a template can change it for the
-// next, and a QEMU that does not own the file can still restore from it.
-func TestARestoreOpensItsTemplateReadOnly(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		shared  bool
-		want    string
-		refuses string
+		which string
+		// of picks the nodes the row is about; count is how many a chain of two has.
+		of    func(node string) bool
+		count int
+		want  string
 	}{
-		{"the template's source", true, "mem-path=/tmp/pc.ram,share=on", "readonly=on"},
-		{"a restore", false, "mem-path=/tmp/pc.ram,share=off,readonly=on,rom=off", "rom=on"},
+		{"every node", func(string) bool { return true }, 4, `"discard":"unmap"`},
+		{"every file node", func(n string) bool { return strings.Contains(n, `"driver":"file"`) }, 2, `"drop-cache":false`},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := spec(t)
-			s.Memory.File, s.Memory.Shared = "/tmp/pc.ram", tc.shared
-			args, err := s.Args()
-			if err != nil {
-				t.Fatal(err)
+		t.Run(tc.which, func(t *testing.T) {
+			n := 0
+			for _, node := range nodes {
+				if !tc.of(node) {
+					continue
+				}
+				n++
+				if !strings.Contains(node, tc.want) {
+					t.Errorf("missing %s: %s", tc.want, node)
+				}
 			}
-			line := strings.Join(args, " ")
-			if !strings.Contains(line, tc.want) {
-				t.Errorf("the memory backend is not %q: %s", tc.want, line)
-			}
-			if strings.Contains(line, tc.refuses) {
-				t.Errorf("the memory backend says %q: %s", tc.refuses, line)
+			if n != tc.count {
+				t.Errorf("a chain of two images has %d of these nodes, want %d", n, tc.count)
 			}
 		})
 	}
 }
 
-// The whole point of the fingerprint: two machines may exchange templates only
-// if the binary, the kernel, the initrd and the shape all agree. Each of these
-// changes is one a caller could make without noticing.
-func TestFingerprintChangesWithTheMachine(t *testing.T) {
-	base := spec(t)
-	want, err := base.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
+// The fingerprint, one pair of machines per row: a is spec() changed by a, b is a
+// changed by b, and the row says whether the two may exchange templates.
+//
+// Two machines may exchange templates only if the binary, the kernel, the initrd,
+// the shape and the devices present when state is loaded all agree — and must be
+// able to when all that differs is what is behind the devices, or a host keeps one
+// template per VM.
+func TestFingerprint(t *testing.T) {
+	const intel, amd = "13th Gen Intel(R) Core(TM) i9-13900HK", "AMD EPYC 9634 84-Core Processor"
+	rewrite := func(t *testing.T, path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withMTU := func(mtu int) func(*testing.T, *Spec) {
+		return func(_ *testing.T, s *Spec) {
+			n := nic()
+			n.MTU = mtu
+			s.NICs = []NIC{n}
+		}
 	}
 
-	same, err := base.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if same != want {
-		t.Fatal("the same machine fingerprinted differently twice")
-	}
+	for _, tc := range []struct {
+		name string
+		a, b func(*testing.T, *Spec)
+		// hostB is the host CPU b is fingerprinted on; a is always on intel.
+		hostB string
+		same  bool
+	}{
+		{name: "the same machine twice", same: true},
 
-	// Whether RAM is file-backed must NOT change it: a template is always taken
-	// from a machine with a memory file, so the lookup that decides whether a VM
-	// may restore has to give the same answer for a VM that has not been given
-	// one yet.
-	withFile := base
-	withFile.Memory.File = "/tmp/pc.ram"
-	got, err := withFile.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Error("a memory file changed the fingerprint; a VM could never find its own template")
-	}
+		// A path is not the machine: the same contents under another name is one.
+		{name: "the same files at other paths", same: true, b: func(t *testing.T, s *Spec) {
+			other := spec(t)
+			s.QEMU, s.Kernel = other.QEMU, other.Kernel
+		}},
 
-	for name, mutate := range map[string]func(*Spec){
-		"more memory":  func(s *Spec) { s.Memory.SizeMB = 1024 },
-		"more vCPUs":   func(s *Spec) { s.BootCPUs = 4 },
-		"a max memory": func(s *Spec) { s.Memory.MaxMB = 4096 },
-		"a new kernel": func(s *Spec) {
-			if err := os.WriteFile(s.Kernel, []byte("a different kernel"), 0o600); err != nil {
+		// Whether RAM is file-backed must not change it: a template is always taken
+		// from a machine with a memory file, so the lookup that decides whether a VM
+		// may restore has to give the same answer for a VM that has not been given
+		// one yet.
+		{name: "a memory file", same: true, b: func(_ *testing.T, s *Spec) { s.Memory.File = "/tmp/pc.ram" }},
+
+		// A disk is added after the restore, so a machine that will be given one
+		// looks exactly like the template it came from.
+		{name: "a disk", same: true, b: func(_ *testing.T, s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw"}} }},
+
+		// A descriptor number is which file the backend reads, the way a disk's path
+		// is, and a MAC is a property of the device and not of the bus. A caller that
+		// wants distinct MACs should give each machine a segment of its own, not pay
+		// for it in templates.
+		{name: "another TAP and MAC", same: true,
+			a: func(_ *testing.T, s *Spec) { s.NICs = []NIC{nic()} },
+			b: func(_ *testing.T, s *Spec) { s.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:ff:ff:ff"}} }},
+
+		// What is behind a device is not the machine: two VMs with one disk each are
+		// the same machine whether that disk holds a database or a scratch overlay,
+		// and whether it arrives by path or as a descriptor.
+		{name: "everything handed over as descriptors", same: true,
+			a: func(_ *testing.T, s *Spec) {
+				s.Disks = []Disk{{Path: "/one.qcow2", Format: "qcow2", Serial: "aaa"}}
+				s.NICs = []NIC{nic()}
+				s.VsockCID = 7
+				s.Serial = "file:/var/log/console"
+			},
+			b: func(_ *testing.T, s *Spec) {
+				s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}, {ID: 2, FDs: []FD{{Num: 11}}}, {ID: 3, FDs: []FD{{Num: 13}}}}
+				s.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "qcow2"}}, Serial: "bbb"}}
+				s.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:00:00:02", VhostFD: 15}}
+				s.VsockCID = 42
+				s.Serial, s.SerialFDSet = "", 2
+				s.QMPSocket, s.QMPFD = "", 12
+				s.KVMFDSet, s.VsockFD = 3, 14
+			}},
+
+		// Naming a model is how a fleet gets VMs that move: every host shows the guest
+		// the same CPU, so the host's own silicon drops out.
+		{name: "a named CPU on another host", same: true, hostB: amd,
+			a: func(_ *testing.T, s *Spec) { s.CPU = "Skylake-Server-v4" }},
+
+		{name: "more memory", b: func(_ *testing.T, s *Spec) { s.Memory.SizeMB = 1024 }},
+		{name: "more vCPUs", b: func(_ *testing.T, s *Spec) { s.BootCPUs = 4 }},
+		{name: "a new kernel", b: func(t *testing.T, s *Spec) { rewrite(t, s.Kernel, "a different kernel") }},
+		{name: "a new QEMU", b: func(t *testing.T, s *Spec) { rewrite(t, s.QEMU, "a different qemu") }},
+		// A guest's state under TCG is not a guest's state under KVM. The binary's
+		// own hash separates them in practice; this holds the shape to it as well, so
+		// the separation does not rest on a caller changing two things at once.
+		{name: "emulation", b: func(_ *testing.T, s *Spec) { s.Accel = "tcg" }},
+		// A vsock and a memory ceiling are there on both sides of a restore.
+		{name: "a vsock", b: func(_ *testing.T, s *Spec) { s.VsockCID = 7 }},
+		{name: "a memory ceiling", b: func(_ *testing.T, s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB * 2 }},
+		// A NIC is on the command line, so it is present when state is loaded. "It is
+		// cold-plugged after a restore" is true of disks and does not carry across.
+		{name: "a NIC", b: func(_ *testing.T, s *Spec) { s.NICs = []NIC{nic()} }},
+		// The MTU is VIRTIO_NET_F_MTU, negotiated at probe and written into the
+		// migration stream: an operator changing it must cost a template build, not
+		// every workspace on the node. Announcing nothing is a third machine.
+		{name: "an MTU announced", a: withMTU(0), b: withMTU(1500)},
+		{name: "another MTU", a: withMTU(1500), b: withMTU(1400)},
+		// Under model host the guest is told through CPUID exactly which instructions
+		// this silicon has, and a template taken here describes a CPU the next host
+		// may not have.
+		{name: "another host under CPU host", hostB: amd},
+		{name: "a named CPU instead of host", b: func(_ *testing.T, s *Spec) { s.CPU = "Skylake-Server-v4" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host := func(model string) func() (string, error) {
+				return func() (string, error) { return model, nil }
+			}
+			a := spec(t)
+			if tc.a != nil {
+				tc.a(t, &a)
+			}
+			fa, err := a.fingerprint(fileSum, host(intel))
+			if err != nil {
 				t.Fatal(err)
 			}
-		},
-		"a new QEMU": func(s *Spec) {
-			if err := os.WriteFile(s.QEMU, []byte("a different qemu"), 0o600); err != nil {
+			b := a
+			if tc.b != nil {
+				tc.b(t, &b)
+			}
+			hostB := intel
+			if tc.hostB != "" {
+				hostB = tc.hostB
+			}
+			fb, err := b.fingerprint(fileSum, host(hostB))
+			if err != nil {
 				t.Fatal(err)
 			}
+			switch {
+			case tc.same && fa != fb:
+				t.Error("two machines that may exchange templates have different fingerprints")
+			case !tc.same && fa == fb:
+				t.Error("two machines that may not exchange templates share a fingerprint")
+			}
+		})
+	}
+}
+
+// The kernel command line, one Cmdline per row.
+func TestCmdline(t *testing.T) {
+	withInit := DefaultCmdline()
+	withInit.Init = "/sbin/custom-init"
+	withInit.InitArgs = []string{"-vsock-rpc-port=1025"}
+
+	for _, tc := range []struct {
+		name   string
+		c      Cmdline
+		want   []string
+		absent []string
+		suffix string
+	}{{
+		name: "default",
+		c:    DefaultCmdline(),
+		want: []string{
+			// Without it every boot pays 8192 config reads looking for peer host bridges.
+			"pci=lastbus=0",
+			// Memory that arrives at runtime is no use to a guest that does not online
+			// it, and the failure is silent: growth stops at the boot size.
+			"memhp_default_state=online",
+			// Two thirds of this machine's boot was systemd asking a serial port nobody
+			// listens to two questions and waiting 334 ms for each answer. It looks like
+			// a terminal preference, so it is what gets dropped while tidying; nothing
+			// fails if it goes, the machine just takes five times as long.
+			"TERM=dumb",
 		},
-		// Emulation is a different machine, and this is the assertion that keeps the two
-		// apart. A guest's state under TCG is not a guest's state under KVM, so a restore
-		// across them is undefined — and a shared fingerprint is exactly how one would
-		// happen, silently, on a host that has both binaries.
-		//
-		// The binary's own hash would separate them in practice, since TCG needs the build
-		// that has it compiled in. This holds the shape to it as well, so the separation
-		// does not rest on a caller remembering to change two things at once.
-		"emulation": func(s *Spec) { s.Accel = "tcg" },
-	} {
-		changed := base
-		mutate(&changed)
-		got, err := changed.Fingerprint()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got == want {
-			t.Errorf("%s did not change the fingerprint", name)
-		}
-		// Put the files back for the next case.
-		base = spec(t)
-		if want, err = base.Fingerprint(); err != nil {
-			t.Fatal(err)
-		}
+	}, {
+		name:   "init and its arguments",
+		c:      withInit,
+		suffix: "init=/sbin/custom-init -- -vsock-rpc-port=1025",
+	}, {
+		// A profiling boot goes silent, not verbose: registering a console replays the
+		// whole ring into it inside an initcall, and the profile then measures itself.
+		name:   "profiling",
+		c:      DefaultCmdline().Profiling(),
+		want:   []string{"loglevel=0", "initcall_debug", "log_buf_len=4M"},
+		absent: []string{"quiet"},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.c.String()
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %q: %s", want, got)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(got, absent) {
+					t.Errorf("%q in %s", absent, got)
+				}
+			}
+			if !strings.HasSuffix(got, tc.suffix) {
+				t.Errorf("init must come last, with its args after --: %s", got)
+			}
+		})
 	}
 }
 
-// The device list is part of the machine, because a restore loads device state
-// into one — but only the part of it that exists when the state is loaded.
-//
-// A vsock, a memory ceiling and a serial port are there on both sides of a
-// restore. Disks and NICs are not: a template is built from an empty VM and each
-// restored VM is given its own afterwards, so counting them here would mean a VM
-// never finding the template it should restore from.
-func TestFingerprintCoversTheDevicesPresentAtRestore(t *testing.T) {
-	base := spec(t)
-	want, err := base.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
+// Profiling returns a new Cmdline, and the one it was made from stays the caller's.
+// Extra is a slice: appending the profiling flags into spare capacity the caller's
+// Extra had wrote them into the caller's array, so the caller's next append
+// overwrote the profile's first flag.
+func TestProfilingLeavesTheCallersCmdlineAlone(t *testing.T) {
+	base := DefaultCmdline()
+	base.Extra = make([]string, 0, 8)
+	prof := base.Profiling()
+	base.Extra = append(base.Extra, "caller's own")
 
-	for name, mutate := range map[string]func(*Spec){
-		"a vsock":          func(s *Spec) { s.VsockCID = 7 },
-		"a memory ceiling": func(s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB * 2 },
-	} {
-		changed := base
-		mutate(&changed)
-		got, err := changed.Fingerprint()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got == want {
-			t.Errorf("%s did not change the fingerprint", name)
-		}
-	}
-
-	// A NIC is on the command line, so it is present when state is loaded and a machine
-	// with one cannot restore from a template frozen without one.
-	//
-	// The opposite is the tempting assertion — that a NIC must not change the
-	// fingerprint, because "it is cold-plugged after a restore, so a VM would never find
-	// its template". That is true of disks, and does not carry across to NICs.
-	withNIC := base
-	withNIC.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
-	got, err := withNIC.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == want {
-		t.Error("a NIC did not change the fingerprint; a machine with one would restore from a template without one, into a device whose state is not in the stream")
-	}
-
-	// A disk does not, and that is the difference: it is added after the restore, so a
-	// machine that will be given one looks exactly like the template it came from.
-	withDisk := base
-	withDisk.Disks = []Disk{{Path: "/a", Format: "raw"}}
-	got, err = withDisk.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Error("a disk changed the fingerprint; it is attached after a restore, so a VM would never find its template")
-	}
-}
-
-// Two machines whose NICs differ only in the descriptor they read and the address they
-// answer to are one machine, and share a template.
-//
-// It is what makes a network possible at all under one template per host: a descriptor
-// number is which file the backend reads, the way a disk's path is, and a MAC is a property
-// of the device and not of the bus. A caller that wants distinct MACs pays for it in
-// templates; the answer is to give each machine a segment of its own instead, which is what
-// a namespace per machine is.
-func TestFingerprintIgnoresWhichTAPANICReads(t *testing.T) {
-	a := spec(t)
-	a.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
-
-	b := a
-	b.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:ff:ff:ff"}}
-
-	fa, err := a.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fb, err := b.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fa != fb {
-		t.Errorf("two machines differing only in a descriptor and a MAC have different fingerprints (%s, %s); a host would keep one template per VM", fa, fb)
-	}
-}
-
-// The MTU is the exception to the rule above: it is not a setting on the backend
-// but VIRTIO_NET_F_MTU, negotiated at probe and written into the migration stream.
-// Two machines announcing different MTUs are two machines, and if they shared a
-// fingerprint a host would restore one into the other and QEMU would refuse the
-// feature set — an operator changing the uplink's MTU would break every workspace
-// on the node instead of costing one template build.
-func TestFingerprintSeparatesMachinesByTheMTUTheyAnnounce(t *testing.T) {
-	a := spec(t)
-	a.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01", MTU: 1500}}
-
-	b := a
-	b.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01", MTU: 1400}}
-
-	// And announcing nothing is a third machine: without the feature bit the guest
-	// picks its own default, which is a different negotiation from being told 1500.
-	none := a
-	none.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
-
-	seen := map[string]string{}
-	for name, s := range map[string]Spec{"1500": a, "1400": b, "unannounced": none} {
-		f, err := s.Fingerprint()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if other, dup := seen[f]; dup {
-			t.Errorf("a machine announcing %s and one announcing %s share fingerprint %s; "+
-				"a host would load one's template into the other", name, other, f)
-		}
-		seen[f] = name
-	}
-}
-
-// What is behind a device is not the machine. Two VMs with one disk each are the
-// same machine whether that disk holds a database or a scratch overlay — which is
-// the whole reason a template is worth having.
-func TestFingerprintIgnoresWhatIsBehindTheDevices(t *testing.T) {
-	a := spec(t)
-	a.Disks = []Disk{{Path: "/one.qcow2", Format: "qcow2", Serial: "aaa"}}
-	a.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01"}}
-	a.VsockCID = 7
-
-	a.Serial = "file:/var/log/console"
-
-	// The same machine handed its disk, monitor and console as descriptors.
-	b := a
-	b.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}, {ID: 2, FDs: []FD{{Num: 11}}}}
-	b.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "qcow2"}}, Serial: "bbb"}}
-	b.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:00:00:02"}}
-	b.VsockCID = 42
-	b.Serial, b.SerialFDSet = "", 2
-	b.QMPSocket, b.QMPFD = "", 12
-	b.FDSets = append(b.FDSets, FDSet{ID: 3, FDs: []FD{{Num: 13}}})
-	b.KVMFDSet, b.VsockFD = 3, 14
-	b.NICs[0].VhostFD = 15
-
-	fa, err := a.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fb, err := b.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fa != fb {
-		t.Error("different paths, MACs, context ids and descriptors made it a different machine")
-	}
-}
-
-// Moving a VM between hosts, which is what model "host" quietly forbids.
-//
-// Under it the guest is told through CPUID exactly which instructions this
-// silicon has and never asks again, so a template taken on one machine describes
-// a CPU the next may not have. Nothing else in the fingerprint differs between
-// two hosts — same binaries, same shape — so without the host CPU folded in, each
-// machine accepts the other's templates and the guest resumes onto an instruction
-// that is not there.
-func TestFingerprintSeparatesHostsUnderCPUHost(t *testing.T) {
-	base := spec(t)
-
-	old := readHostCPU
-	t.Cleanup(func() { readHostCPU = old })
-
-	readHostCPU = func() (string, error) { return "13th Gen Intel(R) Core(TM) i9-13900HK", nil }
-	intel, err := base.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	readHostCPU = func() (string, error) { return "AMD EPYC 9634 84-Core Processor", nil }
-	amd, err := base.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if intel == amd {
-		t.Fatal("two different host CPUs produced one fingerprint; each host would accept the other's templates")
-	}
-}
-
-// And the other half: naming a model is how a fleet gets VMs that move. Every
-// host then shows the guest the same CPU, so the host's own silicon must drop out
-// of the fingerprint — otherwise templates are partitioned per machine for
-// exactly the reason that no longer applies.
-func TestFingerprintIgnoresTheHostUnderANamedCPU(t *testing.T) {
-	named := spec(t)
-	named.CPU = "Skylake-Server-v4"
-
-	old := readHostCPU
-	t.Cleanup(func() { readHostCPU = old })
-
-	readHostCPU = func() (string, error) { return "13th Gen Intel(R) Core(TM) i9-13900HK", nil }
-	a, err := named.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	readHostCPU = func() (string, error) { return "AMD EPYC 9634 84-Core Processor", nil }
-	b, err := named.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a != b {
-		t.Error("a named CPU model still partitioned templates by host; VMs could not move")
-	}
-
-	// And it is a different machine from the default, because the guest sees a
-	// different CPU.
-	def, err := spec(t).Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if def == a {
-		t.Error("a named CPU model fingerprinted the same as model host")
-	}
-}
-
-// A path is not the machine: the same binary under two names is one machine, and
-// two different binaries at one path are two.
-func TestFingerprintIsContentNotPath(t *testing.T) {
-	a := spec(t)
-	b := spec(t)
-	fa, err := a.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fb, err := b.Fingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fa != fb {
-		t.Error("identical contents at different paths fingerprinted differently")
-	}
-}
-
-func TestCmdlineStopsThePCIScanAtBusZero(t *testing.T) {
-	got := DefaultCmdline().String()
-	if !strings.Contains(got, "pci=lastbus=0") {
-		t.Errorf("pci=lastbus=0 is missing, and every boot pays 8192 config reads for it: %s", got)
-	}
-}
-
-// Memory that arrives at runtime is no use to a guest that does not online it,
-// and the failure is silent: growth stops at the boot size with no error.
-func TestCmdlineOnlinesMemoryAsItArrives(t *testing.T) {
-	if got := DefaultCmdline().String(); !strings.Contains(got, "memhp_default_state=online") {
-		t.Errorf("virtio-mem growth would stall at the boot size: %s", got)
-	}
-}
-
-// Two thirds of this machine's boot was systemd asking a serial port that nobody was
-// listening to two questions and waiting 334ms for each answer. TERM=dumb is what makes it
-// not ask: 687ms to 19ms between the kernel exec'ing init and systemd's first log line.
-//
-// Worth a test because it does not look like a boot flag. It looks like a terminal
-// preference, and the one thing it must not be mistaken for is decoration somebody can drop
-// while tidying — nothing fails if it goes, the machine just takes five times as long.
-func TestCmdlineTellsSystemdTheConsoleWillNotAnswer(t *testing.T) {
-	if got := DefaultCmdline().String(); !strings.Contains(got, "TERM=dumb") {
-		t.Errorf("systemd would spend 668ms waiting out two terminal queries: %s", got)
-	}
-}
-
-func TestCmdlineInitAndArgs(t *testing.T) {
-	c := DefaultCmdline()
-	c.Init = "/sbin/custom-init"
-	c.InitArgs = []string{"-vsock-rpc-port=1025"}
-	got := c.String()
-	if !strings.HasSuffix(got, "init=/sbin/custom-init -- -vsock-rpc-port=1025") {
-		t.Errorf("init must come last, with its args after --: %s", got)
-	}
-}
-
-// A profiling boot goes silent, not verbose: registering a console replays the
-// whole ring into it inside an initcall, and the profile then measures itself.
-func TestProfilingSilencesTheConsole(t *testing.T) {
-	got := DefaultCmdline().Profiling().String()
-	if !strings.Contains(got, "loglevel=0") || strings.Contains(got, "quiet") {
-		t.Errorf("a profiling boot should set loglevel=0 and not quiet: %s", got)
-	}
-	if !strings.Contains(got, "initcall_debug") || !strings.Contains(got, "log_buf_len=4M") {
-		t.Errorf("missing the profiling flags: %s", got)
+	if got := prof.Extra[0]; got != "initcall_debug" {
+		t.Errorf("the caller's append reached the profiling command line: Extra[0] = %q", got)
 	}
 }
 
@@ -743,10 +530,16 @@ func TestValidateRefuses(t *testing.T) {
 				s.Disks[i] = Disk{Path: "/a.qcow2", Format: "qcow2"}
 			}
 		}},
-		{"more NICs than the slot range holds", func(s *Spec) { s.NICs = make([]NIC, MaxNICs+1) }},
+		{"more NICs than the slot range holds", func(s *Spec) {
+			s.NICs = make([]NIC, MaxNICs+1)
+			for i := range s.NICs {
+				s.NICs[i] = nic()
+			}
+		}},
 		{"more root ports than the slot range holds", func(s *Spec) { s.HotplugPorts = MaxHotplugPorts + 1 }},
 		{"a negative number of root ports", func(s *Spec) { s.HotplugPorts = -1 }},
 		{"a disk with no path", func(s *Spec) { s.Disks = []Disk{{Format: "qcow2"}} }},
+		// A wrong guess is a guest that boots and finds a disk full of nothing.
 		{"a disk with no format", func(s *Spec) { s.Disks = []Disk{{Path: "/a.qcow2"}} }},
 		{"a disk with a path and a chain", func(s *Spec) {
 			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}}
@@ -776,7 +569,19 @@ func TestValidateRefuses(t *testing.T) {
 		}},
 		{"/dev/vhost-vsock with no vsock", func(s *Spec) { s.VsockCID, s.VsockFD = 0, 3 }},
 		{"/dev/vhost-vsock on stdout", func(s *Spec) { s.VsockCID, s.VsockFD = 3, 1 }},
-		{"/dev/vhost-net on stderr", func(s *Spec) { s.NICs = []NIC{{TapFD: 3, VhostFD: 2, MAC: "52:54:00:00:00:01"}} }},
+		{"/dev/vhost-net on stderr", func(s *Spec) {
+			n := nic()
+			n.VhostFD = 2
+			s.NICs = []NIC{n}
+		}},
+		// A NIC is its TAP, and the zero value of a descriptor is stdin: NIC{} was a
+		// machine whose network backend read the launcher's terminal.
+		{"a NIC with no TAP", func(s *Spec) { s.NICs = []NIC{{MAC: "52:54:00:00:00:01"}} }},
+		// The MAC goes into an option string: empty is "mac=,", and a comma in it
+		// would be another option.
+		{"a NIC with no MAC", func(s *Spec) { s.NICs = []NIC{{TapFD: 3}} }},
+		{"a NIC with a MAC that is not one", func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01,romfile=x"}} }},
+		{"a NIC with a 64-bit MAC", func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "02:00:5e:10:00:00:00:01"}} }},
 		// Both forms of -incoming: QEMU takes the flag once, and which source a VM
 		// restores from is not something to guess at on the caller's behalf.
 		{"both forms of -incoming", func(s *Spec) { s.IncomingDefer, s.Incoming = true, "file:/state" }},
@@ -793,10 +598,15 @@ func TestValidateRefuses(t *testing.T) {
 		})
 	}
 
-	// And the spec the cases above are made from has to pass, or every one of them
+	// And the specs the cases above are made from have to pass, or every one of them
 	// would pass for the wrong reason.
-	if err := spec(t).Validate(); err != nil {
+	s := spec(t)
+	if err := s.Validate(); err != nil {
 		t.Fatalf("the minimal spec does not validate: %v", err)
+	}
+	s.NICs = []NIC{nic()}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("the minimal spec with a NIC does not validate: %v", err)
 	}
 }
 
@@ -807,10 +617,13 @@ func TestIncomingNamesTheSourceOnTheCommandLine(t *testing.T) {
 	for _, tc := range []struct {
 		what string
 		set  func(*Spec)
+		// want is -incoming's value, and empty for no -incoming at all: an -incoming
+		// with an empty value is a QEMU that waits for a migration nobody will send.
 		want string
 	}{
 		{"a URI at exec time", func(s *Spec) { s.Incoming = "file:/state" }, "file:/state"},
 		{"deferred to QMP", func(s *Spec) { s.IncomingDefer = true }, "defer"},
+		{"a boot", func(*Spec) {}, ""},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			s := spec(t)
@@ -819,22 +632,18 @@ func TestIncomingNamesTheSourceOnTheCommandLine(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := argValue(args, "-incoming"); got != tc.want {
-				t.Errorf("-incoming = %q, want %q", got, tc.want)
+			n := 0
+			for _, a := range args {
+				if a == "-incoming" {
+					n++
+				}
+			}
+			switch {
+			case tc.want == "" && n != 0:
+				t.Errorf("a machine asked to boot carries -incoming %q", argValue(args, "-incoming"))
+			case tc.want != "" && (n != 1 || argValue(args, "-incoming") != tc.want):
+				t.Errorf("-incoming %d times, value %q, want once with %q", n, argValue(args, "-incoming"), tc.want)
 			}
 		})
-	}
-
-	// A machine that was asked for neither must not carry the flag at all: an
-	// -incoming with an empty value is a QEMU that waits for a migration nobody
-	// is going to send.
-	args, err := spec(t).Args()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range args {
-		if a == "-incoming" {
-			t.Fatal("a machine asked to boot carries -incoming")
-		}
 	}
 }

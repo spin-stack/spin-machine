@@ -43,7 +43,7 @@ type Release struct {
 	env map[string]string
 }
 
-// Open reads the release tree at dir and reports what is missing, if anything.
+// OpenRelease reads the release tree at dir and reports what is missing, if anything.
 //
 // It checks rather than trusting, because a release with one file absent is
 // worse than no release: it installs, and the gap surfaces later as a QEMU that
@@ -54,14 +54,14 @@ type Release struct {
 // runs guests under KVM needs neither, and refusing to start for the want of a
 // 900 MB file it will not open would be a check that costs more than it saves —
 // Rootfs and QEMUTCG report their own absence to whoever asks for them.
-func Open(dir string) (*Release, error) {
+func OpenRelease(dir string) (*Release, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, fmt.Errorf("resolving release directory %s: %w", dir, err)
 	}
 
 	r := &Release{dir: abs}
-	for _, want := range []string{qemuName, qemuImgName, kernelName, firmwareDir + "/pvh.bin"} {
+	for _, want := range []string{qemuName, qemuImgName, kernelName, filepath.Join(firmwareDir, "pvh.bin")} {
 		p := filepath.Join(abs, want)
 		if _, err := os.Stat(p); err != nil {
 			return nil, fmt.Errorf("%s is not a whole machine: %w", abs, err)
@@ -141,7 +141,9 @@ func (r *Release) Spec() Spec {
 
 // readEnv parses machine.env: key=value lines, # comments, no quoting. A tree
 // without one is not an error — a developer's build directory is a release for
-// every purpose except being named.
+// every purpose except being named. A line that is none of those is: hack/release
+// writes nothing else, so it is a manifest damaged on the way here, and reading
+// past it would report the version of a file nobody wrote.
 func readEnv(path string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -154,14 +156,16 @@ func readEnv(path string) (map[string]string, error) {
 
 	env := map[string]string{}
 	sc := bufio.NewScanner(f)
-	for sc.Scan() {
+	for n := 1; sc.Scan(); n++ {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if k, v, ok := strings.Cut(line, "="); ok {
-			env[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(k) == "" {
+			return nil, fmt.Errorf("%s:%d: %q is not key=value", path, n, line)
 		}
+		env[strings.TrimSpace(k)] = strings.TrimSpace(v)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)

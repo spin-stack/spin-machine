@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 )
@@ -98,6 +99,11 @@ func HotplugPortID(i int) string {
 // buys nothing. Measured neutral for boot time; the win is a smaller device
 // surface, not speed.
 const virtioModern = "disable-legacy=on"
+
+// qemuOpt escapes a value for a QEMU option string, which splits on a single comma
+// and reads a doubled one as a literal. Every value a caller supplies goes through it:
+// a disk path "a,readonly=off" is otherwise a second option, not part of the path.
+func qemuOpt(v string) string { return strings.ReplaceAll(v, ",", ",,") }
 
 // MemoryBackendID names the RAM object when guest memory is file-backed.
 //
@@ -236,12 +242,51 @@ func (d Disk) chainArgs(i int) ([]string, error) {
 		for _, n := range []map[string]any{file, format} {
 			b, err := json.Marshal(n)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("encoding blockdev %s: %w", n["node-name"], err)
 			}
 			args = append(args, "-blockdev", string(b))
 		}
 	}
 	return args, nil
+}
+
+// driveArg is disk i as one -drive, for a disk given by Path: QEMU opens the image
+// and whatever backing files its header names.
+//
+// aio=io_uring, and QEMU is built with it for this reason. The default is
+// aio=threads, which hands every request to a worker pool and pays a
+// context switch each way; io_uring submits and completes in batches
+// through one ring shared with the kernel. It was compiled in and never
+// asked for, which is the worst of both — the cost of the dependency
+// without the benefit.
+//
+// discard=unmap lets the guest's TRIM reach the image, so a qcow2 overlay
+// gives its blocks back when files are deleted inside the VM instead of
+// growing to the high-water mark of everything ever written.
+//
+// file.drop-cache=off for the reason in chainArgs, and only on this node: the option
+// names a child, and a disk given as one path has whatever backing file its own header
+// names, which QEMU opens implicitly. Naming that child here — backing.file.drop-cache
+// — makes QEMU open a backing file whether the image has one or not, and an image
+// without one then fails with "Could not open backing file: Must specify either driver
+// or file". A restore that wants every layer left alone declares its chain; see
+// Disk.Chain.
+func (d Disk) driveArg(i int) string {
+	drive := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s,aio=io_uring,discard=unmap,file.drop-cache=off",
+		qemuOpt(d.Path), i, d.Format)
+	if d.Cache != "" {
+		drive += ",cache=" + d.Cache
+	}
+	if d.DirectOverBacking {
+		drive += ",cache.direct=on,backing.cache.direct=off"
+	}
+	if d.Readonly {
+		drive += ",readonly=on"
+	}
+	if d.Locking {
+		drive += ",file.locking=on"
+	}
+	return drive
 }
 
 // Image is one image of a Disk's chain.
@@ -537,67 +582,7 @@ type Shape struct {
 // a memory file, because that changes the machine string. A caller comparing
 // fingerprints across templates should build the spec it would actually run.
 func (s Spec) Shape() Shape {
-	backend := ""
-	if s.Memory.File != "" {
-		backend = "memory-backend=" + MemoryBackendID
-	}
-
-	// hpet=off: the HPET is a timer the guest would enumerate, initialise and
-	// then not use, because a KVM guest reads the TSC and the KVM clock.
-	// kernel-irqchip=on keeps interrupt delivery in the kernel rather than
-	// bouncing every one through userspace. acpi=on is not optional: vmgenid
-	// reaches the guest through an ACPI table, vCPU hotplug through the DSDT's
-	// processor objects, and the kernel finds the PCIe config space (MCFG) and
-	// the interrupt routing (_PRT) there. PCI hotplug is not ACPI's (see the
-	// ICH9-LPC globals below), nor is memory growth, which is virtio-mem.
-	//
-	// sata=off and smbus=off remove the two ICH9 functions a q35 builds beside
-	// the LPC bridge and this machine has no use for: an AHCI controller at
-	// 00:1f.2, on a kernel built without CONFIG_ATA, and an SMBus controller at
-	// 00:1f.3 with eight SPD EEPROMs behind it, on a kernel with no i2c bus
-	// driver to reach them. Both were on the bus with no driver bound, and the
-	// guest paid for enumerating them, for their BARs and for their I/O windows
-	// (0x0700-0x073f and 0xc040-0xc05f, gone from the guest's /proc/ioports).
-	//
-	// Kernel to init, medians of 400 boots each, measured 2026-09-08 on the KVM
-	// binary: 62.3 ms as it was, 61.3 ms with sata=off, 61.7 ms with smbus=off,
-	// 60.6 ms with both. Nothing else moved — the guest's PCI list loses exactly
-	// those two functions, the remaining BARs shift down by the page the AHCI
-	// controller had, and a boot onto the real root filesystem still reaches its
-	// init.
-	//
-	// Four more machine options were measured the same way and are deliberately
-	// not here, because each bought nothing (same date, 300 boots per variant,
-	// medians against a 62.9 ms baseline whose run-to-run spread was ±2 ms):
-	//
-	//   - usb=off, 63.0 ms, is a no-op twice over. This q35 already reports
-	//     /machine usb false, and the binary is built from qemu/devices.mak with
-	//     no USB controller in it at all, so usb=on is not even startable here:
-	//     "unknown type 'ich9-usb-ehci1'".
-	//   - vmport=off, 62.6 ms. The VMware backdoor port is emulated but never
-	//     touched: nothing in the guest's /proc/ioports claims it, because a
-	//     Linux guest decides whether to talk to it from CPUID and this one
-	//     finds KVM.
-	//   - smm=off, 62.3 ms. The scepticism it deserves is what makes it a
-	//     no-change: this machine enters a PVH ELF kernel directly, has no
-	//     pflash and no OVMF, and the 0.6 ms is inside the noise, so the option
-	//     would be carrying an interaction with firmware nobody here has for a
-	//     number that cannot be told from zero.
-	//   - i8042=off, 62.5 ms. It does remove the PS/2 controller, its two ports
-	//     and port92 — 92 bytes off the DSDT is the whole visible effect — and
-	//     the kernel has no CONFIG_SERIO_I8042 to probe any of it with.
-	accel := s.Accel
-	if accel == "" {
-		accel = "kvm"
-	}
-	// kernel-irqchip=on stays under either. It names KVM's in-kernel interrupt controller
-	// and TCG has none, but QEMU accepts the option and ignores it rather than refusing —
-	// measured against 11.1.1 — so the shape is one string and not two.
-	machine := strings.Join(nonEmpty(
-		"q35", "accel="+accel, "kernel-irqchip=on", "hpet=off", "acpi=on",
-		"sata=off", "smbus=off", backend,
-	), ",")
-
+	accel := s.accel()
 	cpu := s.CPU
 	if cpu == "" {
 		// "host" is the silicon underneath, which TCG does not have: it refuses the model
@@ -653,21 +638,88 @@ func (s Spec) Shape() Shape {
 	cpu += ",-vmx,-svm"
 
 	return Shape{
-		Machine: machine,
+		Machine: s.machineOpts(true),
 		CPU:     cpu,
 		SMP:     smpArg(s.BootCPUs, s.MaxCPUs),
 		Memory:  memoryArg(s.Memory.SizeMB, s.Memory.MaxMB),
 	}
 }
 
-// machineArg is the shape's machine string as -machine takes it. With KVMFDSet the
-// accelerator moves to its own -accel, which carries the descriptor: QEMU refuses the
-// two together — "The -accel and "-machine accel=" options are incompatible" (11.1.1).
-func (s Spec) machineArg(shape Shape) string {
-	if s.KVMFDSet == 0 {
-		return shape.Machine
+// accel is the accelerator this spec asks for, with the empty default spelt out.
+func (s Spec) accel() string {
+	if s.Accel == "" {
+		return "kvm"
 	}
-	return strings.Replace(shape.Machine, ",accel=kvm", "", 1)
+	return s.Accel
+}
+
+// machineOpts is the -machine string. withAccel is false when the accelerator is given
+// its own -accel carrying the /dev/kvm descriptor (KVMFDSet): QEMU refuses the two
+// together — "The -accel and "-machine accel=" options are incompatible" (11.1.1). It is
+// built without accel= rather than edited out of Shape's string, so the two cannot drift
+// apart when an option is added or reordered.
+func (s Spec) machineOpts(withAccel bool) string {
+	accel := ""
+	if withAccel {
+		accel = "accel=" + s.accel()
+	}
+	backend := ""
+	if s.Memory.File != "" {
+		backend = "memory-backend=" + MemoryBackendID
+	}
+
+	// hpet=off: the HPET is a timer the guest would enumerate, initialise and
+	// then not use, because a KVM guest reads the TSC and the KVM clock.
+	// kernel-irqchip=on keeps interrupt delivery in the kernel rather than
+	// bouncing every one through userspace. acpi=on is not optional: vmgenid
+	// reaches the guest through an ACPI table, vCPU hotplug through the DSDT's
+	// processor objects, and the kernel finds the PCIe config space (MCFG) and
+	// the interrupt routing (_PRT) there. PCI hotplug is not ACPI's (see the
+	// ICH9-LPC globals below), nor is memory growth, which is virtio-mem.
+	//
+	// sata=off and smbus=off remove the two ICH9 functions a q35 builds beside
+	// the LPC bridge and this machine has no use for: an AHCI controller at
+	// 00:1f.2, on a kernel built without CONFIG_ATA, and an SMBus controller at
+	// 00:1f.3 with eight SPD EEPROMs behind it, on a kernel with no i2c bus
+	// driver to reach them. Both were on the bus with no driver bound, and the
+	// guest paid for enumerating them, for their BARs and for their I/O windows
+	// (0x0700-0x073f and 0xc040-0xc05f, gone from the guest's /proc/ioports).
+	//
+	// Kernel to init, medians of 400 boots each, measured 2026-09-08 on the KVM
+	// binary: 62.3 ms as it was, 61.3 ms with sata=off, 61.7 ms with smbus=off,
+	// 60.6 ms with both. Nothing else moved — the guest's PCI list loses exactly
+	// those two functions, the remaining BARs shift down by the page the AHCI
+	// controller had, and a boot onto the real root filesystem still reaches its
+	// init.
+	//
+	// Four more machine options were measured the same way and are deliberately
+	// not here, because each bought nothing (same date, 300 boots per variant,
+	// medians against a 62.9 ms baseline whose run-to-run spread was ±2 ms):
+	//
+	//   - usb=off, 63.0 ms, is a no-op twice over. This q35 already reports
+	//     /machine usb false, and the binary is built from qemu/devices.mak with
+	//     no USB controller in it at all, so usb=on is not even startable here:
+	//     "unknown type 'ich9-usb-ehci1'".
+	//   - vmport=off, 62.6 ms. The VMware backdoor port is emulated but never
+	//     touched: nothing in the guest's /proc/ioports claims it, because a
+	//     Linux guest decides whether to talk to it from CPUID and this one
+	//     finds KVM.
+	//   - smm=off, 62.3 ms. The scepticism it deserves is what makes it a
+	//     no-change: this machine enters a PVH ELF kernel directly, has no
+	//     pflash and no OVMF, and the 0.6 ms is inside the noise, so the option
+	//     would be carrying an interaction with firmware nobody here has for a
+	//     number that cannot be told from zero.
+	//   - i8042=off, 62.5 ms. It does remove the PS/2 controller, its two ports
+	//     and port92 — 92 bytes off the DSDT is the whole visible effect — and
+	//     the kernel has no CONFIG_SERIO_I8042 to probe any of it with.
+	//
+	// kernel-irqchip=on stays under either accelerator. It names KVM's in-kernel interrupt
+	// controller and TCG has none, but QEMU accepts the option and ignores it rather than
+	// refusing — measured against 11.1.1 — so the shape is one string and not two.
+	return strings.Join(nonEmpty(
+		"q35", accel, "kernel-irqchip=on", "hpet=off", "acpi=on",
+		"sata=off", "smbus=off", backend,
+	), ",")
 }
 
 // derivedFromHost reports whether a CPU model takes its feature set from the
@@ -789,8 +841,8 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("a /dev/vhost-vsock descriptor below 3 is stdin, stdout or stderr")
 	}
 	for i, n := range s.NICs {
-		if n.VhostFD != 0 && n.VhostFD < 3 {
-			return fmt.Errorf("NIC %d: a /dev/vhost-net descriptor below 3 is stdin, stdout or stderr", i)
+		if err := n.validate(); err != nil {
+			return fmt.Errorf("NIC %d: %w", i, err)
 		}
 	}
 	for i, d := range s.Disks {
@@ -819,6 +871,22 @@ func (s Spec) fdSets() (map[int]bool, error) {
 		sets[set.ID] = true
 	}
 	return sets, nil
+}
+
+func (n NIC) validate() error {
+	switch {
+	// TapFD has no "absent": a NIC is its TAP, and the zero value is stdin.
+	case n.TapFD < 3:
+		return fmt.Errorf("a TAP descriptor of %d is stdin, stdout or stderr", n.TapFD)
+	case n.VhostFD != 0 && n.VhostFD < 3:
+		return fmt.Errorf("a /dev/vhost-net descriptor below 3 is stdin, stdout or stderr")
+	}
+	// Parsed, not only required: the MAC is written into a QEMU option string, and
+	// anything net.ParseMAC accepts as 48 bits has no comma in it.
+	if mac, err := net.ParseMAC(n.MAC); err != nil || len(mac) != 6 {
+		return fmt.Errorf("MAC %q is not a 48-bit address", n.MAC)
+	}
+	return nil
 }
 
 func (d Disk) validate(sets map[int]bool) error {
@@ -869,7 +937,7 @@ func (s Spec) Args() ([]string, error) {
 		// done from outside rather than from inside QEMU.
 		"-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
 
-		"-machine", s.machineArg(shape),
+		"-machine", s.machineOpts(s.KVMFDSet == 0),
 		"-cpu", shape.CPU,
 		"-smp", shape.SMP,
 		"-m", shape.Memory,
@@ -891,7 +959,7 @@ func (s Spec) Args() ([]string, error) {
 		}
 		args = append(args, "-object",
 			fmt.Sprintf("memory-backend-file,id=%s,size=%dM,mem-path=%s,%s",
-				MemoryBackendID, s.Memory.SizeMB, s.Memory.File, backing))
+				MemoryBackendID, s.Memory.SizeMB, qemuOpt(s.Memory.File), backing))
 	}
 
 	// S3 and S4 are suspend states this machine cannot come back from and that a
@@ -1005,42 +1073,6 @@ func (s Spec) Args() ([]string, error) {
 	}
 
 	for i, d := range s.Disks {
-		// aio=io_uring, and QEMU is built with it for this reason. The default is
-		// aio=threads, which hands every request to a worker pool and pays a
-		// context switch each way; io_uring submits and completes in batches
-		// through one ring shared with the kernel. It was compiled in and never
-		// asked for, which is the worst of both — the cost of the dependency
-		// without the benefit.
-		//
-		// discard=unmap lets the guest's TRIM reach the image, so a qcow2 overlay
-		// gives its blocks back when files are deleted inside the VM instead of
-		// growing to the high-water mark of everything ever written.
-		// file.drop-cache=off for the reason in chainArgs, and only on this node: the option
-		// names a child, and a disk given as one path has whatever backing file its own header
-		// names, which QEMU opens implicitly. Naming that child here — backing.file.drop-cache
-		// — makes QEMU open a backing file whether the image has one or not, and an image
-		// without one then fails with "Could not open backing file: Must specify either driver
-		// or file". A restore that wants every layer left alone declares its chain; see
-		// Disk.Chain.
-		drive := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s,aio=io_uring,discard=unmap,file.drop-cache=off",
-			d.Path, i, d.Format)
-		if d.Cache != "" {
-			drive += ",cache=" + d.Cache
-		}
-		if d.DirectOverBacking {
-			drive += ",cache.direct=on,backing.cache.direct=off"
-		}
-		if d.Readonly {
-			drive += ",readonly=on"
-		}
-		if d.Locking {
-			drive += ",file.locking=on"
-		}
-		dev := fmt.Sprintf("virtio-blk-pci,drive=blk%d,%s,addr=0x%x",
-			i, virtioModern, SlotDiskBase+i)
-		if d.Serial != "" {
-			dev += ",serial=" + d.Serial
-		}
 		if len(d.Chain) != 0 {
 			chain, err := d.chainArgs(i)
 			if err != nil {
@@ -1048,7 +1080,12 @@ func (s Spec) Args() ([]string, error) {
 			}
 			args = append(args, chain...)
 		} else {
-			args = append(args, "-drive", drive)
+			args = append(args, "-drive", d.driveArg(i))
+		}
+		dev := fmt.Sprintf("virtio-blk-pci,drive=blk%d,%s,addr=0x%x",
+			i, virtioModern, SlotDiskBase+i)
+		if d.Serial != "" {
+			dev += ",serial=" + qemuOpt(d.Serial)
 		}
 		args = append(args, "-device", dev)
 	}
@@ -1092,7 +1129,7 @@ func (s Spec) Args() ([]string, error) {
 			continue
 		}
 		args = append(args, "-qmp",
-			fmt.Sprintf("unix:%s,server=on,wait=off", sock))
+			fmt.Sprintf("unix:%s,server=on,wait=off", qemuOpt(sock)))
 	}
 	// A monitor on a socket the caller made and listens on: QEMU accepts on the descriptor
 	// and never needs a place in the filesystem to put a socket.
@@ -1106,12 +1143,12 @@ func (s Spec) Args() ([]string, error) {
 			"-chardev", fmt.Sprintf("socket,id=%s,fd=%d,server=on,wait=off", id, fd),
 			"-object", fmt.Sprintf("monitor-qmp,id=mon-%s,chardev=%s", id, id))
 	}
-	// Commas are doubled: QEMU splits an option on a single one, and an opaque is a path.
+	// An opaque is a path in practice, so it is escaped like one.
 	for _, set := range s.FDSets {
 		for _, fd := range set.FDs {
 			spec := fmt.Sprintf("fd=%d,set=%d", fd.Num, set.ID)
 			if fd.Opaque != "" {
-				spec += ",opaque=" + strings.ReplaceAll(fd.Opaque, ",", ",,")
+				spec += ",opaque=" + qemuOpt(fd.Opaque)
 			}
 			args = append(args, "-add-fd", spec)
 		}
@@ -1151,10 +1188,13 @@ func (s Spec) Args() ([]string, error) {
 // every VM restored from one have their memory in a file whatever the spec being
 // asked was configured with.
 func (s Spec) Fingerprint() (string, error) {
-	return s.fingerprint(fileSum)
+	return s.fingerprint(fileSum, HostCPUModel)
 }
 
-func (s Spec) fingerprint(sumFile func(string) (string, error)) (string, error) {
+// fingerprint is Fingerprint with its two readers of the host passed in: how a file
+// is hashed (FingerprintCache memoises it) and which CPU this host has (a test is
+// two hosts).
+func (s Spec) fingerprint(sumFile func(string) (string, error), hostCPU func() (string, error)) (string, error) {
 	h := sha256.New()
 
 	// Length-prefixed, so that no two different machines can produce the same
@@ -1186,7 +1226,7 @@ func (s Spec) fingerprint(sumFile func(string) (string, error)) (string, error) 
 		}
 		write(f.name, sum)
 	}
-	ident, err := s.Identity()
+	ident, err := s.identity(hostCPU)
 	if err != nil {
 		return "", err
 	}
@@ -1206,6 +1246,10 @@ func (s Spec) fingerprint(sumFile func(string) (string, error)) (string, error) 
 // it does not describe, and a restore into it is undefined rather than an error.
 // So there is no list here for a caller to keep in step; there is this.
 func (s Spec) Identity() (string, error) {
+	return s.identity(HostCPUModel)
+}
+
+func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 	shape := s.TemplateShape()
 
 	var b strings.Builder
@@ -1231,11 +1275,11 @@ func (s Spec) Identity() (string, error) {
 	// Under a named model it is deliberately left out: every host shows the guest
 	// the same CPU, which is the entire point of naming one, and folding the host
 	// in would partition templates per machine for no reason.
-	if derivedFromHost(strings.SplitN(shape.CPU, ",", 2)[0]) {
-		cpu, err := readHostCPU()
+	if model, _, _ := strings.Cut(shape.CPU, ","); derivedFromHost(model) {
+		cpu, err := hostCPU()
 		if err != nil {
 			return "", fmt.Errorf("fingerprinting the host CPU, which model %q exposes to the guest: %w",
-				strings.SplitN(shape.CPU, ",", 2)[0], err)
+				model, err)
 		}
 		write("host-cpu", cpu)
 	}
@@ -1331,9 +1375,6 @@ func (s Spec) topology() string {
 	}
 	return b.String()
 }
-
-// readHostCPU is HostCPUModel, indirected so a test can be two different hosts.
-var readHostCPU = HostCPUModel
 
 // HostCPUModel reports the host CPU's model name, which model "host" makes part
 // of what a template describes.

@@ -14,7 +14,9 @@ import (
 )
 
 // FingerprintCache reuses artifact hashes across VM creations in one process.
-// Its zero value is ready to use, and calls may run concurrently. Keep one cache
+// Its zero value is ready to use, and calls may run concurrently: the lock covers
+// the table and not the hashing, so VMs created in parallel hash in parallel, and
+// two that miss on the same file both hash it. Keep one cache
 // for the lifetime of the launcher; a cache created for each VM saves no work.
 //
 // Every call opens and stats each artifact. Device, inode, size, modification
@@ -58,9 +60,7 @@ func artifactOldEnough(info os.FileInfo, now time.Time) bool {
 // Fingerprint returns exactly the same identity as Spec.Fingerprint, reusing
 // only hashes of artifacts whose metadata has not changed.
 func (c *FingerprintCache) Fingerprint(s Spec) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return s.fingerprint(c.fileSum)
+	return s.fingerprint(c.fileSum, HostCPUModel)
 }
 
 func sameArtifact(a, b os.FileInfo) bool {
@@ -87,10 +87,9 @@ func (c *FingerprintCache) fileSum(path string) (string, error) {
 		return "", fmt.Errorf("%s is not a regular artifact file", path)
 	}
 	cacheable := artifactOldEnough(before, started)
-	if cached, ok := c.files[path]; ok && cacheable && sameArtifact(cached.info, before) {
-		return cached.sum, nil
+	if sum, ok := c.lookup(path, before, cacheable); ok {
+		return sum, nil
 	}
-	delete(c.files, path)
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -103,12 +102,31 @@ func (c *FingerprintCache) fileSum(path string) (string, error) {
 		return "", fmt.Errorf("%s changed while hashing", path)
 	}
 	sum := hex.EncodeToString(h.Sum(nil))
-	if !cacheable {
-		return sum, nil
+	if cacheable {
+		c.store(path, artifactHash{info: after, sum: sum})
 	}
+	return sum, nil
+}
+
+// lookup returns the cached hash of path when info still describes it, and forgets
+// an entry that no longer does.
+func (c *FingerprintCache) lookup(path string, info os.FileInfo, cacheable bool) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cached, ok := c.files[path]; ok && cacheable && sameArtifact(cached.info, info) {
+		return cached.sum, true
+	}
+	delete(c.files, path)
+	return "", false
+}
+
+// store records a hash with the metadata of the file it was taken from. Each entry
+// is self-consistent whichever of two concurrent hashes of one path lands last.
+func (c *FingerprintCache) store(path string, h artifactHash) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.files == nil {
 		c.files = make(map[string]artifactHash)
 	}
-	c.files[path] = artifactHash{info: after, sum: sum}
-	return sum, nil
+	c.files[path] = h
 }

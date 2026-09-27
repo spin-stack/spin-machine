@@ -4,6 +4,7 @@ package machine
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -19,8 +20,8 @@ import (
 // not have an opinion about; pass them in Init and InitArgs.
 type Cmdline struct {
 	// Console the kernel prints to. "ttyS0" is the ISA 16550 this machine has.
-	// Empty means the kernel prints to nothing, which is what a production boot
-	// wants: the ring buffer still records everything.
+	// Empty means the kernel prints to nothing: the ring buffer still records
+	// everything.
 	Console string
 
 	// Quiet and LogLevel set how much reaches the console. LogLevel is the
@@ -35,7 +36,7 @@ type Cmdline struct {
 
 	// Root, when set, is passed as root= and tells the kernel to mount a block
 	// device rather than stay on an initramfs. "/dev/vda" is the first disk in
-	// Spec.Disks. RootFlags is passed as rw or ro.
+	// Spec.Disks. RootReadonly passes ro instead of rw.
 	Root         string
 	RootReadonly bool
 
@@ -44,8 +45,9 @@ type Cmdline struct {
 	Extra []string
 }
 
-// DefaultCmdline is a production boot: silent console, PCI scan stopped at bus
-// 0, and the timing shortcuts a KVM guest can take.
+// DefaultCmdline is a production boot: a console on ttyS0 that only errors reach
+// (quiet, loglevel=3), plus what String always adds — the PCI scan stopped at
+// bus 0 and the timing shortcuts a KVM guest can take.
 func DefaultCmdline() Cmdline {
 	return Cmdline{
 		Console:  "ttyS0",
@@ -220,7 +222,9 @@ func (c Cmdline) String() string {
 func (c Cmdline) Profiling() Cmdline {
 	c.Quiet = false
 	c.LogLevel = 0
-	c.Extra = append(c.Extra,
+	// Clipped, so the append copies: c is a copy but c.Extra is not, and appending
+	// into spare capacity would write into the caller's array.
+	c.Extra = append(slices.Clip(c.Extra),
 		"initcall_debug", "printk.time=1", "log_buf_len=4M",
 		// The initcall tracepoints are the only source for where a level
 		// *boundary* falls: initcall_debug times each call and says nothing

@@ -92,14 +92,14 @@ One tarball:
 `LICENSE` and `NOTICE` sit at the root of the tarball, next to `install.sh`.
 
 `task build` writes that same tree into `_output/`, byte for byte the layout above, and
-`machine.Open` reads either. There is one layout: nothing rearranges the files on the way
+`machine.OpenRelease` reads either. There is one layout: nothing rearranges the files on the way
 out of a build, into a tarball or into a consumer. Let the three differ and what falls out
 of the translation between them is a path that exists and holds the previous release's
 kernel.
 
 ```go
-rel, err := machine.Open("/usr/share/spin-stack")  // says which file is missing, if one is
-spec := rel.Spec()                                 // QEMU, Kernel, Firmware
+rel, err := machine.OpenRelease("/usr/share/spin-stack")  // says which file is missing, if one is
+spec := rel.Spec()                                        // QEMU, Kernel, Firmware
 img, err := rel.Rootfs()
 ```
 

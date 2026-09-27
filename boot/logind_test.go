@@ -25,7 +25,7 @@ func TestLogindSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rel, err := machine.Open(out)
+	rel, err := machine.OpenRelease(out)
 	if err != nil {
 		t.Fatal(err)
 	}
