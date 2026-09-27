@@ -175,13 +175,29 @@ func (p Phase) String() string {
 // line. Line-oriented matching is what the shell version of this did and it does not survive
 // contact with a serial console: systemd writes escape sequences and partial lines, the
 // kernel interleaves with it, and `\r` arrives without `\n`.
-var markers = [numPhases][]string{
-	Firmware: {"SeaBIOS"},
-	Kernel:   {"Linux version"},
-	PID1:     {"Run /sbin/init as init process"},
-	Started:  {"Startup finished"},
-	Usable:   {"login:"},
+//
+// Bytes and not strings, because they are searched for on every read of the console: a
+// string would be converted, and possibly copied, once per marker per read.
+var markers = [numPhases][][]byte{
+	Firmware: {[]byte("SeaBIOS")},
+	Kernel:   {[]byte("Linux version")},
+	PID1:     {[]byte("Run /sbin/init as init process")},
+	Started:  {[]byte("Startup finished")},
+	Usable:   {[]byte("login:")},
 }
+
+// overlap is how much of one read is kept for the next, so that a marker split across
+// two reads is still found: one byte less than the longest marker is all that can be
+// needed.
+var overlap = func() int {
+	n := 0
+	for _, ms := range markers {
+		for _, m := range ms {
+			n = max(n, len(m)-1)
+		}
+	}
+	return n
+}()
 
 // Run is what one boot cost, as durations from the moment before QEMU was exec'd.
 //
@@ -215,16 +231,7 @@ func Watch(r io.Reader, t0 time.Time, now func() time.Time, until Phase) (Run, e
 	run := Run{At: make(map[Phase]time.Duration, numPhases)}
 
 	buf := make([]byte, 32*1024)
-	// Carry the tail of the previous read, so a marker split across two reads is still
-	// found. One byte less than the longest marker is all that can be needed.
-	overlap := 0
-	for _, ms := range markers {
-		for _, m := range ms {
-			overlap = max(overlap, len(m)-1)
-		}
-	}
-
-	var window []byte
+	window := make([]byte, 0, overlap+len(buf))
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
@@ -237,7 +244,7 @@ func Watch(r io.Reader, t0 time.Time, now func() time.Time, until Phase) (Run, e
 					continue
 				}
 				for _, m := range markers[p] {
-					if bytes.Contains(window, []byte(m)) {
+					if bytes.Contains(window, m) {
 						run.At[p] = at
 						break
 					}
