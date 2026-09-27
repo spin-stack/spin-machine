@@ -39,6 +39,7 @@
 package boot
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -236,7 +237,7 @@ func Watch(r io.Reader, t0 time.Time, now func() time.Time, until Phase) (Run, e
 					continue
 				}
 				for _, m := range markers[p] {
-					if containsBytes(window, m) {
+					if bytes.Contains(window, []byte(m)) {
 						run.At[p] = at
 						break
 					}
@@ -256,18 +257,6 @@ func Watch(r io.Reader, t0 time.Time, now func() time.Time, until Phase) (Run, e
 			return run, err
 		}
 	}
-}
-
-func containsBytes(b []byte, s string) bool {
-	if len(s) == 0 || len(b) < len(s) {
-		return false
-	}
-	for i := 0; i+len(s) <= len(b); i++ {
-		if string(b[i:i+len(s)]) == s {
-			return true
-		}
-	}
-	return false
 }
 
 // Percentile is the p-th percentile of ds, nearest-rank, with p in [0,1].

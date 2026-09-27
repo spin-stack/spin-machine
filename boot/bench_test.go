@@ -79,13 +79,6 @@ func maskedRules() map[string]string {
 	return m
 }
 
-var udevUnits = []string{
-	"systemd-udevd.service",
-	"systemd-udevd-control.socket",
-	"systemd-udevd-kernel.socket",
-	"systemd-udev-trigger.service",
-}
-
 // A drop-in on the instance beats one on the template, which is where the image's own TERM
 // drop-in lives, so these override it for one boot without touching the image.
 func gettyDropin(body string) map[string]string {

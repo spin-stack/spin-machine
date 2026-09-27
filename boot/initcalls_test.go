@@ -205,12 +205,6 @@ var (
 	rePID = regexp.MustCompile(`\[\d+\]:`)
 )
 
-type initcall struct {
-	name string
-	us   int
-	ret  int
-}
-
 // gap is the time between two adjacent ring-buffer stamps, and what was printed on either
 // side of it. The messages are what make it usable: a duration on its own says there is
 // 300 ms somewhere and not what the kernel was doing.

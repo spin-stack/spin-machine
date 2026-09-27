@@ -141,9 +141,10 @@ func reportUnitLoad(t *testing.T, console string, reps int) {
 		s := append([]float64(nil), samples[tag]...)
 		sort.Float64s(s)
 		fmt.Fprintf(&b, "%-20s %8.1f %8.1f %6d ms\n", tag, pct(s, 50), pct(s, 95), len(s))
-		if i == 0 {
+		switch i {
+		case 0:
 			first = pct(s, 50)
-		} else if i == 1 {
+		case 1:
 			second = pct(s, 50)
 		}
 	}
