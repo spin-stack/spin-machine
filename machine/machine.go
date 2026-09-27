@@ -545,8 +545,11 @@ func (s Spec) Shape() Shape {
 	// hpet=off: the HPET is a timer the guest would enumerate, initialise and
 	// then not use, because a KVM guest reads the TSC and the KVM clock.
 	// kernel-irqchip=on keeps interrupt delivery in the kernel rather than
-	// bouncing every one through userspace. acpi=on is not optional: memory
-	// hotplug is announced through ACPI, and so is the machine's slot table.
+	// bouncing every one through userspace. acpi=on is not optional: vmgenid
+	// reaches the guest through an ACPI table, vCPU hotplug through the DSDT's
+	// processor objects, and the kernel finds the PCIe config space (MCFG) and
+	// the interrupt routing (_PRT) there. PCI hotplug is not ACPI's (see the
+	// ICH9-LPC globals below), nor is memory growth, which is virtio-mem.
 	//
 	// sata=off and smbus=off remove the two ICH9 functions a q35 builds beside
 	// the LPC bridge and this machine has no use for: an AHCI controller at
