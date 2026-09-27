@@ -896,6 +896,12 @@ func (s Spec) Args() ([]string, error) {
 	// request never reaches the point of stopping the VM.
 	args = append(args, "-global", "ICH9-LPC.disable_s3=1", "-global", "ICH9-LPC.disable_s4=1")
 
+	// The root ports' hotplug is the guest kernel's own (pciehp), not ACPI's. A q35 hands it to
+	// ACPI by default, and its _OSC then withholds native control; the guest kernel has no
+	// acpiphp, so nothing in it answered: a disk added was seen only after a rescan, and one
+	// asked to go (device_del) never went.
+	args = append(args, "-global", "ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off")
+
 	// A reset ends the process instead of starting the machine again.
 	//
 	// The kernel command line carries panic=1, whose stated purpose is that a
@@ -1273,6 +1279,10 @@ func (s Spec) Identity() (string, error) {
 func (s Spec) topology() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", SlotRNG, SlotBalloon)
+	// Whose the root ports' hotplug is: the chipset's state, and the ACPI tables the guest read,
+	// differ with it (see Args), and a state loaded into the other kind is a guest whose slots
+	// nothing answers for.
+	b.WriteString(";ich9-lpc:pcie-native-hotplug")
 	if s.VsockCID != 0 {
 		fmt.Fprintf(&b, ";vhost-vsock-pci@%#x", SlotVsock)
 	}
