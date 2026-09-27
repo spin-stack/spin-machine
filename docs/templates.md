@@ -4,9 +4,9 @@ This repository does not implement a template lifecycle. It builds the machine o
 and offers the arguments that lifecycle needs. This describes the contract: what to hold to,
 what the guest sees afterwards, and why the machine is shaped the way it is.
 
-For moving a VM from one host to another, see **Moving a VM to another machine** in the
-README. That is a different operation with a different tradeoff, and the difference between
-them is one migration capability.
+For moving a VM from one host to another, see [migration.md](migration.md). That is a
+different operation with a different tradeoff, and the difference between them is one
+migration capability.
 
 ## Why a template rather than a boot
 
@@ -156,8 +156,9 @@ agree on how big their disks are — only on how many.
   `Capability x-ignore-shared is off, but received capability is on`, and QEMU exits.
 - **The fingerprints must match.** `machine.Spec.Fingerprint` hashes the QEMU binary, the
   kernel and the initrd by content together with the machine's shape. A restore across two
-  different fingerprints is undefined rather than an error. See the README on `Spec.CPU`,
-  which is what decides whether a machine can be restored on another host at all.
+  different fingerprints is undefined rather than an error. See [migration.md](migration.md)
+  on `Spec.CPU`, which is what decides whether a machine can be restored on another host at
+  all.
 - **The disk has to match the memory.** The frozen guest's page cache refers to blocks on
   its disk, so a restored VM needs that disk as it was when the state was captured.
 - **The template file is never written.** It is the same invariant the base image has, for
