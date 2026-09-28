@@ -26,6 +26,9 @@
 #            kernel-stable   the newest release of the same stable series
 #            tags <repo>     the highest version-numbered tag of a git repository
 #            branch          the commit the version's branch is at now
+#            commit <repo> <branch>
+#                            the commit <branch> of <repo> is at now: a download whose version is
+#                            a commit, from a project whose releases do not carry the file
 #   note     why it is pinned where it is, and what a bump has to be checked with.
 
 - name: qemu
@@ -77,6 +80,19 @@
     debian-snapshot. A new toolchain is a new vmlinux and so a new machine: bump it together
     with debian-snapshot, then `task kernel:build`, and check the vmlinux is still reproducible
     (kernel/Dockerfile, two --no-cache builds) before `task boot:bench`.
+
+- name: moby-check-config
+  kind: download
+  source: https://raw.githubusercontent.com/moby/moby/{version}/contrib/check-config.sh
+  version: 3c9882e7f214a320dcd579fa48e758b08d2b72c1
+  pin: fda4343e9b50c47896653ca774ccbe9614bfcdb60f080d2b6277baf27efc0a71
+  track: commit https://github.com/moby/moby.git master
+  note: >-
+    kernel/Dockerfile runs it over the kernel's config: the options a container runtime needs,
+    which is what runs in these guests. It only reads the config, so a bump cannot change
+    vmlinux; it can fail the build on an option it has started to require, and that is the
+    point. Pinned to a commit of master because moby's last tag, v28.5.2, predates checks
+    master has (sysctl, MEMCG_SWAP on 5.8+, IP_SCTP). After the bump: `task kernel:build`.
 
 - name: debian-snapshot
   kind: date

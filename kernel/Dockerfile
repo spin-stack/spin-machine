@@ -94,7 +94,13 @@ ARG KERNEL_NPROC="16"
 
 # moby's check-config.sh, with the SELinux and AppArmor checks removed: they are host
 # policy, not kernel features this guest needs, and they fail a config that is correct.
-RUN curl -o /usr/local/bin/check-docker-config.sh -fsSL https://raw.githubusercontent.com/moby/moby/master/contrib/check-config.sh \
+#
+# At the commit versions.yaml pins, checked by content. It was master, fetched at build time:
+# what the build checked the config against was whatever moby had merged that day.
+ARG MOBY_CHECK_CONFIG_VERSION
+ARG MOBY_CHECK_CONFIG_SHA256
+RUN curl -o /usr/local/bin/check-docker-config.sh -fsSL "https://raw.githubusercontent.com/moby/moby/${MOBY_CHECK_CONFIG_VERSION}/contrib/check-config.sh" \
+  && echo "${MOBY_CHECK_CONFIG_SHA256}  /usr/local/bin/check-docker-config.sh" | sha256sum -c - \
   && chmod +x /usr/local/bin/check-docker-config.sh \
   && sed -i '/IP_VS_RR/s/\\$//; /SECURITY_SELINUX/d; /SECURITY_APPARMOR/d' /usr/local/bin/check-docker-config.sh
 

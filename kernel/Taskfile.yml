@@ -27,7 +27,7 @@ tasks:
           --platform linux/amd64 \
           --cache-from {{.KERNEL_CACHE_FROM}} \
           --cache-to {{.KERNEL_CACHE_TO}} \
-          $({{.VERSIONS}} args debian debian-snapshot kernel) \
+          $({{.VERSIONS}} args debian debian-snapshot kernel moby-check-config) \
           --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
           --output type=local,dest={{.OUTPUT_ABS}} \
@@ -81,7 +81,7 @@ tasks:
           --platform linux/amd64 \
           --cache-from {{.KERNEL_CACHE_FROM}} \
           --cache-to {{.KERNEL_CACHE_TO}} \
-          $({{.VERSIONS}} args debian debian-snapshot kernel) \
+          $({{.VERSIONS}} args debian debian-snapshot kernel moby-check-config) \
           --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
           --output type=docker,name=spin-machine-menuconfig \
