@@ -70,7 +70,7 @@
   kind: image
   source: debian
   version: trixie
-  pin: sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+  pin: sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c
   track: digest
   note: >-
     the kernel's toolchain (and qboot's and the floor kernel's), with its packages from
@@ -80,7 +80,7 @@
 
 - name: debian-snapshot
   kind: date
-  version: 20260914T000000Z
+  version: 20260928T000000Z
   track: today
   note: >-
     the Debian archive the kernel's toolchain is installed from, as it stood then, and the
