@@ -169,6 +169,39 @@ RUN <<EOT
     grep -q "CONFIG_PSI=y" .config || (echo "ERROR: CONFIG_PSI not enabled (no /proc/pressure in the guest)!" ; exit 1)
     ! grep -q "CONFIG_PSI_DEFAULT_DISABLED=y" .config || (echo "ERROR: CONFIG_PSI_DEFAULT_DISABLED is set (/proc/pressure is off without psi=1)!" ; exit 1)
 
+    # What keeps a loaded guest answering, and says why when it does not. Turned on 2026-09-28
+    # with 7.2.8, one new machine with PSI; none had a recorded reason to be off.
+    #
+    #   LRU_GEN(_ENABLED)       MGLRU, and with min_ttl_ms (the image sets it, see
+    #                           etc/tmpfiles.d/lru-gen.conf) an OOM kill where the old LRU thrashes:
+    #                           evicting and re-reading the code of running processes while page
+    #                           cache still counts as reclaimable. Measured 2026-09-28, 1 GiB guest,
+    #                           memory taken slowly while libraries are re-read, 3 boots: the worst
+    #                           SSH login 611-1785 ms without it, 105-106 ms with it, and the
+    #                           process killed ~20% sooner (boot/memory_policy_test.go).
+    #
+    #                           Not ZRAM: in the same test it gave the runaway process more room
+    #                           and it was killed later (20 s against 14), with the worst login
+    #                           at 3.8 s. Compressed swap is for cold memory, which this was not.
+    #   PARAVIRT_SPINLOCKS      a vCPU waiting on a lock whose holder the host preempted yields
+    #                           to the host instead of spinning: the stall of an overcommitted host.
+    #   PARAVIRT_TIME_ACCOUNTING
+    #                           steal time accounted as such, so the guest can see the host kept
+    #                           it off a CPU (top's "st") rather than calling it its own load.
+    #   DEFAULT_FQ_CODEL        fq_codel, not pfifo_fast, on every interface: an SSH packet does
+    #                           not queue behind a saturating upload.
+    #   DETECT_HUNG_TASK, SOFTLOCKUP_DETECTOR, WQ_WATCHDOG
+    #                           a stuck task, CPU or workqueue is reported on the console. They
+    #                           report and do not panic.
+    for opt in LRU_GEN LRU_GEN_ENABLED PARAVIRT_SPINLOCKS PARAVIRT_TIME_ACCOUNTING \
+            NET_SCH_FQ_CODEL DEFAULT_FQ_CODEL DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR WQ_WATCHDOG; do
+        grep -q "^CONFIG_${opt}=y" .config || { echo "ERROR: CONFIG_${opt} is not enabled after olddefconfig!"; exit 1; }
+    done
+    grep -q '^CONFIG_DEFAULT_NET_SCH="fq_codel"' .config || { echo "ERROR: the default qdisc is not fq_codel!"; exit 1; }
+    for opt in BOOTPARAM_HUNG_TASK_PANIC BOOTPARAM_SOFTLOCKUP_PANIC; do
+        ! grep -q "^CONFIG_${opt}=y" .config || { echo "ERROR: CONFIG_${opt} would turn a report into a panic!"; exit 1; }
+    done
+
     grep -q "CONFIG_EXT4_FS=y" .config || (echo "ERROR: CONFIG_EXT4_FS not enabled (the base image cannot be mounted)!" ; exit 1)
     ! grep -q "CONFIG_EROFS_FS=y" .config || (echo "ERROR: CONFIG_EROFS_FS is back; it is dead weight here (see above)!" ; exit 1)
 
