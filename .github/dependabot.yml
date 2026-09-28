@@ -1,3 +1,9 @@
+# Every change to this file - a comment's too - starts a run of every ecosystem below, whatever
+# the schedule says: change it rarely. Each runs Monday morning, a week after a release
+# (cooldown), and rebase-strategy is disabled so a pull request is not remade each time main
+# moves: main's ruleset merges a branch only up to date with it, and "Update branch" or
+# `@dependabot rebase` brings one up when it is merged.
+#
 # What is here is what Dependabot can actually see, and nothing else.
 #
 # Not here, on purpose: every pin the machine is built from. They are in versions.yaml - the
@@ -23,6 +29,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Argentina/Buenos_Aires
+    rebase-strategy: disabled
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -35,3 +47,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Argentina/Buenos_Aires
+    rebase-strategy: disabled
+    cooldown:
+      default-days: 7
