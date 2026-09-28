@@ -113,8 +113,8 @@
 - name: mkosi
   kind: download
   source: https://github.com/systemd/mkosi/archive/refs/tags/v{version}.tar.gz
-  version: '27'
-  pin: f85d81da7bea87f98eabd5753935fbf81501ca83d8c40f5f90dca2d29bbf2827
+  version: '27.1'
+  pin: 33520d662e151d6c43e910c3840ac971fd6023e4488d9c10599e199a07f77d8b
   track: tags https://github.com/systemd/mkosi.git
   note: >-
     image/Dockerfile. Which mkosi assembles the tree decides what ends up in it. image/mkosi.conf's
