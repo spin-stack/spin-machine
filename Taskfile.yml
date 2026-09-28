@@ -304,9 +304,9 @@ tasks:
       - SPIN_BOOT_TRACE=1 go test ./boot/ -run TestBootTrace -v -timeout 10m
 
   test:
-    desc: Test the machine definition, with its coverage in coverage.out.
+    desc: Test the machine definition, under the race detector, with its coverage in coverage.out.
     cmds:
-      - go test -covermode=atomic -coverprofile=coverage.out ./...
+      - go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
   versions:
     desc: Say which of versions.yaml's pins are behind their upstream (exits 1 when any is).
@@ -357,6 +357,23 @@ tasks:
       - go tool testquality ./...
       - go tool refs
       - go tool mutate -stale-exempts
+      - task: lint:workflows
+
+  lint:workflows:
+    desc: actionlint over .github/, and every action pinned by its commit.
+    cmds:
+      # -shellcheck= because actionlint runs whatever shellcheck is on PATH: a runner has one and
+      # a laptop may not, and a gate whose answer depends on the machine is not a gate.
+      - go run github.com/rhysd/actionlint/cmd/actionlint@$(go tool versions version actionlint) -shellcheck=
+      - cmd: 'echo "OK: actionlint"'
+      # A tag is whatever its owner points it at, and release.yml holds the token that publishes
+      # the tarball every host boots its machines from; the comment is the version Dependabot moves.
+      - |
+        if grep -rnE '^\s*(- )?uses: [^./][^ ]*@' .github | grep -vE '@[0-9a-f]{40} # v[0-9]'; then
+          echo "an action above is used by a tag its owner can move: pin it by commit SHA, with '# vX.Y.Z' after it"
+          exit 1
+        fi
+        echo "OK: every action pinned by its commit"
 
   mutate:
     desc: >-

@@ -43,16 +43,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # task mutate diffs against the branch point, which a shallow clone does not have.
+          fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Set up Task
-        uses: go-task/setup-task@v2
+        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
 
       # `task lint` and `task test`, and not a list of steps: a second definition of what
       # the gate is, maintained in a workflow file, goes out of step with the first exactly
@@ -87,12 +90,29 @@ jobs:
 
       - name: Upload Go coverage HTML
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-go
           path: coverage.html
           retention-days: 7
           if-no-files-found: ignore
+
+      # The tests are green; this asks what they would have refused. On a pull request the diff
+      # is against what it merges into, on a push against what was there before.
+      - name: What this change broke, and whether a test noticed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+          else
+            base="$BEFORE"
+          fi
+          git rev-parse --verify "$base^{commit}" >/dev/null 2>&1 || base=HEAD~1
+          task mutate BASE="$base"
 
       # The steps below run spin-machine, so it has to exist. `task test` exercises the
       # machine package; only a build catches what the command around it does with it.
@@ -110,7 +130,7 @@ jobs:
       # fires on qemu/** alone, so a change to machine/machine.go — the likeliest way to
       # get this wrong — never reaches it.
       - name: Log in to GitHub Packages
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
