@@ -61,8 +61,8 @@
 - name: kernel
   kind: download
   source: https://cdn.kernel.org/pub/linux/kernel/v{major}.x/linux-{version}.tar.xz
-  version: 7.2.1
-  pin: 4158098c8a28ea8fbe068c855d3aa6341e03d06282add3cb9049f3a24e4557b3
+  version: 7.2.8
+  pin: 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941
   track: kernel-stable
   note: >-
     kernel/Dockerfile and the floor kernel in kernel/minimal. A new machine. The configuration

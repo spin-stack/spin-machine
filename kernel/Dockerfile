@@ -161,6 +161,14 @@ RUN <<EOT
     # nothing has mounted one since. It brought CONFIG_EROFS_FS_ZIP with LZMA at 16 streams,
     # DEFLATE and ZSTD decompressors for an image format this machine never reads. Removed
     # 2026-09-26; a kernel that needs it again adds the symbol and this assertion together.
+    # Pressure stall information, /proc/pressure/{cpu,memory,io}: how long tasks in the guest
+    # waited for each, which is the question when a busy VM stops answering, and what
+    # systemd-oomd acts on. Off, and on by default: a psi=1 on the command line would be one
+    # more thing a machine can be started without. It came in off with the first import and
+    # nothing said why; turned on 2026-09-28 with 7.2.8, one new machine for both.
+    grep -q "CONFIG_PSI=y" .config || (echo "ERROR: CONFIG_PSI not enabled (no /proc/pressure in the guest)!" ; exit 1)
+    ! grep -q "CONFIG_PSI_DEFAULT_DISABLED=y" .config || (echo "ERROR: CONFIG_PSI_DEFAULT_DISABLED is set (/proc/pressure is off without psi=1)!" ; exit 1)
+
     grep -q "CONFIG_EXT4_FS=y" .config || (echo "ERROR: CONFIG_EXT4_FS not enabled (the base image cannot be mounted)!" ; exit 1)
     ! grep -q "CONFIG_EROFS_FS=y" .config || (echo "ERROR: CONFIG_EROFS_FS is back; it is dead weight here (see above)!" ; exit 1)
 
