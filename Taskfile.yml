@@ -327,8 +327,8 @@ tasks:
 
   lint:
     desc: >-
-      Everything CI checks that is not a build: formatting, vet, the Taskfiles parse, and
-      every shell script is syntactically valid.
+      Everything CI checks that is not a build: formatting, vet, the Taskfiles parse, every
+      shell script is syntactically valid, and go-tools' gates over the Go and the prose.
     cmds:
       - |
         set -euo pipefail
@@ -350,6 +350,22 @@ tasks:
           bash -n "$f" || { echo "$f does not parse" >&2; exit 1; }
         done
         echo "OK: the shell scripts parse"
+      # go-tools' gates, at the version go.mod pins: every goroutine held to a context, no test
+      # that cannot fail, every path and task AGENTS.md and CLAUDE.md name resolves, and every
+      # mutate-exempt reason covers an edit mutate makes.
+      - go tool ctxlife
+      - go tool testquality ./...
+      - go tool refs
+      - go tool mutate -stale-exempts
+
+  mutate:
+    desc: >-
+      Break what the change against BASE touched and fail on an edit no test refuses
+      (task mutate BASE=origin/main).
+    vars:
+      BASE: '{{.BASE | default "origin/main"}}'
+    cmds:
+      - go tool mutate -base {{.BASE}} -max 2000
 
   verify:args:
     desc: >-
