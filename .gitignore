@@ -1,3 +1,5 @@
 _output/
 .cache/
 .task/
+coverage.out
+coverage.html

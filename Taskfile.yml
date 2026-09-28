@@ -304,9 +304,9 @@ tasks:
       - SPIN_BOOT_TRACE=1 go test ./boot/ -run TestBootTrace -v -timeout 10m
 
   test:
-    desc: Test the machine definition.
+    desc: Test the machine definition, with its coverage in coverage.out.
     cmds:
-      - go test ./...
+      - go test -covermode=atomic -coverprofile=coverage.out ./...
 
   versions:
     desc: Say which of versions.yaml's pins are behind their upstream (exits 1 when any is).

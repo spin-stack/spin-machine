@@ -63,6 +63,37 @@ jobs:
       - name: Test the machine definition
         run: task test
 
+      # always(): a failed suite is when the per-function numbers are wanted.
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ ! -f coverage.out ]; then
+            echo "coverage.out was not produced; the tests may have failed before coverage ran." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Go coverage"
+            echo
+            echo "**$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}')** total"
+            echo
+            echo '<details><summary>Function detail</summary>'
+            echo
+            echo '```'
+            go tool cover -func=coverage.out
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload Go coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-go
+          path: coverage.html
+          retention-days: 7
+          if-no-files-found: ignore
+
       # The steps below run spin-machine, so it has to exist. `task test` exercises the
       # machine package; only a build catches what the command around it does with it.
       - name: Build the tools
