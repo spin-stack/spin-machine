@@ -8,18 +8,29 @@ name: QEMU
 # than in a VM that will not start weeks later.
 
 on:
-# qemu/** and nothing else. The version pin is the ARG in qemu/Dockerfile, so a bump is a
-# change under qemu/ and fires this. The root Taskfile is deliberately not listed: it holds
-# only how many jobs to compile with and which cache to use, so listing it would rebuild
-# QEMU, the kernel and the base image for an edit that cannot change any of them.
+# qemu/**, and versions.yaml with the tool that reads it, because that is where the pins are.
+# The root Taskfile is deliberately not listed: it holds only how many jobs to compile with and
+# which cache to use, so listing it would rebuild QEMU, the kernel and the base image for an
+# edit that cannot change any of them.
+#
+# versions.yaml is listed by every lane that builds from it, and a path filter cannot tell a
+# QEMU bump from an e2fsprogs one. The `changed` job below can: hack/touches compares what the
+# QEMU build is handed at the base and here, and the build is skipped when the change does not
+# reach it. It is given these paths but versions.yaml, and a change to any of them builds.
   push:
     branches: [main]
     paths:
       - qemu/**
+      - versions.yaml
+      - versions/**
+      - cmd/versions/**
       - .github/workflows/qemu.yml
   pull_request:
     paths:
       - qemu/**
+      - versions.yaml
+      - versions/**
+      - cmd/versions/**
       - .github/workflows/qemu.yml
   workflow_dispatch:
 
@@ -33,7 +44,38 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
+  # Whether this change can reach QEMU at all; see the note on the triggers. Skipped, the build
+  # job reports as skipped, which a required check counts as passed.
+  changed:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.touches.outputs.build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The base commit has to be here to be compared against.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Does the change reach QEMU
+        id: touches
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          build=$(hack/touches "$BASE" alpine qemu -- \
+            qemu versions cmd/versions .github/workflows/qemu.yml)
+          echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
+
   build:
+    needs: changed
+    if: needs.changed.outputs.build == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # A cold build is tens of minutes and a warm one is a cache restore, so the spread is
     # wide and the ceiling has to sit above the cold case. What it is really for is the
@@ -190,7 +232,7 @@ jobs:
             --cache-from type=gha,scope=qemu \
             --cache-from type=gha,scope=qemu-image \
             --cache-to type=gha,scope=qemu-image,mode=max \
-            --build-arg QEMU_VERSION=${{ steps.qemu.outputs.version }} \
+            $(go run ./cmd/versions args alpine qemu) \
             --build-arg JOBS=4 \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --tag ghcr.io/${{ github.repository }}/qemu:${{ steps.qemu.outputs.version }} \

@@ -21,9 +21,10 @@
 # The same pinned toolchain as the kernel, deliberately: one Debian to think about rather
 # than two, and moving it is one decision. It does not have to be the kernel's — nothing
 # here enters a fingerprint, because nothing here ships — but there is no reason for it to
-# differ.
-ARG DEBIAN_IMAGE=debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
-ARG DEBIAN_SNAPSHOT=20260914T000000Z
+# differ: the two are versions.yaml's `debian` and `debian-snapshot`, handed in by
+# qemu/Taskfile.yml.
+ARG DEBIAN_IMAGE
+ARG DEBIAN_SNAPSHOT
 
 FROM ${DEBIAN_IMAGE} AS builder
 
@@ -51,7 +52,8 @@ RUN --mount=type=cache,sharing=locked,id=qboot-aptlib,target=/var/lib/apt \
     apt-get update && apt-get install -y --no-install-recommends \
         gcc binutils patch git ca-certificates
 
-# The upstream commit, and the SHA-256 of the tar `git archive` writes for it.
+# The upstream commit, the branch it is on, and the SHA-256 of the tar `git archive` writes for
+# it: versions.yaml's `qboot`.
 #
 # Two checks and not one, because they answer different questions. git verifies that the tree
 # is the one this commit names — that is what a commit hash is — and the tarball checksum
@@ -62,11 +64,12 @@ RUN --mount=type=cache,sharing=locked,id=qboot-aptlib,target=/var/lib/apt \
 #
 # qboot's last upstream commit is 2022-09-16. That is not an argument against measuring it
 # and it is an argument against shipping it.
-ARG QBOOT_COMMIT=8ca302e86d685fa05b16e2b208888243da319941
-ARG QBOOT_ARCHIVE_SHA256=6fb3842d9be9c7488ffef33e5aa2cc430a5065337ad6239e3facf981b38748d2
+ARG QBOOT_VERSION
+ARG QBOOT_COMMIT
+ARG QBOOT_ARCHIVE_SHA256
 
 WORKDIR /build
-RUN git clone --quiet https://github.com/bonzini/qboot.git upstream && \
+RUN git clone --quiet --branch "${QBOOT_VERSION}" https://github.com/bonzini/qboot.git upstream && \
     git -C upstream archive "${QBOOT_COMMIT}" > upstream.tar && \
     echo "${QBOOT_ARCHIVE_SHA256}  upstream.tar" | sha256sum -c -
 

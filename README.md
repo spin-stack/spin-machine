@@ -79,7 +79,8 @@ task release       # one tarball, one version
 
 Each part's targets live beside what they build — `task qemu:build` is next to
 `qemu/Dockerfile` — and the root `Taskfile.yml` holds the vars every part reads and the
-targets that cross all of them.
+targets that cross all of them. Every version, digest and commit a build takes from outside is
+in `versions.yaml`: `task versions` says what is behind, `task bump NAME=...` moves one.
 
 ## Where to read next
 

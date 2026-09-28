@@ -25,10 +25,11 @@
 # 2.40, pahole 1.24) on 2026-09-14, in the same release that made the build reproducible, so
 # the fleet paid for one fingerprint change rather than two.
 #
-# To move it: a new digest (`docker buildx imagetools inspect debian:trixie`) and a new
-# snapshot date, together, and the boot measured again (`task boot:bench`).
-ARG DEBIAN_IMAGE=debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
-ARG DEBIAN_SNAPSHOT=20260914T000000Z
+# Both are versions.yaml's `debian` and `debian-snapshot`, handed in by kernel/Taskfile.yml with
+# no default here. To move them: `task bump NAME=debian` and `task bump NAME=debian-snapshot`,
+# together, and the boot measured again (`task boot:bench`).
+ARG DEBIAN_IMAGE
+ARG DEBIAN_SNAPSHOT
 
 FROM ${DEBIAN_IMAGE} AS kernel-build-base
 
@@ -82,13 +83,14 @@ RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
         # lines while inspecting the bridge driver.
         apparmor procps
 
-ARG KERNEL_VERSION="7.2.1"
+# The version, and the tarball it is made of by content, from versions.yaml. See the same
+# argument in qemu/Dockerfile: https says who sent it, not what they sent, and this is the one
+# input that comes from outside the repository. It is also what makes the SOURCES file in a
+# release true.
+ARG KERNEL_VERSION
+ARG KERNEL_SHA256
 ARG KERNEL_ARCH="x86_64"
 ARG KERNEL_NPROC="16"
-# The tarball this kernel is made of, by content. See the same argument in qemu/Dockerfile:
-# https says who sent it, not what they sent, and this is the one input that comes from
-# outside the repository. It is also what makes the SOURCES file in a release true.
-ARG KERNEL_SHA256=4158098c8a28ea8fbe068c855d3aa6341e03d06282add3cb9049f3a24e4557b3
 
 # moby's check-config.sh, with the SELinux and AppArmor checks removed: they are host
 # policy, not kernel features this guest needs, and they fail a config that is correct.

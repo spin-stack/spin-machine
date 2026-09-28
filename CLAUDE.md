@@ -194,7 +194,10 @@ recipes; a tarball of GPL binaries carries obligations of its own, and the relea
 they are answered.
 
 An input downloaded from outside is pinned by hash and checked on every build, not only
-after a download — the caches outlive the builds that filled them.
+after a download — the caches outlive the builds that filled them. The pin is written once, in
+`versions.yaml`, and handed to the Dockerfile as a build argument with no default; a test fails
+on a digest or a commit written anywhere else. `task bump NAME=...` moves one entry, and the
+entry's note says what the bump is checked with.
 
 ## Versions
 

@@ -2,7 +2,7 @@ version: '3'
 
 vars:
   E2FSPROGS_VERSION:
-    sh: sed -n 's/^ARG E2FSPROGS_VERSION=//p' e2fsprogs/Dockerfile
+    sh: go run ./cmd/versions version e2fsprogs
 
 tasks:
   build:
@@ -17,7 +17,7 @@ tasks:
           --platform linux/amd64 \
           --cache-from {{.E2FSPROGS_CACHE_FROM}} \
           --cache-to {{.E2FSPROGS_CACHE_TO}} \
-          --build-arg E2FSPROGS_VERSION={{.E2FSPROGS_VERSION}} \
+          $({{.VERSIONS}} args alpine e2fsprogs) \
           --output type=local,dest={{.OUTPUT_ABS}} \
           .
       - task: verify

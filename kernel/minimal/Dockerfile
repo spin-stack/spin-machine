@@ -22,8 +22,10 @@
 # Built from tinyconfig rather than by subtracting from the release config, because
 # subtracting leaves whatever nobody thought to name — the same reason qemu/devices.mak is
 # an allowlist.
-ARG DEBIAN_IMAGE=debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
-ARG DEBIAN_SNAPSHOT=20260914T000000Z
+#
+# The same toolchain and kernel source as kernel/Dockerfile, from the same versions.yaml entries.
+ARG DEBIAN_IMAGE
+ARG DEBIAN_SNAPSHOT
 
 FROM ${DEBIAN_IMAGE} AS builder
 
@@ -46,8 +48,6 @@ RUN --mount=type=cache,sharing=locked,id=kmin-aptlib,target=/var/lib/apt \
         bc bison flex libelf-dev libssl-dev make gcc binutils xz-utils curl ca-certificates \
         pahole cpio
 
-# Passed in rather than pinned again: kernel/Taskfile.yml reads both out of kernel/Dockerfile,
-# which is the one copy. A second pin here would be a second thing to bump.
 ARG KERNEL_VERSION
 ARG KERNEL_SHA256
 ARG KERNEL_ARCH=x86_64

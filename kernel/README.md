@@ -48,10 +48,10 @@ Every change to the config invalidates every template in the fleet, which is the
 it should not be quiet. The kernel workflow runs `hack/fingerprint-diff` and puts the
 answer in its summary.
 
-`Dockerfile` pins its toolchain — Debian trixie by image digest, its packages from
+`Dockerfile` builds with a pinned toolchain — Debian trixie by image digest, its packages from
 snapshot.debian.org at a fixed date — because a different compiler is a different `vmlinux`,
-which is a different fingerprint. It moves on purpose, not when Debian publishes a point
-release.
+which is a different fingerprint. Both are `versions.yaml` entries (`debian`,
+`debian-snapshot`), and they move on purpose, not when Debian publishes a point release.
 
 And the build is reproducible: two builds from the same inputs produce the same `vmlinux`,
 byte for byte. That needs trixie's pahole 1.30, which is deterministic with `-j`. Bookworm's

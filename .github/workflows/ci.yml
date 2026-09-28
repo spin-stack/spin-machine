@@ -86,13 +86,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Seconds, against the tens of minutes this workflow deliberately does not spend:
-      # the runtime image qemu.yml published for the version qemu/Dockerfile pins, unpacked
+      # the runtime image qemu.yml published for the version versions.yaml pins, unpacked
       # into the same _output/ tree a build would write.
       #
       # continue-on-error, for one case that is not a fault: a pull request that bumps the
       # pin asks for a version no one has published yet, because publishing happens from
-      # main. That pull request changes qemu/**, so qemu.yml builds the binary and runs the
-      # very same check against it — which is why this may say so and stop, and the step
+      # main. That pull request moves qemu in versions.yaml, so qemu.yml builds the binary and
+      # runs the very same check against it — which is why this may say so and stop, and the step
       # after it is skipped rather than run against some other QEMU. Any other pull failure
       # skips the check too, and shows as a failed step in the run.
       - name: Fetch the pinned QEMU

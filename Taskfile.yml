@@ -13,6 +13,7 @@
 #   task shell            boot the machine and look around inside it
 #   task test             the machine definition
 #   task release          one tarball, one version
+#   task versions         which pins in versions.yaml are behind; task bump NAME=... moves one
 #
 # What is in this file is the vars every part reads and the targets that cross all of them.
 # Each part's own targets live beside the thing they build — qemu/Taskfile.yml,
@@ -81,17 +82,22 @@ vars:
         || git describe --tags --always --dirty 2>/dev/null \
         || echo dev)}"
 
-  # The version pins are NOT here. Each lives once, in the Dockerfile that builds the
-  # thing, and the Taskfile beside it reads that — see qemu/Taskfile.yml.
+  # The version pins are NOT here. They are in versions.yaml, and each part's Taskfile hands
+  # the Dockerfile the entries it builds from (`{{.VERSIONS}} args <name>...`).
   #
-  # They were here as well as there, which is one duplication and one worse thing: this
-  # file had to be in every workflow's path filter, since a version bump in it must rebuild
-  # what it pins. So `task lint` gaining a check, or a comment being fixed, fired QEMU, the
-  # kernel and the base image — three builds, tens of minutes each, for an edit that could
-  # not have changed any of them.
+  # They were once here, and this file had to be in every workflow's path filter, since a
+  # bump in it must rebuild what it pins. So `task lint` gaining a check, or a comment being
+  # fixed, fired QEMU, the kernel and the base image — three builds, tens of minutes each, for
+  # an edit that could not have changed any of them. versions.yaml is in every path filter
+  # too, and the same thing is avoided differently: each workflow first asks hack/touches
+  # whether the change reaches its own entries, and skips the build when it does not.
   #
   # What is left here is what does not change an artefact: how many jobs to compile with,
   # where to put the output, which cache backend to use.
+  #
+  # `go run` rather than a binary in _output: the tool is only ever run from a checkout, and
+  # Go's build cache makes the second run of it as fast as a binary would be.
+  VERSIONS: go run ./cmd/versions
   QEMU_JOBS: '{{.QEMU_JOBS | default 8}}'
   KERNEL_ARCH: '{{.KERNEL_ARCH | default "x86_64"}}'
   KERNEL_NPROC: '{{.KERNEL_NPROC | default 8}}'
@@ -284,6 +290,21 @@ tasks:
     cmds:
       - go test ./...
 
+  versions:
+    desc: Say which of versions.yaml's pins are behind their upstream (exits 1 when any is).
+    cmds:
+      - '{{.VERSIONS}} check'
+
+  bump:
+    desc: >-
+      Pin one entry of versions.yaml at a version, the newest by default
+      (task bump NAME=qemu [VERSION=11.2.0]). Nothing is built: the entry's note says what the
+      bump is checked with.
+    requires:
+      vars: [NAME]
+    cmds:
+      - '{{.VERSIONS}} bump {{.NAME}} {{.VERSION}}'
+
   lint:
     desc: >-
       Everything CI checks that is not a build: formatting, vet, the Taskfiles parse, and
@@ -291,7 +312,7 @@ tasks:
     cmds:
       - |
         set -euo pipefail
-        unformatted=$(gofmt -l machine cmd boot)
+        unformatted=$(gofmt -l machine cmd boot versions)
         if [ -n "$unformatted" ]; then
           echo "not gofmt'd:"; echo "$unformatted"; exit 1
         fi
@@ -304,7 +325,7 @@ tasks:
       - cmd: 'echo "OK: the Taskfiles parse"'
       - |
         set -euo pipefail
-        for f in hack/release hack/fingerprint-diff image/build.sh image/mkosi.postinst.chroot \
+        for f in hack/release hack/fingerprint-diff hack/touches image/build.sh image/mkosi.postinst.chroot \
                  image/mkosi.extra/usr/local/lib/spin-base/*.sh boot/testdata/*.sh; do
           bash -n "$f" || { echo "$f does not parse" >&2; exit 1; }
         done
@@ -362,9 +383,8 @@ tasks:
     desc: Build everything and pack one versioned tarball.
     cmds:
       - task: build
-      # No QEMU_VERSION or KERNEL_VERSION: hack/release reads both from the Dockerfiles,
-      # the same way it already reads the tarball checksums. Passing them from here would
-      # put the pin back in this file, where a workflow would have to watch it.
+      # No QEMU_VERSION or KERNEL_VERSION: hack/release reads them, and the tarball
+      # checksums, from versions.yaml itself.
       - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_ABS}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" hack/release
 
   verify:consumer:

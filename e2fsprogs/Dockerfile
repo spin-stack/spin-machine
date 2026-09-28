@@ -16,12 +16,13 @@
 # filesystem is populated with every file owned by root without building it as root. Upstream
 # would otherwise dlopen() libarchive.so at run time, and a static binary cannot.
 
-ARG ALPINE_VERSION=3.24
-FROM alpine:${ALPINE_VERSION} AS builder
+# The pins are versions.yaml's, handed in by e2fsprogs/Taskfile.yml, with no defaults here.
+# The Alpine is the one QEMU is built on: one musl to think about.
+ARG ALPINE_IMAGE
+FROM ${ALPINE_IMAGE} AS builder
 
-ARG E2FSPROGS_VERSION=1.47.4
-# From sha256sums.asc beside the tarball on kernel.org.
-ARG E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
+ARG E2FSPROGS_VERSION
+ARG E2FSPROGS_SHA256
 ARG JOBS=8
 
 SHELL ["/bin/sh", "-o", "pipefail", "-c"]

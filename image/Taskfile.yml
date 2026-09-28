@@ -32,6 +32,7 @@ tasks:
           --platform linux/amd64 \
           --cache-from {{.IMAGE_CACHE_FROM}} \
           --cache-to {{.IMAGE_CACHE_TO}} \
+          $({{.VERSIONS}} args ubuntu mkosi) \
           --tag {{.IMAGE_BUILDER_TAG}} \
           --load \
           .

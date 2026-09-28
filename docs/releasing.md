@@ -50,7 +50,7 @@ So a release answers them:
   and carries the written offer.
 - `packages.txt` lists every package in the base image with its exact version, which is
   what `apt-get source <package>=<version>` needs.
-- The upstream tarballs are pinned by SHA-256 in the Dockerfiles and **verified on every
+- The upstream tarballs are pinned by SHA-256 in `versions.yaml` and **verified on every
   build**, not only after a download — the source lives in a cache mount that outlives the
   build that filled it. That is also what makes `SOURCES` true rather than aspirational:
   what it names is what was compiled.

@@ -10,15 +10,22 @@ name: Kernel
 # noticed.
 
 on:
-# kernel/** and nothing else; see the note in qemu.yml.
+# kernel/**, and versions.yaml when it moves the kernel or its toolchain; see the note in
+# qemu.yml.
   push:
     branches: [main]
     paths:
       - kernel/**
+      - versions.yaml
+      - versions/**
+      - cmd/versions/**
       - .github/workflows/kernel.yml
   pull_request:
     paths:
       - kernel/**
+      - versions.yaml
+      - versions/**
+      - cmd/versions/**
       - .github/workflows/kernel.yml
   workflow_dispatch:
 
@@ -31,12 +38,48 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
+  # Whether this change can reach the kernel; see the note in qemu.yml.
+  changed:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.touches.outputs.build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Does the change reach the kernel
+        id: touches
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          build=$(hack/touches "$BASE" debian debian-snapshot kernel -- \
+            kernel versions cmd/versions .github/workflows/kernel.yml)
+          echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
+
   build:
+    needs: changed
+    if: needs.changed.outputs.build == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # The Taskfile hands the build its pins with `go run ./cmd/versions`.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Set up Task
         uses: go-task/setup-task@v2

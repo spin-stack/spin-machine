@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# Whether the commits since BASE can change what one part builds. Prints true or false.
+#
+#   hack/touches BASE <entry>... -- <path>...
+#
+# true when anything under the part's paths changed, or when versions.yaml hands the part's
+# Dockerfiles other build arguments than it did at BASE; false otherwise.
+#
+# It exists because versions.yaml has to be in the path filter of every workflow that builds
+# from it, and a path filter cannot say which lines of a file changed. Without this, a bump of
+# e2fsprogs rebuilds QEMU and the kernel: tens of minutes each, for a change that cannot reach
+# them. The comparison is of `versions args`, which is exactly what a Dockerfile is handed, so
+# a note edited in versions.yaml builds nothing and a moved digest builds what reads it.
+#
+# It errs towards building. No BASE (a workflow_dispatch, the first push of a branch), a BASE
+# this clone does not have, or a versions.yaml at BASE that cannot be read for these entries
+# (the commit that introduced the file, or an entry that did not exist yet) is true.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+base=${1:-}
+shift || true
+entries=()
+while [ $# -gt 0 ] && [ "$1" != -- ]; do
+  entries+=("$1")
+  shift
+done
+[ "${1:-}" = -- ] || { echo "usage: hack/touches BASE <entry>... -- <path>..." >&2; exit 2; }
+shift
+[ ${#entries[@]} -gt 0 ] && [ $# -gt 0 ] || { echo "usage: hack/touches BASE <entry>... -- <path>..." >&2; exit 2; }
+
+if [ -z "${base}" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+  echo true
+  exit 0
+fi
+
+if ! git diff --quiet "${base}" HEAD -- "$@"; then
+  echo true
+  exit 0
+fi
+
+was=$(mktemp)
+trap 'rm -f "${was}"' EXIT
+if ! git show "${base}:versions.yaml" > "${was}" 2>/dev/null ||
+   ! before=$(go run ./cmd/versions args -file "${was}" "${entries[@]}" 2>/dev/null); then
+  echo true
+  exit 0
+fi
+after=$(go run ./cmd/versions args "${entries[@]}")
+
+if [ "${before}" = "${after}" ]; then
+  echo false
+else
+  echo true
+fi

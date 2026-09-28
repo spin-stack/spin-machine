@@ -54,11 +54,14 @@
 #   --without-default-features       then every device q35 needs is ours to enumerate, and
 #                                    a missing one is a link error or an unusable machine.
 
-ARG ALPINE_VERSION=3.24
+# The pins - the Alpine image by digest, QEMU's version and its tarball's sha256 - are
+# versions.yaml's, handed in by qemu/Taskfile.yml. None has a default here: a build that was not
+# handed one fails rather than building something the file does not say.
+ARG ALPINE_IMAGE
 
-FROM alpine:${ALPINE_VERSION} AS builder
+FROM ${ALPINE_IMAGE} AS builder
 
-ARG QEMU_VERSION=11.1.1
+ARG QEMU_VERSION
 # The tarball this build is made of, by content.
 #
 # https is a claim about who you are talking to, not about what they sent, and this
@@ -69,7 +72,7 @@ ARG QEMU_VERSION=11.1.1
 #
 # It also makes usr/share/spin-stack/SOURCES in a release true rather than aspirational:
 # what that file names is what was built.
-ARG QEMU_SHA256=079ffbff8a7111bbc89022107cbabf3bbfd614d5fc9d7cc675991196aca12482
+ARG QEMU_SHA256
 ARG JOBS=8
 # Bump when the configure flags, the base image, or qemu/devices.mak change: the build
 # directories live in cache mounts and configure only runs when one holds no config.status,
@@ -395,7 +398,7 @@ RUN for b in /opt/qemu/bin/qemu-system-x86_64 /opt/qemu/bin/qemu-img \
 # linking makes here. An Ubuntu base with a hand-written apt list would have to be kept in
 # step with what the builder links against, and the way that is found to be wrong is a CI
 # run.
-FROM alpine:${ALPINE_VERSION} AS runtime
+FROM ${ALPINE_IMAGE} AS runtime
 
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu-tcg/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64-tcg

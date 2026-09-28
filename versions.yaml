@@ -1,0 +1,137 @@
+# Every input this repository pins from outside it: a base image, an upstream tarball, a
+# commit, the day a package archive is read as of.
+#
+# This file is the only place one is written. The Dockerfiles declare each as an ARG with no
+# default and are handed it (`go run ./cmd/versions args <name>...`); the Taskfiles and
+# hack/release read from here; versions/gate_test.go fails on a digest or a commit written
+# anywhere else, and on a Dockerfile ARG that falls back to a default of its own.
+#
+# `task versions` says what is behind, and `task bump NAME=<name> [VERSION=...]` resolves the
+# pin of a version and rewrites that entry's two lines and nothing else. Nothing is built by a
+# bump. What a bump is then checked with is the entry's note.
+#
+# A bump of qemu, kernel, debian or debian-snapshot is a new machine: a different QEMU binary
+# or vmlinux is a different fingerprint, and every template in existence stops matching (see
+# CLAUDE.md, the first rule). The lane that builds it says so on its summary. That is not a
+# reason not to bump; it is a reason for the bump to be its own commit.
+#
+# Each entry:
+#   kind     image:    an OCI image; version its tag, pin its digest.
+#            git:      a repository built here; version the branch it is on, pin the commit.
+#            download: a file; source its URL with {version} (and {major}), pin its sha256.
+#            date:     a point in time; version the date, no pin.
+#   track    how check finds the newest:
+#            digest          the tag's digest now: the version stays, the image moves
+#            today           today's date
+#            kernel-stable   the newest release of the same stable series
+#            tags <repo>     the highest version-numbered tag of a git repository
+#            branch          the commit the version's branch is at now
+#   note     why it is pinned where it is, and what a bump has to be checked with.
+
+- name: qemu
+  kind: download
+  source: https://download.qemu.org/qemu-{version}.tar.xz
+  version: 11.1.1
+  pin: 079ffbff8a7111bbc89022107cbabf3bbfd614d5fc9d7cc675991196aca12482
+  track: tags https://gitlab.com/qemu-project/qemu.git
+  note: >-
+    qemu/Dockerfile. A new machine. After the bump: `task qemu:build verify:args`, and the lane's
+    fingerprint-diff says what it breaks. The build directories' cache mounts are keyed by the
+    version, so QEMU_CONFIG_REV does not move with it.
+    A device renamed or dropped upstream fails qemu:verify or verify:args, and is fixed in
+    qemu/devices.mak or the machine package, not by removing the check.
+
+- name: alpine
+  kind: image
+  source: alpine
+  version: '3.24'
+  pin: sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+  track: digest
+  note: >-
+    the musl builder of the static QEMU and e2fsprogs, and the base of the QEMU runtime image.
+    Its apk packages are the live archive's, so the digest pins the image and not everything
+    linked into the binaries. After the bump: bump QEMU_CONFIG_REV in qemu/Dockerfile - its
+    build directory lives in a cache mount configured under the old base, which is how a
+    dynamically linked QEMU was once built from a Dockerfile that says --static - then
+    `task qemu:build e2fsprogs:build`. A new series (3.25) is a decision, not a bump.
+
+- name: kernel
+  kind: download
+  source: https://cdn.kernel.org/pub/linux/kernel/v{major}.x/linux-{version}.tar.xz
+  version: 7.2.1
+  pin: 4158098c8a28ea8fbe068c855d3aa6341e03d06282add3cb9049f3a24e4557b3
+  track: kernel-stable
+  note: >-
+    kernel/Dockerfile and the floor kernel in kernel/minimal. A new machine. The configuration
+    is kernel/config-<version>-x86_64: rename it to the new version in the same commit, then
+    `task kernel:build`, `task boot:bench`. A series that is over is a decision, not a bump.
+
+- name: debian
+  kind: image
+  source: debian
+  version: trixie
+  pin: sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+  track: digest
+  note: >-
+    the kernel's toolchain (and qboot's and the floor kernel's), with its packages from
+    debian-snapshot. A new toolchain is a new vmlinux and so a new machine: bump it together
+    with debian-snapshot, then `task kernel:build`, and check the vmlinux is still reproducible
+    (kernel/Dockerfile, two --no-cache builds) before `task boot:bench`.
+
+- name: debian-snapshot
+  kind: date
+  version: 20260914T000000Z
+  track: today
+  note: >-
+    the Debian archive the kernel's toolchain is installed from, as it stood then, and the
+    kernel's build timestamp. Moves with debian.
+
+- name: e2fsprogs
+  kind: download
+  source: https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v{version}/e2fsprogs-{version}.tar.xz
+  version: 1.47.4
+  pin: fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
+  track: tags https://git.kernel.org/pub/scm/fs/ext2/e2fsprogs.git
+  note: >-
+    e2fsprogs/Dockerfile: mkfs.ext4 and the mke2fs.conf the base image's filesystem is made
+    with. Not a new machine, but a new base image: a feature the new mke2fs.conf defaults to
+    is one the kernel has to read. After the bump: `task e2fsprogs:build image:build`, then
+    boot the image (`task shell`). The pin can be checked against sha256sums.asc beside the
+    tarball.
+
+- name: ubuntu
+  kind: image
+  source: ubuntu
+  version: '26.04'
+  pin: sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+  track: digest
+  note: >-
+    image/Dockerfile: the container mkosi runs in, and where its apt and keyring come from.
+    The base image's packages come from the archive, not from this image. After the bump:
+    `task image:build`.
+
+- name: mkosi
+  kind: download
+  source: https://github.com/systemd/mkosi/archive/refs/tags/v{version}.tar.gz
+  version: '27'
+  pin: f85d81da7bea87f98eabd5753935fbf81501ca83d8c40f5f90dca2d29bbf2827
+  track: tags https://github.com/systemd/mkosi.git
+  note: >-
+    image/Dockerfile. Which mkosi assembles the tree decides what ends up in it. image/mkosi.conf's
+    MinimumVersion says the same version, and a test holds the two together. After the bump:
+    `task image:build`, then `task shell` and `task boot:bench`: a new mkosi can change the
+    tree without failing the build.
+
+- name: qboot
+  kind: git
+  source: https://github.com/bonzini/qboot.git
+  version: master
+  pin: 8ca302e86d685fa05b16e2b208888243da319941
+  archive: 6fb3842d9be9c7488ffef33e5aa2cc430a5065337ad6239e3facf981b38748d2
+  track: branch
+  note: >-
+    the firmware experiment in qemu/qboot, never in a release. archive is the sha256 of what
+    `git archive` writes for the commit with debian's git, which nothing but a build can
+    compute, so a bump is by hand: the commit, a build, the archive's sum from its failure,
+    write-pointer.patch rebased onto it, NOTICE and qemu/qboot/README.md restated, and
+    `task boot:firmware` again.

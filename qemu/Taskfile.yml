@@ -1,15 +1,14 @@
 version: '3'
 
 # QEMU. See qemu/Dockerfile for what is built and why the flags are what they are; the
-# vars these tasks read (QEMU_VERSION, the cache backends, OUTPUT_DIR) are in the root
-# Taskfile.yml, which is where the version pin lives.
+# cache backends and OUTPUT_DIR are in the root Taskfile.yml, and the pins in versions.yaml.
 
-# The pinned version, read from the Dockerfile that uses it so there is one copy. An
-# override still works — `task qemu:build QEMU_VERSION=11.2.0` — but the committed pin is
-# the ARG, which is also what the cache-mount ids and the source URL are built from.
+# The pinned version, for the image tags. The build is handed it with its tarball's sha256 by
+# `versions args`, never from here: a version overridden on the command line and a checksum
+# that was not would be a build that fails on the checksum, at best.
 vars:
   QEMU_VERSION:
-    sh: sed -n 's/^ARG QEMU_VERSION=//p' qemu/Dockerfile
+    sh: go run ./cmd/versions version qemu
 
   # Where the runtime image is published, which `fetch` below reads back. The tag is the
   # pinned version, so asking for this repository's QEMU and asking for the one this commit
@@ -34,7 +33,7 @@ tasks:
           --platform linux/amd64 \
           --cache-from {{.QEMU_CACHE_FROM}} \
           --cache-to {{.QEMU_CACHE_TO}} \
-          --build-arg QEMU_VERSION={{.QEMU_VERSION}} \
+          $({{.VERSIONS}} args alpine qemu) \
           --build-arg JOBS={{.QEMU_JOBS}} \
           --output type=local,dest={{.OUTPUT_ABS}} \
           .
@@ -51,6 +50,7 @@ tasks:
       - |
         docker buildx build \
           --file qemu/qboot/Dockerfile \
+          $({{.VERSIONS}} args debian debian-snapshot qboot) \
           --target extract \
           --platform linux/amd64 \
           --cache-from {{.QBOOT_CACHE_FROM}} \
@@ -141,7 +141,7 @@ tasks:
           --target runtime \
           --platform linux/amd64 \
           --cache-from {{.QEMU_CACHE_FROM}} \
-          --build-arg QEMU_VERSION={{.QEMU_VERSION}} \
+          $({{.VERSIONS}} args alpine qemu) \
           --build-arg JOBS={{.QEMU_JOBS}} \
           --tag {{.QEMU_IMAGE}}:{{.QEMU_VERSION}} \
           --load \

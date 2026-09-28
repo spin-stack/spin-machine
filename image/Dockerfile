@@ -15,7 +15,10 @@
 # this is where mkosi's keyring and apt come from. Debian's mkosi can build an Ubuntu image
 # too, with ubuntu-keyring installed by hand; using the same distribution removes the
 # question.
-FROM ubuntu:26.04
+#
+# By digest, from versions.yaml (image/Taskfile.yml hands it in), like every other base here.
+ARG UBUNTU_IMAGE
+FROM ${UBUNTU_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -63,8 +66,9 @@ RUN --mount=type=cache,sharing=locked,id=image-aptlib,target=/var/lib/apt \
 # stays out of the container.
 #
 # By content, like the kernel and QEMU tarballs: https says who sent it, not what they sent.
-ARG MKOSI_VERSION=27
-ARG MKOSI_SHA256=f85d81da7bea87f98eabd5753935fbf81501ca83d8c40f5f90dca2d29bbf2827
+# Both from versions.yaml.
+ARG MKOSI_VERSION
+ARG MKOSI_SHA256
 RUN --mount=type=cache,sharing=locked,id=image-mkosi-src,target=/var/cache/mkosi-src \
     tarball="/var/cache/mkosi-src/mkosi-${MKOSI_VERSION}.tar.gz" && \
     if [ ! -f "$tarball" ]; then \
