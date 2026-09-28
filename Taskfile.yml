@@ -299,12 +299,14 @@ tasks:
   bump:
     desc: >-
       Pin one entry of versions.yaml at a version, the newest by default
-      (task bump NAME=qemu [VERSION=11.2.0]). Nothing is built: the entry's note says what the
+      (task bump NAME=qemu [TO=11.2.0]). Nothing is built: the entry's note says what the
       bump is checked with.
     requires:
       vars: [NAME]
+    # TO and not VERSION: VERSION is this file's, the release's own `git describe`, and it is
+    # always set. Named VERSION, a bump with no version asked for mkosi v20260927.01-2-g30b717b.
     cmds:
-      - '{{.VERSIONS}} bump {{.NAME}} {{.VERSION}}'
+      - '{{.VERSIONS}} bump {{.NAME}} {{.TO}}'
 
   lint:
     desc: >-

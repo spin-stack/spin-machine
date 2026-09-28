@@ -6,7 +6,7 @@
 # hack/release read from here; versions/gate_test.go fails on a digest or a commit written
 # anywhere else, and on a Dockerfile ARG that falls back to a default of its own.
 #
-# `task versions` says what is behind, and `task bump NAME=<name> [VERSION=...]` resolves the
+# `task versions` says what is behind, and `task bump NAME=<name> [TO=...]` resolves the
 # pin of a version and rewrites that entry's two lines and nothing else. Nothing is built by a
 # bump. What a bump is then checked with is the entry's note.
 #
