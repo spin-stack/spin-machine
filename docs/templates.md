@@ -61,7 +61,8 @@ captured has already written to its disk, and the state no longer describes it.
 leave RAM in the file backing it instead of writing it into the stream. Without it the state
 file carries the guest's memory — 92 MB rather than 356 KB for the same 2 GiB guest — which is
 the right thing when one file has to be copied to another host, and the wrong thing here.
-`spin-machine save` does it without the capability for exactly that reason.
+`spin-machine save --template` does all of this and refuses a VM whose RAM is not a shared
+memory file; without `--template` it writes a portable save, memory included.
 
 ## Restoring
 
@@ -71,7 +72,8 @@ Start the machine with the same memory file, mapped **private**, and no state:
     spec.Memory.Shared  = false          // MAP_PRIVATE, opened read-only
     spec.IncomingDefer  = true           // -incoming defer
 
-Then, over QMP:
+Then, over QMP — or `spin-machine restore --template`, against a VM booted with
+`--incoming defer`:
 
     migrate-set-capabilities  {"capabilities": [{"capability": "x-ignore-shared", "state": true}]}
     migrate-incoming          {"uri": "file:/path/to/template.state"}
@@ -116,6 +118,40 @@ Two things a caller needs to know about that:
   costing 4.8 ms and freeing nothing. Against a colder cache it does the work, and it has been
   measured at 251 ms for an 870 MB base image, which is also 870 MB taken away from every
   other VM on the host.
+
+## What the first request costs
+
+A restore that reports running has mapped the template and read almost none of it. Every page
+the guest touches afterwards is a fault on the host: a minor one while the template is in the
+host's page cache, a read from the disk once it is not. So "restores in ~25 ms" is true of the
+machine and says nothing about when it has done its first piece of work.
+
+`task boot:restore` measures that. The guest is a shell on the console, the request a `cat` of
+a 64 MiB working set it wrote to tmpfs before it was frozen, and the host times the round trip.
+512 MiB guest, 10 restores per case, p50 / p95 in ms, NVMe, 2026-09-28:
+
+| | restore | first request | second request |
+|---|---|---|---|
+| template in the host's page cache | 18.2 / 23.5 | 13.9 / 24.3 | 5.0 / 5.4 |
+| template evicted before the restore | 22.8 / 29.9 | 32.5 / 40.4 | 4.8 / 5.7 |
+| the VM's cgroup reclaimed while it idled | 20.5 / 29.5 | 32.9 (before) | 30.7 / 33.3 (after) |
+
+Two things follow for whoever runs templates:
+
+- **Even a warm template's first request is slower than its second**, 14 ms against 5 here:
+  the pages are cached but not yet mapped into this QEMU.
+- **A host that overcommits memory pays it again on every idle VM it reclaims.** The last row
+  is a guest whose memory the host took back while it was quiet; its next request cost six
+  times its steady state. The template's pages are clean file pages, the first thing reclaim
+  drops, so a template-backed VM is cheap to squeeze and slow to wake. Keep the templates that
+  restore often resident, or budget the first request, not the restore, against the latency
+  target.
+
+The disk time does not show where the guest would put it. Cold, the template's residency goes
+from 18 to 78 MiB across the first request in ~11 major faults: readahead brings the working
+set in with the first fault — the shell waking, a fork — so the guest's own timing of the
+`cat` stays near 5 ms. The factor depends on the disk and on how scattered the working set is
+in guest memory; a slower disk or a sparser working set makes it larger.
 
 ## Announce each disk's own size
 

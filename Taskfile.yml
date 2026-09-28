@@ -195,6 +195,15 @@ tasks:
     cmds:
       - SPIN_BOOT_BENCH=1 go test ./boot/ -run TestBootCost -v -timeout 60m
 
+  boot:restore:
+    desc: >-
+      What a restored template takes to do its first piece of work, with the template in the
+      host's page cache, evicted before the restore, and reclaimed from the VM's cgroup while
+      it idled. Needs /dev/kvm, a built release and a systemd user manager; no sudo. REPS=,
+      WS_MIB= (the guest's working set), MEMORY_MIB=.
+    cmds:
+      - SPIN_RESTORE_BENCH=1 go test ./boot/ -run TestRestoreFirstRequest -count=1 -v -timeout 30m
+
   boot:logind:
     desc: >-
       Check first SSH login, reconnect, user services and logout in a disposable guest.
