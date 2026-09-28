@@ -282,6 +282,18 @@ for u in systemd-udevd.service systemd-udevd-kernel.socket systemd-udevd-control
     fi
 done
 
+# The OOM kill that stops a slowly filling guest from thrashing (see the file). Nothing fails
+# without it; the machine just stops answering under memory pressure, weeks later.
+in_image /etc/tmpfiles.d/lru-gen.conf || {
+    echo "ERROR: the image has no /etc/tmpfiles.d/lru-gen.conf; MGLRU runs without min_ttl_ms" >&2
+    exit 1; }
+# And its other half: min_ttl_ms kills where the old LRU thrashed, and memory held by tmpfs is
+# not anybody's to kill. /tmp at half of memory hands the OOM killer innocents (see the drop-in).
+"$bin/debugfs" -R "cat /etc/systemd/system/tmp.mount.d/10-size.conf" /work/base.raw 2>/dev/null |
+    grep -q '^Options=.*size=25%%' || {
+    echo "ERROR: /tmp is not capped at 25% of memory; see tmp.mount.d/10-size.conf" >&2
+    exit 1; }
+
 # What udev is on for, other than the getty: an added CPU or memory block arrives as a
 # kernel event and nothing else is listening for one. Without the rules file the events are
 # delivered to no one, which is indistinguishable from udev being masked.
