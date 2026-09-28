@@ -304,9 +304,20 @@ tasks:
       - SPIN_BOOT_TRACE=1 go test ./boot/ -run TestBootTrace -v -timeout 10m
 
   test:
-    desc: Test the machine definition, under the race detector, with its coverage in coverage.out.
+    desc: Test the machine definition, under the race detector, with its coverage in coverage.out and held to a floor.
+    vars:
+      # Below today's 85.7%. Raise it when the number has moved up and stayed; never lower it to
+      # let a change through, or it is a gate that reports whatever it is given.
+      COVERAGE_FLOOR: 85
     cmds:
       - go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      # The anchor makes it the total line, not a function with "total" in its name.
+      - |
+        total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+        awk -v got="$total" -v floor={{.COVERAGE_FLOOR}} 'BEGIN {
+          if (got + 0 < floor + 0) { printf "coverage is %s%%, below the floor of %s%%\n", got, floor; exit 1 }
+          printf "coverage: %s%% (floor %s%%)\n", got, floor
+        }'
 
   versions:
     desc: Say which of versions.yaml's pins are behind their upstream (exits 1 when any is).
