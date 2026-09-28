@@ -219,6 +219,15 @@ tasks:
     cmds:
       - SPIN_SSH_LOAD=1 go test ./boot/ -run '^TestSSHUnderLoad$' -count=1 -v -timeout 30m
 
+  boot:memory-policy:
+    desc: >-
+      A process that takes memory until something stops it, in a login session of a 1 GiB
+      guest: logins while it grows, how long until it is gone and what killed it, with the image
+      as built and without MGLRU's min_ttl_ms. Needs /dev/kvm and a built release; no sudo.
+      REPS= boots per variant.
+    cmds:
+      - SPIN_MEMORY_POLICY=1 go test ./boot/ -run '^TestMemoryPolicy$' -count=1 -v -timeout 90m
+
   boot:logind:
     desc: >-
       Check first SSH login, reconnect, user services and logout in a disposable guest.

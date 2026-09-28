@@ -20,8 +20,8 @@ import (
 // gets in.
 //
 // The guest runs testdata/ssh-load.sh once it is up: logins while idle, while a service
-// burns every vCPU eight times over, while a login session does the same, and while tmpfs
-// holds all but 64 and then 16 MiB of memory. The client runs with a weight nothing else in
+// burns every vCPU eight times over, while a login session does the same, and with /tmp full.
+// The client runs with a weight nothing else in
 // the guest has, so a slow login is sshd's. Each case also reports what the guest was under -
 // runnable tasks, memory available, PSI - so a load that did not happen cannot pass for one
 // sshd shrugged off.
@@ -43,7 +43,10 @@ import (
 // one: cgroup v2's fair share already gives ssh.service its part of the machine whatever runs
 // beside it, so a weight on it buys nothing. Memory at 16 MiB available doubles a login, and
 // neither variant changes that. So the guest, loaded like this, is not where the timeouts
-// come from, and nothing here is shipped for it. Not OOMScoreAdjust either: sshd sets its own
+// come from, and nothing here is shipped for it. (The memory columns were a tmpfs of the test's
+// own filled to 64 and 16 MiB left; since MGLRU's min_ttl_ms is set, 16 MiB left is an OOM kill
+// of whatever the kernel finds, so the case is /tmp filling to its cap instead.) Not
+// OOMScoreAdjust either: sshd sets its own
 // oom_score_adj to -1000 and restores the inherited value in the processes it forks, so on
 // the unit the -1000 would be what the users' sessions inherit.
 //
@@ -59,15 +62,18 @@ func TestSSHUnderLoad(t *testing.T) {
 	out := releaseDir(t)
 	reps := envInt(t, "REPS", 2)
 
-	cases := []string{"idle", "cpu-service", "cpu-session", "memory-64", "memory-16"}
+	cases := []string{"idle", "cpu-service", "cpu-session", "tmp-full"}
 	got := map[string][]string{}
 	var psi []string
 	for range reps {
-		logins, pressure := sshLoadRun(t, out)
-		for c, ms := range logins {
+		r := sshLoadRun(t, out, sshLoadGuest{}, 10*time.Minute)
+		if !r.finished {
+			t.Fatalf("the load script did not finish; the console ends:\n%s", r.console)
+		}
+		for c, ms := range r.logins {
 			got[c] = append(got[c], ms...)
 		}
-		psi = append(psi, pressure...)
+		psi = append(psi, r.notes...)
 	}
 
 	var r strings.Builder
@@ -84,12 +90,31 @@ func TestSSHUnderLoad(t *testing.T) {
 
 var (
 	sshLoadLine = regexp.MustCompile(`SSHLOAD (\S+)((?: (?:\d+|FAIL))+)`)
-	sshLoadPSI  = regexp.MustCompile(`SSHLOADPSI (.*)`)
+	sshLoadNote = regexp.MustCompile(`SSHLOAD(?:PSI|EXHAUST) (.*)`)
 )
 
-// sshLoadRun boots one guest with the load script in its root and returns each case's logins,
-// and the pressure each case was measured under.
-func sshLoadRun(t *testing.T, out string) (map[string][]string, []string) {
+// sshLoadGuest is what one boot of the load script changes in its guest: files and symlinks
+// written into its root, files removed from it, and which of the script's cases run (its own
+// list by default).
+type sshLoadGuest struct {
+	files  map[string]string
+	links  map[string]string
+	remove []string
+	cases  string
+}
+
+// sshLoadResult is one boot: each case's logins, the lines saying what the guest was under,
+// and whether the script got to the end - a guest that stopped answering is a result here.
+type sshLoadResult struct {
+	logins   map[string][]string
+	notes    []string
+	finished bool
+	console  string
+}
+
+// sshLoadRun boots one guest with the load script in its root, and gives it until the deadline
+// to finish.
+func sshLoadRun(t *testing.T, out string, g sshLoadGuest, deadline time.Duration) sshLoadResult {
 	t.Helper()
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "rootfs.raw")
@@ -103,8 +128,12 @@ func sshLoadRun(t *testing.T, out string) (map[string][]string, []string) {
 	all := map[string]string{
 		"/sshload.sh": string(script),
 		"/etc/systemd/system/sshload.service": "[Unit]\nAfter=multi-user.target\n[Service]\nType=oneshot\n" +
+			"Environment=SSHLOAD_CASES=\"" + g.cases + "\"\n" +
 			"ExecStart=/bin/sh /sshload.sh\nStandardOutput=journal+console\nStandardError=journal+console\n",
 		"/etc/systemd/system/sshload.timer": "[Timer]\nOnBootSec=3s\nAccuracySec=100ms\n",
+	}
+	for p, c := range g.files {
+		all[p] = c
 	}
 	debugfs := filepath.Join(out, "bin/debugfs")
 	for p, c := range all {
@@ -121,8 +150,25 @@ func sshLoadRun(t *testing.T, out string) (map[string][]string, []string) {
 			t.Fatalf("%s is not in the guest's root as written (%v)", p, err)
 		}
 	}
-	mustRun(t, debugfs, "-w", "-R",
-		"symlink /etc/systemd/system/timers.target.wants/sshload.timer /etc/systemd/system/sshload.timer", raw)
+	for _, p := range g.remove {
+		// Present first, so that a variant removing a path the image no longer has fails here
+		// rather than measuring the image as built under another name.
+		if out, _ := exec.Command(debugfs, "-R", "stat "+p, raw).CombinedOutput(); !strings.Contains(string(out), "Inode:") {
+			t.Fatalf("%s is not in the image, so removing it tests nothing", p)
+		}
+		mustRun(t, debugfs, "-w", "-R", "rm "+p, raw)
+		if out, _ := exec.Command(debugfs, "-R", "stat "+p, raw).CombinedOutput(); strings.Contains(string(out), "Inode:") {
+			t.Fatalf("%s is still in the guest's root", p)
+		}
+	}
+	links := map[string]string{"/etc/systemd/system/timers.target.wants/sshload.timer": "/etc/systemd/system/sshload.timer"}
+	for l, target := range g.links {
+		links[l] = target
+	}
+	for l, target := range links {
+		_ = exec.Command(debugfs, "-w", "-R", "mkdir "+filepath.Dir(l), raw).Run()
+		mustRun(t, debugfs, "-w", "-R", "symlink "+l+" "+target, raw)
+	}
 
 	console := filepath.Join(dir, "console")
 	cmd := exec.Command(filepath.Join(out, "bin/spin-machine"), "boot", "--release", out,
@@ -137,23 +183,20 @@ func sshLoadRun(t *testing.T, out string) (map[string][]string, []string) {
 		_ = cmd.Wait()
 	}()
 
-	deadline := time.Now().Add(10 * time.Minute)
+	end := time.Now().Add(deadline)
 	for {
 		b, _ := os.ReadFile(console)
 		s := string(b)
-		if strings.Contains(s, "SSHLOAD_DONE") {
-			res := map[string][]string{}
+		done := strings.Contains(s, "SSHLOAD_DONE")
+		if done || strings.Contains(s, "SSHLOAD_FAILED") || time.Now().After(end) {
+			r := sshLoadResult{logins: map[string][]string{}, finished: done, console: tail(b, 3000)}
 			for _, m := range sshLoadLine.FindAllStringSubmatch(s, -1) {
-				res[m[1]] = strings.Fields(m[2])
+				r.logins[m[1]] = strings.Fields(m[2])
 			}
-			var pressure []string
-			for _, m := range sshLoadPSI.FindAllStringSubmatch(s, -1) {
-				pressure = append(pressure, strings.TrimSpace(m[1]))
+			for _, m := range sshLoadNote.FindAllStringSubmatch(s, -1) {
+				r.notes = append(r.notes, strings.TrimSpace(m[1]))
 			}
-			return res, pressure
-		}
-		if strings.Contains(s, "SSHLOAD_FAILED") || time.Now().After(deadline) {
-			t.Fatalf("the load script did not finish; the console ends:\n%s", tail(b, 3000))
+			return r
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

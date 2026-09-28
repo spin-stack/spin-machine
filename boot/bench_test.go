@@ -674,9 +674,15 @@ func mustRun(t *testing.T, name string, args ...string) {
 
 func canSudo() bool { return exec.Command("sudo", "-n", "true").Run() == nil }
 
+// releaseDir is the release tree the benchmarks boot: _output, or SPIN_RELEASE - a tree laid out
+// the same way, for measuring a kernel or an image built somewhere else without writing it over
+// what `task build` made.
 func releaseDir(t *testing.T) string {
 	t.Helper()
 	out, err := filepath.Abs(filepath.Join("..", "_output"))
+	if r := os.Getenv("SPIN_RELEASE"); r != "" {
+		out, err = filepath.Abs(r)
+	}
 	if err != nil {
 		t.Fatalf("locating the release: %v", err)
 	}
