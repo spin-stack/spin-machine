@@ -28,9 +28,9 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
-  # The one Go module, the YAML parser cmd/versions reads versions.yaml with. It is a build
-  # tool's dependency: the machine package and spin-machine do not import it, and nothing it
-  # does reaches an artefact.
+  # go-tools, whose versions command reads versions.yaml, and its YAML parser. A build tool's
+  # dependencies: the machine package and spin-machine do not import them, and nothing they do
+  # reaches an artefact.
   - package-ecosystem: gomod
     directory: /
     schedule:

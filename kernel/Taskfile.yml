@@ -12,7 +12,7 @@ version: '3'
 # are handed it by `versions args`; see the note in qemu/Taskfile.yml.
 vars:
   KERNEL_VERSION:
-    sh: go run ./cmd/versions version kernel
+    sh: go tool versions version kernel
 
 tasks:
 

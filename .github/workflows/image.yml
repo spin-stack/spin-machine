@@ -19,7 +19,7 @@ on:
       - e2fsprogs/**
       - versions.yaml
       - versions/**
-      - cmd/versions/**
+      - go.mod
       - .github/workflows/image.yml
   pull_request:
     paths:
@@ -27,7 +27,7 @@ on:
       - e2fsprogs/**
       - versions.yaml
       - versions/**
-      - cmd/versions/**
+      - go.mod
       - .github/workflows/image.yml
   workflow_dispatch:
 
@@ -64,7 +64,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           build=$(hack/touches "$BASE" alpine e2fsprogs ubuntu mkosi -- \
-            image e2fsprogs versions cmd/versions .github/workflows/image.yml)
+            image e2fsprogs versions go.mod .github/workflows/image.yml)
           echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
 
   build:
@@ -76,7 +76,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # The Taskfiles hand the builds their pins with `go run ./cmd/versions`.
+      # The Taskfiles hand the builds their pins with `go tool versions`.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

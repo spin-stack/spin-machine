@@ -20,7 +20,7 @@ VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo d
 # versions.yaml - the same values the builds were handed and checked the tarballs against - so
 # SOURCES states them without anybody reading a build file. Nothing passes these in, so there
 # is no second copy to disagree: QEMU_VERSION, QEMU_SHA256, KERNEL_*, E2FSPROGS_*.
-pins=$(go run ./cmd/versions env qemu kernel e2fsprogs)
+pins=$(go tool versions env qemu kernel e2fsprogs)
 while IFS='=' read -r key value; do
   declare "${key}=${value}"
 done <<< "${pins}"

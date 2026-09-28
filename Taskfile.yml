@@ -95,9 +95,10 @@ vars:
   # What is left here is what does not change an artefact: how many jobs to compile with,
   # where to put the output, which cache backend to use.
   #
-  # `go run` rather than a binary in _output: the tool is only ever run from a checkout, and
-  # Go's build cache makes the second run of it as fast as a binary would be.
-  VERSIONS: go run ./cmd/versions
+  # go-tools' command, at the version go.mod pins (its tool directive): the tool is only ever
+  # run from a checkout, and Go's build cache makes the second run of it as fast as a binary
+  # would be.
+  VERSIONS: go tool versions
   QEMU_JOBS: '{{.QEMU_JOBS | default 8}}'
   KERNEL_ARCH: '{{.KERNEL_ARCH | default "x86_64"}}'
   KERNEL_NPROC: '{{.KERNEL_NPROC | default 8}}'

@@ -2,7 +2,7 @@
 # commit, the day a package archive is read as of.
 #
 # This file is the only place one is written. The Dockerfiles declare each as an ARG with no
-# default and are handed it (`go run ./cmd/versions args <name>...`); the Taskfiles and
+# default and are handed it (`go tool versions args <name>...`); the Taskfiles and
 # hack/release read from here; versions/gate_test.go fails on a digest or a commit written
 # anywhere else, and on a Dockerfile ARG that falls back to a default of its own.
 #

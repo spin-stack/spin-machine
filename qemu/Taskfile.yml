@@ -8,7 +8,7 @@ version: '3'
 # that was not would be a build that fails on the checksum, at best.
 vars:
   QEMU_VERSION:
-    sh: go run ./cmd/versions version qemu
+    sh: go tool versions version qemu
 
   # Where the runtime image is published, which `fetch` below reads back. The tag is the
   # pinned version, so asking for this repository's QEMU and asking for the one this commit

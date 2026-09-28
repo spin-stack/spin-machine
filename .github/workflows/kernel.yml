@@ -18,14 +18,14 @@ on:
       - kernel/**
       - versions.yaml
       - versions/**
-      - cmd/versions/**
+      - go.mod
       - .github/workflows/kernel.yml
   pull_request:
     paths:
       - kernel/**
       - versions.yaml
       - versions/**
-      - cmd/versions/**
+      - go.mod
       - .github/workflows/kernel.yml
   workflow_dispatch:
 
@@ -62,7 +62,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           build=$(hack/touches "$BASE" debian debian-snapshot kernel -- \
-            kernel versions cmd/versions .github/workflows/kernel.yml)
+            kernel versions go.mod .github/workflows/kernel.yml)
           echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
 
   build:
@@ -74,7 +74,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # The Taskfile hands the build its pins with `go run ./cmd/versions`.
+      # The Taskfile hands the build its pins with `go tool versions`.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

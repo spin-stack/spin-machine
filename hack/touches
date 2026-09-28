@@ -44,11 +44,11 @@ fi
 was=$(mktemp)
 trap 'rm -f "${was}"' EXIT
 if ! git show "${base}:versions.yaml" > "${was}" 2>/dev/null ||
-   ! before=$(go run ./cmd/versions args -file "${was}" "${entries[@]}" 2>/dev/null); then
+   ! before=$(go tool versions args -file "${was}" "${entries[@]}" 2>/dev/null); then
   echo true
   exit 0
 fi
-after=$(go run ./cmd/versions args "${entries[@]}")
+after=$(go tool versions args "${entries[@]}")
 
 if [ "${before}" = "${after}" ]; then
   echo false
