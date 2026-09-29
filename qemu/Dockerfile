@@ -332,7 +332,8 @@ RUN Q=/opt/qemu/bin/qemu-system-x86_64 && \
     $Q -device help 2>&1 | grep -q 'virtio-net-pci' && \
     $Q -device help 2>&1 | grep -q 'vhost-vsock-pci' && \
     $Q -device help 2>&1 | grep -q 'virtio-mem-pci' && \
-    $Q -device help 2>&1 | grep -q 'pcie-root-port' && \
+    $Q -device help 2>&1 | grep -q 'virtio-scsi-pci' && \
+    $Q -device help 2>&1 | grep -q 'scsi-hd' && \
     $Q -device help 2>&1 | grep -q 'vmgenid' && \
     ! $Q -device help 2>&1 | grep -qE '^name "(e1000e?|rtl8139|pcnet|vmxnet3|igb|ne2k_pci|tulip)"' && \
     ! $Q -device help 2>&1 | grep -qE '^name "(usb-kbd|usb-hub|VGA|virtio-vga|sb16|isa-fdc|isa-parallel|vfio-pci|intel-iommu|amd-iommu)"' && \
