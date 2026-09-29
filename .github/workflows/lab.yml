@@ -53,10 +53,9 @@ permissions:
   contents: read
   actions: read
 
-# One runner: a second experiment queues rather than shares its CPUs with the first.
-concurrency:
-  group: lab
-  cancel-in-progress: false
+# No concurrency group: the runner takes one job at a time and queues the rest, and a group
+# keeps one run pending and cancels the one before it, which lost two of three experiments
+# queued back to back.
 
 jobs:
   lab:
