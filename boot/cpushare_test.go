@@ -25,19 +25,21 @@ import (
 // window of the initcall named, the p50 milliseconds each task spent on the CPU.
 func cpuShareReport(t *testing.T, out string, base variant, initcall string, reps int) {
 	t.Helper()
+	// Only the window leaves the guest: sched_switch fires through the whole boot, and every byte
+	// on the serial port is a VM exit - the unfiltered trace did not finish in three minutes.
 	const dump = `[Unit]
 Description=Print the scheduler and initcall trace events
 After=multi-user.target
 [Service]
 Type=oneshot
 StandardOutput=null
-ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; grep -E 'sched_switch|initcall_(start|finish)' /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
+ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; sed -n '/initcall_start: func=FN+/,/initcall_finish: func=FN+/p' /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
 [Install]
 WantedBy=multi-user.target
 `
 	v := base
 	v.label = "cpu share"
-	v.files = map[string]string{"/etc/systemd/system/spin-dmesg.service": dump}
+	v.files = map[string]string{"/etc/systemd/system/spin-dmesg.service": strings.ReplaceAll(dump, "FN", initcall)}
 	// Not --profile: it passes trace_event=initcall:*, and a second trace_event= replaces the
 	// first rather than adding to it.
 	v.profile = false
