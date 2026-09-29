@@ -284,12 +284,6 @@ func Percentile[T cmp.Ordered](ds []T, p float64) (T, bool) {
 	// convention and it is wrong here by a whole sample at the tail: over five runs it
 	// answered the 4th for p95, so the slowest boot in the set — the one the number exists
 	// to expose — could never be reported.
-	i := int(math.Ceil(p*float64(len(s)))) - 1
-	if i < 0 {
-		i = 0
-	}
-	if i >= len(s) {
-		i = len(s) - 1
-	}
+	i := min(max(int(math.Ceil(p*float64(len(s))))-1, 0), len(s)-1)
 	return s[i], true
 }
