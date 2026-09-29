@@ -94,6 +94,15 @@ CONFIG_VHOST_VSOCK=y
 CONFIG_VIRTIO_MEM=y
 # vmgenid: how a restored guest learns it was restored, so its random pool is reseeded.
 CONFIG_ACPI_VMGENID=y
+# virtio-scsi-pci and scsi-hd: disks that arrive while the machine runs. One controller at
+# boot, and a disk hot-added to it is a SCSI event the guest acts on at once - where a
+# virtio-blk behind a PCIe root port is a native hotplug the guest takes ~135 ms to see and
+# ~6 s to let go of (pciehp's attention-button window), and each root port costs ~10 ms of
+# every boot (QEMU realizing it, the guest enumerating and probing it). Measured 2026-09-29,
+# 4 ports against the controller: boot -31 ms, attach 135 -> 1.5 ms, detach 6.1 s -> 0.7 ms.
+# SCSI emulation is more of QEMU than virtio-blk is; the disks it carries are read-only
+# extensions the host built.
+CONFIG_VIRTIO_SCSI=y
 
 # --- the console ---------------------------------------------------------------------------
 # One 16550 on ttyS0, which is where the kernel prints and where a debug boot's login lives.
