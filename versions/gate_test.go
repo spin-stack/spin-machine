@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/spin-stack/go-tools/versions"
+	"github.com/spin-stack/go-tools/versions/gate"
 )
 
 // root is the repository's: a test runs in its package's directory.
@@ -18,7 +19,7 @@ const root = ".."
 // A version is written once: in versions.yaml. The gate is go-tools': no digest or commit
 // anywhere else, no Dockerfile pin with a default of its own, no entry nothing reads.
 func TestVersionsYAMLIsTheOnlyPin(t *testing.T) {
-	g := versions.Gate{Root: root, Elsewhere: []string{
+	g := gate.Gate{Root: root, Elsewhere: []string{
 		// What Go writes of its own modules.
 		"go.sum",
 		// The qboot commit the patch was cut against and the licence it carries. A bump of qboot
