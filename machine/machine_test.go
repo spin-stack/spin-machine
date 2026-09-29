@@ -106,6 +106,18 @@ func TestArgs(t *testing.T) {
 		set:    func(s *Spec) { s.NICs = []NIC{nic()} },
 		absent: []string{"host_mtu"},
 	}, {
+		// Each NIC on a slot of its own, counting up from the first.
+		name: "two NICs",
+		set: func(s *Spec) {
+			second := nic()
+			second.TapFD, second.MAC = 4, "52:54:00:00:00:02"
+			s.NICs = []NIC{nic(), second}
+		},
+		want: []string{
+			"netdev=net0,mac=52:54:00:00:00:01,romfile=,disable-legacy=on,addr=0x10 ",
+			"netdev=net1,mac=52:54:00:00:00:02,romfile=,disable-legacy=on,addr=0x11 ",
+		},
+	}, {
 		// chassis is a root port's identity to the guest's ACPI, and two ports with one
 		// chassis are a guest that hotplugs into the wrong one or neither.
 		name: "root ports",
