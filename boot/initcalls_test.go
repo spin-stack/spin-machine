@@ -47,6 +47,14 @@ import (
 //	SPIN_KERNEL_B=<vmlinux> adds a variant booting this kernel instead of the release's,
 //	                        which is how a config change is compared without two runs on a
 //	                        host that is not the same host from one minute to the next
+//	SPIN_APPEND_B=<params>  adds a variant with these kernel parameters, for the same reason
+//	CPUS=<n> MEMORY_MIB=<n> the machine's shape (default 2 and 2048)
+//	FLAGS=<flags>           spin-machine boot flags for every boot, e.g. the hotplug ceilings
+//	                        a workspace boots with: --max-cpus 16 --max-memory 8192
+//	SPIN_GRAPH=<fn,fn>      after the timed boots, GRAPH_REPS (default 3) more with these
+//	                        functions traced by function_graph to GRAPH_DEPTH (default 3),
+//	                        printed as a tree of p50s; see graph_test.go for what it can and
+//	                        cannot say
 func TestKernelInitcalls(t *testing.T) {
 	if os.Getenv("SPIN_INITCALL_PROBE") == "" {
 		t.Skip("set SPIN_INITCALL_PROBE=1: boots a VM and needs sudo to write into its overlay")
@@ -87,9 +95,14 @@ WantedBy=multi-user.target
 	if k := kernelB(t); k != "" {
 		cvs = append(cvs, cmdlineVariant{label: "kernel B", kernel: k})
 	}
+	if a := os.Getenv("SPIN_APPEND_B"); a != "" {
+		cvs = append(cvs, cmdlineVariant{label: "append B", extra: a})
+	}
 
 	base := variant{
-		cpus: "2", memory: "2048",
+		cpus:   orElse("2", os.Getenv("CPUS")),
+		memory: orElse("2048", os.Getenv("MEMORY_MIB")),
+		flags:  strings.Fields(os.Getenv("FLAGS")),
 		files: map[string]string{
 			"/etc/systemd/system/spin-dmesg.service": dump,
 		},
@@ -127,6 +140,9 @@ WantedBy=multi-user.target
 	}
 	compare(t, cvs, runs)
 	report(t, runs[cvs[0].label], top, reps)
+	if fns := os.Getenv("SPIN_GRAPH"); fns != "" {
+		graphReport(t, out, base, fns, envInt(t, "GRAPH_REPS", 3), envInt(t, "GRAPH_DEPTH", 3))
+	}
 }
 
 // bootUntil boots one machine and returns its console once marker has appeared.
@@ -155,6 +171,7 @@ func bootUntil(t *testing.T, out string, v variant, kernel, marker string, timeo
 	if v.profile {
 		args = append(args, "--profile")
 	}
+	args = append(args, v.flags...)
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	r, w, err := os.Pipe()
