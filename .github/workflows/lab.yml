@@ -139,11 +139,22 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm"; exit 1; }
 
+      # A release tarball carries no spin-machine, and releaseDir skips without one: built from
+      # this checkout into the tree, as report does through its tools dependency.
+      - name: Build spin-machine into the release tree
+        run: task tools OUTPUT_DIR="$SPIN_MACHINE_OUTPUT"
+
       # report writes its JSON where OUT says; the others print their tables through t.Log.
+      # A skipped test exits 0, and a green run that measured nothing reads as a result, so a
+      # skip fails the run with the test's reason.
       - name: Run the experiment
         run: |
           set -o pipefail
           task "$EXPERIMENT" OUTPUT_DIR="$SPIN_MACHINE_OUTPUT" OUT="$PWD/_output/lab/report.json" 2>&1 | tee _output/lab/lab.log
+          if grep -q -- '--- SKIP' _output/lab/lab.log; then
+            echo "::error::the experiment skipped: $(grep -B1 -- '--- SKIP' _output/lab/lab.log | head -1 | sed 's/^.*_test.go:[0-9]*: //')"
+            exit 1
+          fi
 
       - name: What it found
         if: always()
