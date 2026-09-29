@@ -55,6 +55,9 @@ import (
 //	                        functions traced by function_graph to GRAPH_DEPTH (default 3),
 //	                        printed as a tree of p50s, on kernel B with GRAPH_KERNEL=b; see
 //	                        graph_test.go for what it can and cannot say
+//	SPIN_FORMAT_CHECK=<system/event>:<name>
+//	                        fail a boot whose event format still names an enum the eval maps
+//	                        replace, e.g. timer/hrtimer_start:HRTIMER_MODE_
 //	SPIN_CPU_SHARE=<fn>     after that, SHARE_REPS (default 3) boots per kernel with the
 //	                        scheduler traced: who had the CPU while initcall fn ran
 func TestKernelInitcalls(t *testing.T) {
@@ -83,16 +86,30 @@ func TestKernelInitcalls(t *testing.T) {
 	// silently describing how long the console took to print a megabyte. It reported the
 	// kernel reaching "Freeing unused kernel image" at 931 ms on a machine that boots in
 	// about 200, which is the only reason it was caught.
-	const dump = `[Unit]
+	dump := `[Unit]
 Description=Print the kernel ring buffer for the initcall probe
 After=multi-user.target
 [Service]
 Type=oneshot
 StandardOutput=null
-ExecStart=/bin/sh -c "{ echo SPIN-DMESG-BEGIN; dmesg; echo SPIN-DMESG-END; } > /dev/ttyS0"
+ExecStart=/bin/sh -c "{ FORMATCHECK echo SPIN-DMESG-BEGIN; dmesg; echo SPIN-DMESG-END; } > /dev/ttyS0"
 [Install]
 WantedBy=multi-user.target
 `
+	// SPIN_FORMAT_CHECK=<system/event>:<name> reads that event's format after the boot and fails
+	// when name is still in it: a kernel that defers the eval map rewrite has to have done it by
+	// the time a format is read.
+	check := ""
+	var checkName string
+	if fc := os.Getenv("SPIN_FORMAT_CHECK"); fc != "" {
+		event, name, ok := strings.Cut(fc, ":")
+		if !ok || !regexp.MustCompile(`^[a-z0-9_]+/[a-z0-9_]+$`).MatchString(event) || !regexp.MustCompile(`^[A-Za-z0-9_]+$`).MatchString(name) {
+			t.Fatalf("SPIN_FORMAT_CHECK=%q is not <system/event>:<name>", fc)
+		}
+		check = fmt.Sprintf("mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo SPIN-FORMAT $$(grep -c %s /sys/kernel/tracing/events/%s/format);", name, event)
+		checkName = name
+	}
+	dump = strings.Replace(dump, "FORMATCHECK ", check+" ", 1)
 	cvs := slices.Clone(cmdlineVariants)
 	if k := kernelB(t); k != "" {
 		cvs = append(cvs, cmdlineVariant{label: "kernel B", kernel: k})
@@ -136,6 +153,15 @@ WantedBy=multi-user.target
 					t.Fatalf("writing the console to %s: %v", f, err)
 				}
 				t.Logf("raw console of the first boot written to %s", f)
+			}
+			if checkName != "" {
+				m := regexp.MustCompile(`SPIN-FORMAT (\d+)`).FindStringSubmatch(console)
+				if m == nil {
+					t.Fatalf("%s: no format check in the console", cv.label)
+				}
+				if m[1] != "0" {
+					t.Errorf("%s: the format still names %s %s time(s): the eval maps were not applied", cv.label, checkName, m[1])
+				}
 			}
 			runs[cv.label] = append(runs[cv.label], parse(t, console))
 		}
