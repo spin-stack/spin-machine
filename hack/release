@@ -79,6 +79,14 @@ done
 echo "Kernel:"
 require "${OUTPUT_DIR}/kernel/vmlinux" "${SHARE}/kernel/vmlinux" "the guest kernel" 0644
 require "${OUTPUT_DIR}/kernel/kernel-config" "${SHARE}/kernel/kernel-config" "the kernel config"
+# The patches the kernel was built with, as the build applied them: a changed GPL source is
+# distributed with its changes.
+mkdir -p "${SHARE}/kernel/patches"
+patches=("${OUTPUT_DIR}"/kernel/patches/*.patch)
+[ -f "${patches[0]}" ] || { echo "👹 missing the kernel's patches: ${OUTPUT_DIR}/kernel/patches" >&2; exit 1; }
+for p in "${patches[@]}"; do
+  require "$p" "${SHARE}/kernel/patches/$(basename "$p")" "kernel patch $(basename "$p")"
+done
 echo "Base image:"
 require "${OUTPUT_DIR}/image/rootfs.qcow2" "${SHARE}/image/rootfs.qcow2" "the base image" 0444
 require "${OUTPUT_DIR}/packages.txt" "${SHARE}/packages.txt" "the image's package list"
@@ -149,8 +157,10 @@ Linux ${KERNEL_VERSION}
   binary:   usr/share/spin-stack/kernel/vmlinux
   source:   https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz
   sha256:   ${KERNEL_SHA256}
-  built by: kernel/Dockerfile, unpatched, with the configuration shipped alongside the
-            binary as usr/share/spin-stack/kernel/kernel-config
+  built by: kernel/Dockerfile, with the patches shipped alongside the binary in
+            usr/share/spin-stack/kernel/patches applied to that source (each says what
+            it changes and why), and the configuration shipped as
+            usr/share/spin-stack/kernel/kernel-config
 
 Ubuntu userland
   image:    usr/share/spin-stack/image/rootfs.qcow2

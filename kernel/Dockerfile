@@ -118,6 +118,17 @@ RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/va
     tar -xf "$tarball" -C /usr/src && \
     mv linux-${KERNEL_VERSION} linux
 
+# The patches this kernel carries, each of which says what it changes, why and what it was
+# measured to be worth. Applied with no fuzz: a patch that no longer applies exactly after a
+# kernel bump is one somebody has to read again, not one to apply near where it used to go.
+# The release ships them beside the binary (hack/release), because a changed GPL source is
+# distributed with its changes.
+COPY kernel/patches/ /usr/src/patches/
+RUN cd /usr/src/linux && \
+    for p in /usr/src/patches/*.patch; do \
+        patch -p1 --forward --fuzz=0 < "$p" || { echo "ERROR: $p does not apply to ${KERNEL_VERSION}"; exit 1; }; \
+    done
+
 COPY kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH} /usr/src/linux/.config
 
 # Every check below is a symbol that olddefconfig can silently drop and whose absence
@@ -127,6 +138,12 @@ RUN <<EOT
     cd /usr/src/linux
 
     make ARCH=${KERNEL_ARCH} olddefconfig
+
+    # What patches/0001 is for: objtool records the fentry sites and writes them as NOPs, so
+    # ftrace_init does not rewrite ~41k call sites at every boot (7 ms, measured 2026-09-29).
+    grep -q '^CONFIG_FTRACE_MCOUNT_USE_OBJTOOL=y' .config || { echo "ERROR: objtool does not record the fentry sites (patches/0001)"; grep MCOUNT .config; exit 1; }
+    # --mnop and CC_USING_NOP_MCOUNT follow from these two together (Makefile, scripts/Makefile.lib).
+    grep -q '^CONFIG_HAVE_OBJTOOL_NOP_MCOUNT=y' .config || { echo "ERROR: objtool cannot write the fentry sites as NOPs here (patches/0001)"; exit 1; }
 
     echo "Verifying critical kernel configs after olddefconfig..."
     grep -q "CONFIG_VIRTIO_NET=y" .config || (echo "ERROR: CONFIG_VIRTIO_NET not enabled after olddefconfig!" ; grep VIRTIO_NET .config ; exit 1)
@@ -251,6 +268,10 @@ RUN <<EOT
     # XFRM off moves the bill to the next registrant and changes nothing, and the only knob
     # that removes it is CONFIG_DEBUG_INFO_BTF=n, which is the line above.
     grep -q "CONFIG_FUNCTION_TRACER=y" .config || (echo "ERROR: CONFIG_FUNCTION_TRACER not enabled (fentry/fexit cannot attach)!" ; exit 1)
+    # What it cost a boot, and what is left of that: 21.9 ms measured 2026-09-29 against a
+    # kernel without it (1 vCPU, the lab runner), of which the two ftrace patches in patches/
+    # take back 20.5 - the boot-time NOP rewrite of every fentry site and the kallsyms scan of
+    # every record for weak functions. Tetragon, Cilium and bpftrace need the tracer itself.
     # BPF_LSM is deliberately NOT enabled, and this is where the decision is written down
     # so it is not made again by accident. It depends on CONFIG_SECURITY, which is off here
     # and would put LSM hooks on paths this kernel is tuned for boot time on — and what it
@@ -372,8 +393,9 @@ RUN cd linux && make ARCH=${KERNEL_ARCH} -j${KERNEL_NPROC} \
 RUN <<EOT
     set -e
     cd linux
-    mkdir /build
+    mkdir -p /build/patches
     cp .config /build/kernel-config
+    cp /usr/src/patches/*.patch /build/patches/
 
     if [ "${KERNEL_ARCH}" != "x86_64" ]; then
         echo "ERROR: Only x86_64 architecture is supported, got: ${KERNEL_ARCH}"
@@ -431,3 +453,4 @@ EOT
 FROM scratch AS kernel
 COPY --from=kernel-build /build/vmlinux /kernel/vmlinux
 COPY --from=kernel-build /build/kernel-config /kernel/kernel-config
+COPY --from=kernel-build /build/patches /kernel/patches
