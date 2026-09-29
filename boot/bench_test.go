@@ -615,6 +615,9 @@ func editOverlay(t *testing.T, overlay string, v variant) {
 	t.Helper()
 	const dev = "/dev/nbd0"
 	mustRun(t, "sudo", "modprobe", "nbd", "max_part=8")
+	if !nbdAppears(dev) {
+		t.Fatalf("%s did not appear after modprobe nbd", dev)
+	}
 	mustRun(t, "sudo", "qemu-nbd", "--connect="+dev, "-f", "qcow2", overlay)
 	defer mustRun(t, "sudo", "qemu-nbd", "--disconnect", dev)
 
@@ -772,8 +775,20 @@ func canEditImages() bool {
 	if !canSudo() || exec.Command("sudo", "-n", "modprobe", "nbd", "max_part=8").Run() != nil {
 		return false
 	}
-	_, err := os.Stat("/dev/nbd0")
-	return err == nil
+	return nbdAppears("/dev/nbd0")
+}
+
+// nbdAppears waits for dev. modprobe returns when the module is loaded, and the device nodes
+// come after it, from udev: on a runner that had never loaded it, qemu-nbd right after modprobe
+// failed on "/dev/nbd0: No such file or directory" with the node there a moment later.
+func nbdAppears(dev string) bool {
+	for range 50 {
+		if _, err := os.Stat(dev); err == nil {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
 }
 
 // releaseTree is _output, or SPIN_MACHINE_OUTPUT, without releaseDir's checks: a test that runs

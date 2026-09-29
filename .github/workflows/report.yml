@@ -62,6 +62,7 @@ jobs:
             if sudo -n true 2>/dev/null; then
               echo "- sudo -n: yes"
               sudo -n modprobe nbd max_part=8 2>/dev/null || true
+              for _ in $(seq 50); do [ -e /dev/nbd0 ] && break; sleep 0.02; done
               if [ -e /dev/nbd0 ]; then echo "- /dev/nbd0: present (image variants and the echo login run)"; else echo "- /dev/nbd0: **missing** (image variants are skipped, the login is agetty's)"; fi
             else
               echo "- sudo -n: **no** (image variants are skipped, the login is agetty's)"
