@@ -47,7 +47,7 @@ jobs:
   # Whether this change can reach QEMU at all; see the note on the triggers. Skipped, the build
   # job reports as skipped, which a required check counts as passed.
   changed:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     outputs:
       build: ${{ steps.touches.outputs.build }}
@@ -76,7 +76,7 @@ jobs:
   build:
     needs: changed
     if: needs.changed.outputs.build == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     # A cold build is tens of minutes and a warm one is a cache restore, so the spread is
     # wide and the ceiling has to sit above the cold case. What it is really for is the
     # other end: a `configure` that stops on a prompt would hold a runner for six hours
