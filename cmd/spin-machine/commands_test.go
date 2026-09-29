@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-jose/go-jose/v4/testutils/require"
+	"github.com/go-openapi/testify/v2/assert"
+
 	"github.com/spin-stack/spin-machine/machine"
 )
 
@@ -451,4 +454,67 @@ func TestCompareSaysWhatMoved(t *testing.T) {
 	if err := run([]string{"compare", "--nope"}); err == nil || !strings.Contains(err.Error(), "not defined") {
 		t.Errorf("run compare with a flag it does not take returned %v", err)
 	}
+}
+
+// detach, against a monitor that answers as QEMU does: the device is asked for, QEMU says it
+// went, and then its node is closed - in that order, since the node holds the image. Each way it
+// can fail is an error that says which step it was.
+func TestDetachTakesTheDiskBackThenClosesIt(t *testing.T) {
+	deleted := `{"event": "DEVICE_DELETED", "data": {"device": "hd2"}}` + "\n" + ok
+	refused := `{"error": {"class": "GenericError", "desc": "no"}}`
+	for _, tc := range []struct {
+		name    string
+		replies []string
+		want    []string
+		wantErr string
+	}{
+		{name: "detached", replies: []string{ok, deleted, ok}, want: []string{"device_del", "blockdev-del"}},
+		{name: "a device QEMU will not remove", replies: []string{ok, refused},
+			want: []string{"device_del"}, wantErr: "removing the disk at target 2"},
+		{name: "a device QEMU never reports gone", replies: []string{ok, ok},
+			want: []string{"device_del"}, wantErr: "did not report the disk at target 2 gone"},
+		{name: "a node QEMU will not close", replies: []string{ok, deleted, refused},
+			want: []string{"device_del", "blockdev-del"}, wantErr: "closing the disk at target 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMonitor(t, tc.replies...)
+			err := detach(detachFlags{qmp: m.socket, target: 2, timeout: 200 * time.Millisecond})
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatal(err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("error %v, want one containing %q", err, tc.wantErr)
+			}
+			asked := m.commands(t)
+			var got []string
+			for _, r := range asked[1:] {
+				got = append(got, r.Execute)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("asked %v, want %v", got, tc.want)
+			}
+			if asked[1].Arguments["id"] != "hd2" {
+				t.Errorf("device_del %v, want hd2", asked[1].Arguments)
+			}
+			if len(asked) > 2 && asked[2].Arguments["node-name"] != "hd2-drive" {
+				t.Errorf("blockdev-del %v, want hd2-drive", asked[2].Arguments)
+			}
+		})
+	}
+}
+
+// A target is 0 when none is named, and one no controller addresses is refused before a monitor
+// is dialled, at either end of the range.
+func TestATargetIsOneTheControllerAddresses(t *testing.T) {
+	var a attachFlags
+	require.NoError(t, parse("attach", []string{"--qmp", "q", "--disk", "d"}, a.register))
+	var d detachFlags
+	require.NoError(t, parse("detach", []string{"--qmp", "q"}, d.register))
+	assert.Equal(t, 0, a.target)
+	assert.Equal(t, 0, d.target)
+
+	require.NoError(t, checkTarget(0))
+	require.NoError(t, checkTarget(machine.MaxHotplugDisks-1))
+	assert.ErrorContains(t, checkTarget(machine.MaxHotplugDisks), "targets 0 to 255")
+	assert.ErrorContains(t, checkTarget(-1), "target -1")
 }

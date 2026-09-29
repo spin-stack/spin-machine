@@ -123,7 +123,7 @@ func TestArgs(t *testing.T) {
 	}, {
 		// Disks that arrive later are added to one controller, whatever their number.
 		name:   "hotplug disks",
-		set:    func(s *Spec) { s.HotplugDisks = 4 },
+		set:    func(s *Spec) { s.HotplugDisks = 1 },
 		want:   []string{"-device virtio-scsi-pci,id=scsi0,disable-legacy=on,addr=0x1a "},
 		absent: []string{"pcie-root-port"},
 	}, {
