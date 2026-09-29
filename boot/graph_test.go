@@ -50,7 +50,7 @@ After=multi-user.target
 [Service]
 Type=oneshot
 StandardOutput=null
-ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; grep -E '[{]$$|[}] /[*]|[+!#*@$$] +[0-9]' /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
+ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; grep -E '[{]$$|[}] /[*]|[+!#*@$$] +[0-9]' /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-INVALID $$(grep -c __ftrace_invalid_address__ /sys/kernel/tracing/available_filter_functions); echo SPIN-DMESG-END; } > /dev/ttyS0"
 [Install]
 WantedBy=multi-user.target
 `
@@ -73,6 +73,12 @@ WantedBy=multi-user.target
 		end := strings.Index(console, "SPIN-TRACE-END")
 		if begin < 0 || end < begin {
 			t.Fatalf("no trace in the console:\n%s", tail([]byte(console), 2000))
+		}
+		// A record ftrace kept for an overridden weak function prints under this name, and a
+		// kernel that skips the boot-time check for them relies on the build having removed
+		// every one.
+		if m := regexp.MustCompile(`SPIN-INVALID (\d+)`).FindStringSubmatch(console); m != nil && m[1] != "0" {
+			t.Errorf("available_filter_functions lists %s __ftrace_invalid_address__ records", m[1])
 		}
 		calls := parseGraph(console[begin:end])
 		if len(calls) == 0 {
