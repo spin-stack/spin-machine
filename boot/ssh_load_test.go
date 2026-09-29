@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -116,10 +116,7 @@ type sshLoadResult struct {
 // to finish.
 func sshLoadRun(t *testing.T, out string, g sshLoadGuest, deadline time.Duration) sshLoadResult {
 	t.Helper()
-	dir := t.TempDir()
-	raw := filepath.Join(dir, "rootfs.raw")
-	mustRun(t, filepath.Join(out, "bin/qemu-img"), "convert", "-f", "qcow2", "-O", "raw",
-		filepath.Join(out, "image/rootfs.qcow2"), raw)
+	root := newRawRoot(t, out, filepath.Join(out, "image/rootfs.qcow2"))
 
 	script, err := os.ReadFile(filepath.Join("testdata", "ssh-load.sh"))
 	if err != nil {
@@ -135,44 +132,23 @@ func sshLoadRun(t *testing.T, out string, g sshLoadGuest, deadline time.Duration
 	for p, c := range g.files {
 		all[p] = c
 	}
-	debugfs := filepath.Join(out, "bin/debugfs")
 	for p, c := range all {
-		src := filepath.Join(dir, "input")
-		if err := os.WriteFile(src, []byte(c), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		// mkdir fails on a directory that is there, which is not a failure here; the write is
-		// what is checked.
-		_ = exec.Command(debugfs, "-w", "-R", "mkdir "+filepath.Dir(p), raw).Run()
-		mustRun(t, debugfs, "-w", "-R", "write "+src+" "+p, raw)
-		// debugfs exits 0 whether or not the write happened: read it back.
-		if b, err := exec.Command(debugfs, "-R", "cat "+p, raw).Output(); err != nil || string(b) != c {
-			t.Fatalf("%s is not in the guest's root as written (%v)", p, err)
-		}
+		root.write(p, c)
 	}
 	for _, p := range g.remove {
-		// Present first, so that a variant removing a path the image no longer has fails here
-		// rather than measuring the image as built under another name.
-		if out, _ := exec.Command(debugfs, "-R", "stat "+p, raw).CombinedOutput(); !strings.Contains(string(out), "Inode:") {
-			t.Fatalf("%s is not in the image, so removing it tests nothing", p)
-		}
-		mustRun(t, debugfs, "-w", "-R", "rm "+p, raw)
-		if out, _ := exec.Command(debugfs, "-R", "stat "+p, raw).CombinedOutput(); strings.Contains(string(out), "Inode:") {
-			t.Fatalf("%s is still in the guest's root", p)
-		}
+		root.remove(p)
 	}
 	links := map[string]string{"/etc/systemd/system/timers.target.wants/sshload.timer": "/etc/systemd/system/sshload.timer"}
 	for l, target := range g.links {
 		links[l] = target
 	}
 	for l, target := range links {
-		_ = exec.Command(debugfs, "-w", "-R", "mkdir "+filepath.Dir(l), raw).Run()
-		mustRun(t, debugfs, "-w", "-R", "symlink "+l+" "+target, raw)
+		root.link(l, target)
 	}
 
-	console := filepath.Join(dir, "console")
+	console := filepath.Join(t.TempDir(), "console")
 	cmd := exec.Command(filepath.Join(out, "bin/spin-machine"), "boot", "--release", out,
-		"--disk", raw, "--disk-format", "raw", "--memory", "1024", "--cpus", "2",
+		"--disk", root.path, "--disk-format", "raw", "--memory", "1024", "--cpus", "2",
 		"--console", "file:"+console, "--init", "/sbin/init")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -217,6 +193,5 @@ func loginSummary(v []string) string {
 	if len(ms) == 0 {
 		return fmt.Sprintf("all %d failed", failed)
 	}
-	sort.Float64s(ms)
-	return fmt.Sprintf("%.0f / %.0f / %.0f, %d failed", pct(ms, 50), pct(ms, 95), ms[len(ms)-1], failed)
+	return fmt.Sprintf("%.0f / %.0f / %.0f, %d failed", pct(ms, 50), pct(ms, 95), slices.Max(ms), failed)
 }

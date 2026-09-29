@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -102,17 +101,11 @@ func TestKernelFloor(t *testing.T) {
 		"marker, p50/p95 over %d boots\n\n", reps)
 	fmt.Fprintf(&b, "%-12s %10s %10s\n", "ROW", "P50", "P95")
 	for _, r := range rows {
-		s := append([]float64(nil), samples[r.label]...)
-		sort.Float64s(s)
-		fmt.Fprintf(&b, "%-12s %10.2f %10.2f\n", r.label, pct(s, 50), pct(s, 95))
+		fmt.Fprintf(&b, "%-12s %10.2f %10.2f\n", r.label, pct(samples[r.label], 50), pct(samples[r.label], 95))
 	}
-	rel := append([]float64(nil), samples["release"]...)
-	flr := append([]float64(nil), samples["floor"]...)
-	sort.Float64s(rel)
-	sort.Float64s(flr)
 	// Stated rather than left to the reader, because it is the number the next decision turns
 	// on: it is the whole of what this machine's kernel configuration could ever give back.
 	fmt.Fprintf(&b, "\nthe release kernel's configuration costs %.2f ms at p50\n",
-		pct(rel, 50)-pct(flr, 50))
+		pct(samples["release"], 50)-pct(samples["floor"], 50))
 	t.Log(b.String())
 }

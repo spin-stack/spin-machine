@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,7 +83,10 @@ ExecStart=/bin/sh -c "{ echo SPIN-DMESG-BEGIN; dmesg; echo SPIN-DMESG-END; } > /
 [Install]
 WantedBy=multi-user.target
 `
-	addKernelVariant(t)
+	cvs := slices.Clone(cmdlineVariants)
+	if k := kernelB(t); k != "" {
+		cvs = append(cvs, cmdlineVariant{label: "kernel B", kernel: k})
+	}
 
 	base := variant{
 		cpus: "2", memory: "2048",
@@ -96,7 +100,7 @@ WantedBy=multi-user.target
 
 	runs := map[string][]parsed{}
 	for i := range reps {
-		for _, cv := range cmdlineVariants {
+		for _, cv := range cvs {
 			v := base
 			v.label = cv.label
 			// The profiling command line is not built here. `spin-machine boot --profile` is,
@@ -112,7 +116,7 @@ WantedBy=multi-user.target
 			// The raw buffer of the first boot, for a question this report does not answer
 			// yet. Written only when asked: a test that drops a megabyte in the working
 			// directory on every run is a test people stop running.
-			if f := os.Getenv("SPIN_CONSOLE_OUT"); f != "" && i == 0 && cv.label == cmdlineVariants[0].label {
+			if f := os.Getenv("SPIN_CONSOLE_OUT"); f != "" && i == 0 && cv.label == cvs[0].label {
 				if err := os.WriteFile(f, []byte(console), 0o644); err != nil {
 					t.Fatalf("writing the console to %s: %v", f, err)
 				}
@@ -121,8 +125,8 @@ WantedBy=multi-user.target
 			runs[cv.label] = append(runs[cv.label], parse(t, console))
 		}
 	}
-	compare(t, runs)
-	report(t, runs[cmdlineVariants[0].label], top, reps)
+	compare(t, cvs, runs)
+	report(t, runs[cvs[0].label], top, reps)
 }
 
 // bootUntil boots one machine and returns its console once marker has appeared.
@@ -236,25 +240,6 @@ var cmdlineVariants = []cmdlineVariant{
 	{label: "small hashes", extra: "thash_entries=2048 uhash_entries=2048"},
 }
 
-// A second kernel, if one was built. Not a hard-coded path: an experimental vmlinux is not
-// in this repository and a variant naming a file nobody has is a variant that fails for
-// everyone who did not build it.
-func addKernelVariant(t *testing.T) {
-	t.Helper()
-	k := os.Getenv("SPIN_KERNEL_B")
-	if k == "" {
-		return
-	}
-	abs, err := filepath.Abs(k)
-	if err != nil {
-		t.Fatalf("resolving SPIN_KERNEL_B=%q: %v", k, err)
-	}
-	if _, err := os.Stat(abs); err != nil {
-		t.Fatalf("SPIN_KERNEL_B=%s: %v", abs, err)
-	}
-	cmdlineVariants = append(cmdlineVariants, cmdlineVariant{label: "kernel B", kernel: abs})
-}
-
 // initcallsOfInterest are printed side by side for every variant, because a variant that
 // moved the total is only interesting once it is clear which initcall moved.
 var initcallsOfInterest = []string{
@@ -264,11 +249,11 @@ var initcallsOfInterest = []string{
 
 // compare prints one row per variant, and is the only part of this test that answers a
 // question of the form "is it worth changing".
-func compare(t *testing.T, runs map[string][]parsed) {
+func compare(t *testing.T, cvs []cmdlineVariant, runs map[string][]parsed) {
 	t.Helper()
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n%-14s %10s %10s %10s   %s\n", "VARIANT", "FREEING", "INITCALLS", "OUTSIDE", "(p50 ms)")
-	for _, cv := range cmdlineVariants {
+	for _, cv := range cvs {
 		rs := runs[cv.label]
 		freeing, totals, outside := make([]float64, 0, len(rs)), make([]float64, 0, len(rs)), make([]float64, 0, len(rs))
 		for _, r := range rs {
@@ -278,21 +263,18 @@ func compare(t *testing.T, runs map[string][]parsed) {
 				outside = append(outside, r.freeing*1000-float64(r.total)/1000)
 			}
 		}
-		sort.Float64s(freeing)
-		sort.Float64s(totals)
-		sort.Float64s(outside)
 		fmt.Fprintf(&b, "%-14s %10.1f %10.1f %10.1f\n", cv.label,
 			pct(freeing, 50), pct(totals, 50), pct(outside, 50))
 	}
 
 	fmt.Fprintf(&b, "\n%-26s", "INITCALL (p50 ms)")
-	for _, cv := range cmdlineVariants {
+	for _, cv := range cvs {
 		fmt.Fprintf(&b, " %14s", cv.label)
 	}
 	fmt.Fprintln(&b)
 	for _, name := range initcallsOfInterest {
 		fmt.Fprintf(&b, "%-26s", name)
-		for _, cv := range cmdlineVariants {
+		for _, cv := range cvs {
 			var xs []float64
 			for _, r := range runs[cv.label] {
 				for n, us := range r.calls {
@@ -301,7 +283,6 @@ func compare(t *testing.T, runs map[string][]parsed) {
 					}
 				}
 			}
-			sort.Float64s(xs)
 			if len(xs) == 0 {
 				fmt.Fprintf(&b, " %14s", "-")
 				continue
@@ -381,7 +362,6 @@ func report(t *testing.T, runs []parsed, top, reps int) {
 		}
 	}
 	line := func(what string, xs []float64) {
-		sort.Float64s(xs)
 		fmt.Fprintf(&b, "  %-44s %8.1f %8.1f ms\n", what, pct(xs, 50), pct(xs, 95))
 	}
 	fmt.Fprintf(&b, "  %-44s %8s %8s\n", "", "P50", "P95")
@@ -411,7 +391,6 @@ func report(t *testing.T, runs []parsed, top, reps int) {
 	}
 	ranked := make([]*agg, 0, len(byBefore))
 	for _, a := range byBefore {
-		sort.Float64s(a.ms)
 		ranked = append(ranked, a)
 	}
 	sort.Slice(ranked, func(i, j int) bool { return pct(ranked[i].ms, 50) > pct(ranked[j].ms, 50) })
@@ -443,7 +422,6 @@ func report(t *testing.T, runs []parsed, top, reps int) {
 	}
 	calls := make([]*ic, 0, len(byName))
 	for _, c := range byName {
-		sort.Float64s(c.ms)
 		calls = append(calls, c)
 	}
 	sort.Slice(calls, func(i, j int) bool { return pct(calls[i].ms, 50) > pct(calls[j].ms, 50) })

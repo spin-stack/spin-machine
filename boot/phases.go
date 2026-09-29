@@ -40,6 +40,7 @@ package boot
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"io"
 	"math"
@@ -272,9 +273,10 @@ func Watch(r io.Reader, t0 time.Time, now func() time.Time, until Phase) (Run, e
 // happened or did not, and an interpolated p95 is a number no boot ever took. It sorts a
 // copy — a caller collecting samples across interleaved variants keeps them in arrival
 // order, which is what makes a run auditable afterwards.
-func Percentile(ds []time.Duration, p float64) (time.Duration, bool) {
+func Percentile[T cmp.Ordered](ds []T, p float64) (T, bool) {
 	if len(ds) == 0 {
-		return 0, false
+		var zero T
+		return zero, false
 	}
 	s := slices.Clone(ds)
 	slices.Sort(s)
