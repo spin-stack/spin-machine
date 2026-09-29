@@ -53,7 +53,7 @@
 #
 # What a VM actually gets is in the machine package (machine/machine.go): virtio-blk-pci,
 # virtio-net-pci, virtio-rng-pci, virtio-balloon-pci, virtio-mem-pci, vhost-vsock-pci,
-# vmgenid and pcie-root-port, on a q35 started with -nodefaults, with the console on the
+# vmgenid, and virtio-scsi-pci with scsi-hd, on a q35 started with -nodefaults, with the console on the
 # ISA serial port. Everything below is that list and what it needs.
 #
 # Adding a line here is adding a device to every machine this repository builds, so it wants
