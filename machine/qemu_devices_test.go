@@ -3,10 +3,7 @@
 package machine
 
 import (
-	"cmp"
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,10 +17,7 @@ import (
 // Under the ordinary build and KVM, the only accelerator that opens a device; skipped on
 // a host that will not give both up.
 func TestAMachineTakesItsDevicesAsDescriptors(t *testing.T) {
-	out, err := filepath.Abs(cmp.Or(os.Getenv("SPIN_MACHINE_OUTPUT"), "../_output"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := outputDir(t)
 	qemu := filepath.Join(out, qemuName)
 	if _, err := os.Stat(qemu); err != nil {
 		t.Skipf("no QEMU at %s: %v", qemu, err)
@@ -71,52 +65,23 @@ func TestAMachineTakesItsDevicesAsDescriptors(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cmd := exec.Command(qemu, append(args, "-S")...) // #nosec G204 -- the binary and arguments this test built
-			var stderr strings.Builder
-			cmd.Stderr, cmd.Stdout = &stderr, &stderr
-			cmd.ExtraFiles = files
-			if err := cmd.Start(); err != nil {
-				t.Fatalf("starting %s: %v", qemu, err)
-			}
-			var exit error
-			done := make(chan struct{})
-			go func() { exit = cmd.Wait(); close(done) }()
-			defer func() {
-				_ = cmd.Process.Kill()
-				<-done
-			}()
+			vm := startQEMU(t, qemu, append(args, "-S"), files...)
 
 			if tc.refused {
 				// A QEMU that opened the nodes itself runs, stopped at -S, and is still
 				// running when this gives up on it.
 				select {
-				case <-done:
+				case <-vm.done:
 				case <-time.After(20 * time.Second):
 					t.Fatalf("QEMU is running on %s and %s: it opened the devices itself", tc.kvm, tc.vsock)
 				}
-				if exit == nil {
+				if vm.exit == nil {
 					t.Fatalf("QEMU started on %s and %s: it opened the devices itself", tc.kvm, tc.vsock)
 				}
-				t.Logf("refused: %s", strings.TrimSpace(stderr.String()))
+				t.Logf("refused: %s", strings.TrimSpace(vm.out.String()))
 				return
 			}
-			conn := dialQMP(t, socket, &stderr)
-			defer func() { _ = conn.Close() }()
-			enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
-			for _, command := range []string{"", "qmp_capabilities", "query-status"} {
-				if command != "" {
-					if err := enc.Encode(map[string]string{"execute": command}); err != nil {
-						t.Fatal(err)
-					}
-				}
-				var reply map[string]json.RawMessage
-				if err := dec.Decode(&reply); err != nil {
-					t.Fatalf("no answer to %q on the monitor: %v\n\nQEMU said:\n%s", command, err, stderr.String())
-				}
-				if e, ok := reply["error"]; ok {
-					t.Fatalf("%s was refused: %s", command, e)
-				}
-			}
+			dialQMP(t, socket, vm).do("query-status", nil)
 		})
 	}
 }
