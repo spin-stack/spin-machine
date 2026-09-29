@@ -32,13 +32,17 @@ import (
 // graphReport boots reps machines with fns traced and prints the tree of p50 durations.
 func graphReport(t *testing.T, out string, base variant, fns string, reps, depth int) {
 	t.Helper()
+	// Only opens, closes and calls marked as over 10 us leave the guest. Every byte on the
+	// serial port is a VM exit, and the whole trace of acpi_init at depth 6 did not finish
+	// printing in three minutes (2026-09-29); the unmarked calls under 10 us are what made it
+	// long and are not where a millisecond goes. $$ is a literal $ in a unit file.
 	const dump = `[Unit]
 Description=Print the function_graph trace and the kernel ring buffer
 After=multi-user.target
 [Service]
 Type=oneshot
 StandardOutput=null
-ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; cat /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
+ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; grep -E '[{]$$|[}] /[*]|[+!#*@$$] +[0-9]' /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
 [Install]
 WantedBy=multi-user.target
 `
@@ -51,7 +55,7 @@ WantedBy=multi-user.target
 		"ftrace_graph_filter=" + fns,
 		"ftrace_graph_max_depth=" + strconv.Itoa(depth),
 		"trace_options=funcgraph-tail",
-		"trace_buf_size=64M",
+		"trace_buf_size=16M",
 	}, " ")
 
 	var boots []map[string]float64
