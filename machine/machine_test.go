@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -251,6 +252,21 @@ func TestAnUnnamedCPUFollowsTheAccelerator(t *testing.T) {
 		if got := s.shape().CPU; !strings.HasPrefix(got, want) {
 			t.Errorf("-accel %s: -cpu %q, want %q first", accel, got, want)
 		}
+	}
+}
+
+// A disk arriving at run time is the same modern-only virtio device a disk given at start
+// is, on the root port it was asked for, and its serial is left out rather than sent empty.
+func TestHotplugDisk(t *testing.T) {
+	want := map[string]any{
+		"driver": "virtio-blk-pci", "id": "d", "drive": "n", "bus": "rp1", "disable-legacy": "on",
+	}
+	if got := HotplugDisk(1, "d", "n", ""); !reflect.DeepEqual(got, want) {
+		t.Errorf("HotplugDisk with no serial = %v, want %v", got, want)
+	}
+	want["serial"] = "s"
+	if got := HotplugDisk(1, "d", "n", "s"); !reflect.DeepEqual(got, want) {
+		t.Errorf("HotplugDisk with a serial = %v, want %v", got, want)
 	}
 }
 

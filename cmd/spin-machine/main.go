@@ -431,16 +431,7 @@ func attach(o attachFlags) error {
 	}, nil); err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
-	dev := map[string]any{
-		"driver":         "virtio-blk-pci",
-		"id":             hotplugDiskID(o.port),
-		"drive":          hotplugDriveID(o.port),
-		"bus":            machine.HotplugPortID(o.port),
-		"disable-legacy": "on",
-	}
-	if o.serial != "" {
-		dev["serial"] = o.serial
-	}
+	dev := machine.HotplugDisk(o.port, hotplugDiskID(o.port), hotplugDriveID(o.port), o.serial)
 	if err := c.run("device_add", dev, nil); err != nil {
 		_ = c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)}, nil)
 		return fmt.Errorf("adding %s on port %d: %w", path, o.port, err)
