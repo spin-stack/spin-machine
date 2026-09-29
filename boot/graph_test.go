@@ -29,9 +29,17 @@ import (
 // It also cannot see what runs before ftrace_init, which is most of start_kernel's memory
 // setup: a root has to be a function entered after tracing is on.
 
-// graphReport boots reps machines with fns traced and prints the tree of p50 durations.
+// graphReport boots reps machines with fns traced and prints the tree of p50 durations, on the
+// release's kernel or, with GRAPH_KERNEL=b, on SPIN_KERNEL_B's - which is also the check that a
+// kernel built differently still has a working function tracer: an empty tree fails.
 func graphReport(t *testing.T, out string, base variant, fns string, reps, depth int) {
 	t.Helper()
+	kernel := ""
+	if os.Getenv("GRAPH_KERNEL") == "b" {
+		if kernel = kernelB(t); kernel == "" {
+			t.Fatal("GRAPH_KERNEL=b with no SPIN_KERNEL_B")
+		}
+	}
 	// Only opens, closes and calls marked as over 10 us leave the guest. Every byte on the
 	// serial port is a VM exit, and the whole trace of acpi_init at depth 6 did not finish
 	// printing in three minutes (2026-09-29); the unmarked calls under 10 us are what made it
@@ -60,7 +68,7 @@ WantedBy=multi-user.target
 
 	var boots []map[string]float64
 	for range reps {
-		console := bootUntil(t, out, v, "", "SPIN-DMESG-END", 180*time.Second)
+		console := bootUntil(t, out, v, kernel, "SPIN-DMESG-END", 180*time.Second)
 		begin := strings.Index(console, "SPIN-TRACE-BEGIN")
 		end := strings.Index(console, "SPIN-TRACE-END")
 		if begin < 0 || end < begin {
