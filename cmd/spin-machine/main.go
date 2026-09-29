@@ -10,8 +10,8 @@
 // runtime from somewhere else — `boot` is what `task shell` runs.
 //
 // It is also how a check of this machine is done by hand. Whatever a caller does
-// to a running machine through the contract this repository promises — a disk on
-// a hotplug port, a save to a file — is a command here, so trying it needs no
+// to a running machine through the contract this repository promises — a disk given
+// while it runs, a save to a file — is a command here, so trying it needs no
 // script of its own.
 //
 // It is not a container runtime and does not want to become one. There is no
@@ -54,7 +54,7 @@ Usage:
   spin-machine boot        [flags]   start a VM and wait for it
   spin-machine args        [flags]   print the QEMU command line boot would run
   spin-machine fingerprint [flags]   print the machine's identity
-  spin-machine attach      [flags]   give a running VM a disk on a hotplug port
+  spin-machine attach      [flags]   give a running VM a disk while it runs
   spin-machine detach      [flags]   take it back, once the guest has let it go
   spin-machine save        [flags]   stop a running VM and write its state to a file
   spin-machine restore     [flags]   load a saved state into a VM booted with --incoming defer
@@ -184,7 +184,7 @@ type machineFlags struct {
 	maxCPUs      int
 	memFile      string
 	memShare     bool
-	hotplugPorts int
+	hotplugDisks int
 
 	vsockCID int
 	qmp      string
@@ -207,7 +207,7 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.disk, "disk", "", "disk image, opened as given (default: the base image under a throwaway overlay; - for no disk)")
 	fs.StringVar(&o.diskFormat, "disk-format", "qcow2", "format of the disk image; never guessed")
 	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only, and mount root ro")
-	fs.StringVar(&o.serial, "disk-serial", "", "virtio-blk serial the guest can resolve the disk by")
+	fs.StringVar(&o.serial, "disk-serial", "", "serial the guest can resolve the disk by")
 	fs.StringVar(&o.diskCache, "disk-cache", "", "QEMU cache mode for the disk (default: QEMU's, which is writeback)")
 	fs.BoolVar(&o.directOverBacking, "disk-direct-over-backing", false,
 		"open the disk O_DIRECT and its backing chain through the host page cache (the disk must have a backing file)")
@@ -220,8 +220,8 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.IntVar(&o.maxCPUs, "max-cpus", 0, "vCPU hotplug ceiling (0: no hotplug)")
 	fs.StringVar(&o.memFile, "memory-file", "", "back guest RAM with this file instead of anonymous memory")
 	fs.BoolVar(&o.memShare, "memory-share", false, "map the memory file shared, which is what freezing a template needs")
-	fs.IntVar(&o.hotplugPorts, "hotplug-ports", 0,
-		fmt.Sprintf("empty PCIe root ports a device can be attached to while the VM runs (0-%d)", machine.MaxHotplugPorts))
+	fs.IntVar(&o.hotplugDisks, "hotplug-disks", 0,
+		fmt.Sprintf("disks attach can give the VM at once while it runs (0-%d)", machine.MaxHotplugDisks))
 
 	fs.IntVar(&o.vsockCID, "vsock-cid", 0, "give the machine a vhost-vsock device with this context id")
 	fs.StringVar(&o.qmp, "qmp", "", "listen for QMP on this Unix socket; attach, detach and save connect to it")
@@ -280,7 +280,7 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 		File:   o.memFile,
 		Shared: o.memShare,
 	}
-	s.HotplugPorts = o.hotplugPorts
+	s.HotplugDisks = o.hotplugDisks
 	s.VsockCID = o.vsockCID
 	if o.qmp != "" {
 		s.Monitors = []machine.Monitor{{Socket: o.qmp}}
@@ -398,10 +398,10 @@ func fingerprint(s machine.Spec) error {
 	return enc.Encode(out)
 }
 
-// The ids a disk on hotplug port i goes by, so that detach finds what attach made
-// from the port number alone.
-func hotplugDiskID(port int) string  { return machine.HotplugPortID(port) + "-disk" }
-func hotplugDriveID(port int) string { return machine.HotplugPortID(port) + "-drive" }
+// The ids the disk at hotplug target i goes by, so that detach finds what attach made
+// from the target alone.
+func hotplugDiskID(target int) string  { return fmt.Sprintf("hd%d", target) }
+func hotplugDriveID(target int) string { return fmt.Sprintf("hd%d-drive", target) }
 
 type compareFlags struct {
 	old, new  string
@@ -439,7 +439,7 @@ func compare(o compareFlags, w io.Writer) error {
 
 type attachFlags struct {
 	qmp      string
-	port     int
+	target   int
 	disk     string
 	format   string
 	readonly bool
@@ -448,21 +448,21 @@ type attachFlags struct {
 
 func (o *attachFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
-	fs.IntVar(&o.port, "port", 0, "hotplug port, 0 to the VM's --hotplug-ports minus one")
+	fs.IntVar(&o.target, "target", 0, "hotplug target, 0 to the VM's --hotplug-disks minus one")
 	fs.StringVar(&o.disk, "disk", "", "disk image (required)")
 	fs.StringVar(&o.format, "disk-format", "raw", "format of the disk image; never guessed")
 	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only")
-	fs.StringVar(&o.serial, "disk-serial", "", "virtio-blk serial the guest can resolve the disk by")
+	fs.StringVar(&o.serial, "disk-serial", "", "serial the guest can resolve the disk by")
 }
 
-// attach puts a virtio-blk disk on a hotplug root port, the way a caller of this
-// machine gives it a disk after a restore. It returns when QEMU has the device; the
-// guest's pciehp finds it on its own, and whether it did is read from the guest.
+// attach puts a disk at a hotplug target of the machine's SCSI controller, the way a
+// caller of this machine gives it a disk after a restore. It returns when QEMU has the
+// device; the guest sees it at once, and whether it did is read from the guest.
 func attach(o attachFlags) error {
 	if o.qmp == "" || o.disk == "" {
 		return errors.New("attach: --qmp and --disk are required")
 	}
-	if err := checkPort(o.port); err != nil {
+	if err := checkTarget(o.target); err != nil {
 		return fmt.Errorf("attach: %w", err)
 	}
 	path, err := filepath.Abs(o.disk)
@@ -476,44 +476,43 @@ func attach(o attachFlags) error {
 	defer func() { _ = c.Close() }()
 
 	if err := c.run("blockdev-add", map[string]any{
-		"node-name": hotplugDriveID(o.port),
+		"node-name": hotplugDriveID(o.target),
 		"driver":    o.format,
 		"read-only": o.readonly,
 		"file":      map[string]any{"driver": "file", "filename": path},
 	}, nil); err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
-	dev := machine.HotplugDisk(o.port, hotplugDiskID(o.port), hotplugDriveID(o.port), o.serial)
+	dev := machine.HotplugDisk(o.target, hotplugDiskID(o.target), hotplugDriveID(o.target), o.serial)
 	if err := c.run("device_add", dev, nil); err != nil {
-		_ = c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)}, nil)
-		return fmt.Errorf("adding %s on port %d: %w", path, o.port, err)
+		_ = c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.target)}, nil)
+		return fmt.Errorf("adding %s at target %d: %w", path, o.target, err)
 	}
-	fmt.Fprintf(os.Stderr, "attached %s on port %d (%s)\n", path, o.port, machine.HotplugPortID(o.port))
+	fmt.Fprintf(os.Stderr, "attached %s at target %d\n", path, o.target)
 	return nil
 }
 
 type detachFlags struct {
 	qmp     string
-	port    int
+	target  int
 	timeout time.Duration
 }
 
 func (o *detachFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
-	fs.IntVar(&o.port, "port", 0, "hotplug port the disk was attached on")
-	fs.DurationVar(&o.timeout, "timeout", 30*time.Second, "how long the guest has to let the disk go")
+	fs.IntVar(&o.target, "target", 0, "hotplug target the disk was attached at")
+	fs.DurationVar(&o.timeout, "timeout", 30*time.Second, "how long QEMU has to report the disk gone")
 }
 
-// detach asks for the disk on a port back and waits for the guest to give it. A
-// device_del is a request: QEMU presses the slot's attention button and the device
-// goes only when the guest's pciehp powers the slot off, about five seconds later
-// by the PCIe spec's own wait. A guest that never answers is the failure worth
-// seeing, so it is an error and not a return on the request.
+// detach takes the disk at a target back and waits for QEMU to say it has gone. A SCSI
+// disk goes as soon as it is asked for, where one behind a PCIe root port waited out
+// pciehp's five-second attention-button window; a device QEMU never reports gone is
+// still the failure worth seeing, so it is an error and not a return on the request.
 func detach(o detachFlags) error {
 	if o.qmp == "" {
 		return errors.New("detach: --qmp is required")
 	}
-	if err := checkPort(o.port); err != nil {
+	if err := checkTarget(o.target); err != nil {
 		return fmt.Errorf("detach: %w", err)
 	}
 	c, err := dialQMP(o.qmp)
@@ -522,28 +521,27 @@ func detach(o detachFlags) error {
 	}
 	defer func() { _ = c.Close() }()
 
-	id := hotplugDiskID(o.port)
+	id := hotplugDiskID(o.target)
 	start := time.Now()
 	if err := c.run("device_del", map[string]any{"id": id}, nil); err != nil {
-		return fmt.Errorf("removing the disk on port %d: %w", o.port, err)
+		return fmt.Errorf("removing the disk at target %d: %w", o.target, err)
 	}
 	if err := c.waitDeleted(id, o.timeout); err != nil {
-		return fmt.Errorf("the guest did not release the disk on port %d: %w", o.port, err)
+		return fmt.Errorf("QEMU did not report the disk at target %d gone: %w", o.target, err)
 	}
 	took := time.Since(start)
-	if err := c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.port)}, nil); err != nil {
-		return fmt.Errorf("closing the disk on port %d: %w", o.port, err)
+	if err := c.run("blockdev-del", map[string]any{"node-name": hotplugDriveID(o.target)}, nil); err != nil {
+		return fmt.Errorf("closing the disk at target %d: %w", o.target, err)
 	}
-	fmt.Fprintf(os.Stderr, "detached port %d in %.1fs\n", o.port, took.Seconds())
+	fmt.Fprintf(os.Stderr, "detached target %d in %.1fs\n", o.target, took.Seconds())
 	return nil
 }
 
-// checkPort refuses a port no machine can have, here rather than as QEMU's "Bus 'rp-1'
-// not found". Whether this VM was started with that many is QEMU's to answer, and it
-// does, in the same words.
-func checkPort(port int) error {
-	if port < 0 || port >= machine.MaxHotplugPorts {
-		return fmt.Errorf("port %d: a machine has ports 0 to %d at most", port, machine.MaxHotplugPorts-1)
+// checkTarget refuses a target no machine can have, here rather than as QEMU's own
+// refusal. Whether this VM was started with a controller is QEMU's to answer.
+func checkTarget(target int) error {
+	if target < 0 || target >= machine.MaxHotplugDisks {
+		return fmt.Errorf("target %d: a machine has targets 0 to %d at most", target, machine.MaxHotplugDisks-1)
 	}
 	return nil
 }

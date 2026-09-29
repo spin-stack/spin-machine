@@ -236,7 +236,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 	every.CPU, every.BootCPUs, every.MaxCPUs = "Skylake-Server-v4", 3, 8
 	every.Accel = "tcg"
 	every.Memory = machine.Memory{SizeMB: 1024, MaxMB: 4096, File: "/m", Shared: true}
-	every.HotplugPorts, every.VsockCID = 2, 7
+	every.HotplugDisks, every.VsockCID = 2, 7
 	every.Monitors = []machine.Monitor{{Socket: "/qmp"}}
 	every.Incoming = "file:/s"
 	every.Serial = ""
@@ -268,7 +268,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 		{"everything given", []string{"--qemu", "/q", "--kernel", "/k", "--initrd", "/i", "--firmware", "/f",
 			"--disk", "/d", "--disk-format", "raw", "--disk-readonly", "--disk-serial", "ser", "--disk-cache", "none",
 			"--disk-direct-over-backing", "--accel", "tcg", "--memory", "1024", "--max-memory", "4096", "--cpu", "Skylake-Server-v4",
-			"--cpus", "3", "--max-cpus", "8", "--memory-file", "/m", "--memory-share", "--hotplug-ports", "2",
+			"--cpus", "3", "--max-cpus", "8", "--memory-file", "/m", "--memory-share", "--hotplug-disks", "2",
 			"--vsock-cid", "7", "--qmp", "/qmp", "--incoming", "file:/s", "--console", "", "--init", "/bin/sh",
 			"--root", "/dev/vdb", "--profile", "--append", "a=1 b"}, every, false},
 		{"incoming defer is a restore over QMP", []string{"--incoming", "defer"}, deferred, true},
@@ -379,7 +379,7 @@ func TestAttachOpensTheDiskThenPlugsIt(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newMonitor(t, tc.replies...)
-			err := attach(attachFlags{qmp: m.socket, port: 1, disk: disk, format: "raw", serial: "s"})
+			err := attach(attachFlags{qmp: m.socket, target: 1, disk: disk, format: "raw", serial: "s"})
 			switch {
 			case tc.wantErr == "" && err != nil:
 				t.Fatal(err)
@@ -396,8 +396,8 @@ func TestAttachOpensTheDiskThenPlugsIt(t *testing.T) {
 			}
 			if len(asked) > 2 {
 				dev := asked[2].Arguments
-				if dev["bus"] != "rp1" || dev["drive"] != "rp1-drive" || dev["serial"] != "s" {
-					t.Errorf("device_add %v, want the disk on rp1 over rp1-drive with its serial", dev)
+				if dev["bus"] != "scsi0.0" || dev["scsi-id"] != float64(1) || dev["drive"] != "hd1-drive" || dev["serial"] != "s" {
+					t.Errorf("device_add %v, want the disk at target 1 over hd1-drive with its serial", dev)
 				}
 			}
 		})

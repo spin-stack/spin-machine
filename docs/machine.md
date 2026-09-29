@@ -29,9 +29,9 @@ something that otherwise boots and is subtly wrong.
   the guest's enumeration order independent of the order code runs in. Bus 0 is what lets
   the kernel be told `pci=lastbus=0`, which stops the search for peer host bridges across
   all 256 buses — 8192 configuration reads, every one a VM exit — measured at 87.6 ms to
-  51.1 ms, kernel to init. The flag bounds only that search: the root ports `HotplugPorts`
-  adds are bridges on bus 0, and a device attached behind one comes up at `01:00.0` like any
-  bus behind a bridge (checked 2026-09-27). A second host bridge would not be found.
+  51.1 ms, kernel to init. The flag bounds only that search: disks attached while the machine
+  runs are SCSI disks on the `HotplugDisks` controller, not devices behind a bridge. A second
+  host bridge would not be found.
 - **`pc.ram`.** When guest memory comes from a `memory-backend-file`, the object is named
   `pc.ram` — what QEMU calls the machine's main RAM block when it makes one itself —
   because migration matches RAM blocks by name across save and restore. A template is taken
@@ -51,7 +51,7 @@ than an error. It hashes:
 - the QEMU binary, the kernel and the initrd, **by content** — not by path;
 - the shape: the `-machine`, `-accel`, `-cpu`, `-smp` and `-m` arguments;
 - the devices present when state is loaded: vmgenid, the RNG and the balloon, and, when the
-  spec has them, the vsock, the virtio-mem region, the serial port, the hotplug root ports,
+  spec has them, the vsock, the virtio-mem region, the serial port, the hotplug controller,
   and the NICs by count and MTU;
 - the host's CPU model, but only when the guest is shown the host's CPU (`host` under KVM,
   `max` under TCG). See [migration.md](migration.md).

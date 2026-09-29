@@ -44,25 +44,25 @@ func TestQMP(t *testing.T) {
 		name: "a refusal names its class and what went wrong",
 		replies: []string{
 			`{"return": {}}`,
-			`{"error": {"class": "GenericError", "desc": "Bus 'rp0' not found"}}`,
+			`{"error": {"class": "GenericError", "desc": "Bus 'scsi0.0' not found"}}`,
 		},
 		do: func(q *qmpConn) error {
-			return q.run("device_add", map[string]any{"id": "rp0-disk"}, nil)
+			return q.run("device_add", map[string]any{"id": "hd0"}, nil)
 		},
-		wantErr: "device_add: GenericError: Bus 'rp0' not found",
+		wantErr: "device_add: GenericError: Bus 'scsi0.0' not found",
 	}, {
 		// A DEVICE_DELETED that arrives before device_del's own reply is kept, or
 		// detach waits out its timeout for an event it already read.
 		name: "an event before the reply is not lost",
 		replies: []string{
 			`{"return": {}}`,
-			`{"event": "DEVICE_DELETED", "data": {"device": "rp0-disk"}}` + "\n" + `{"return": {}}`,
+			`{"event": "DEVICE_DELETED", "data": {"device": "hd0"}}` + "\n" + `{"return": {}}`,
 		},
 		do: func(q *qmpConn) error {
-			if err := q.run("device_del", map[string]any{"id": "rp0-disk"}, nil); err != nil {
+			if err := q.run("device_del", map[string]any{"id": "hd0"}, nil); err != nil {
 				return err
 			}
-			return q.waitDeleted("rp0-disk", time.Second)
+			return q.waitDeleted("hd0", time.Second)
 		},
 	}, {
 		name: "a return value is decoded",
@@ -208,12 +208,12 @@ func TestHowACommandEnds(t *testing.T) {
 		},
 	}, {
 		// Refused before a monitor is dialled: the socket here does not exist, so an
-		// error about it would mean the port was never looked at.
-		name: "a port no machine has",
+		// error about it would mean the target was never looked at.
+		name: "a target no machine has",
 		do: func() error {
-			return run([]string{"attach", "--qmp", "/nonexistent", "--disk", "d", "--port", "9"})
+			return run([]string{"attach", "--qmp", "/nonexistent", "--disk", "d", "--target", "999"})
 		},
-		is: func(err error) bool { return err != nil && strings.Contains(err.Error(), "port 9") },
+		is: func(err error) bool { return err != nil && strings.Contains(err.Error(), "target 999") },
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.do(); !tc.is(err) {

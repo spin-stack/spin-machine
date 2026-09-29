@@ -77,10 +77,6 @@
 # ACPI PM object, the RTC, the IOAPIC and fw_cfg — none of which is separable from it.
 CONFIG_Q35=y
 
-# PCIe root ports, for devices that arrive while the machine runs. machine.go places
-# Spec.HotplugPorts of them at SlotHotplugBase and names them rp0..rpN.
-CONFIG_PCIE_PORT=y
-
 # --- the devices a VM gets -----------------------------------------------------------------
 CONFIG_VIRTIO_PCI=y
 CONFIG_VIRTIO_BLK=y
@@ -94,8 +90,8 @@ CONFIG_VHOST_VSOCK=y
 CONFIG_VIRTIO_MEM=y
 # vmgenid: how a restored guest learns it was restored, so its random pool is reseeded.
 CONFIG_ACPI_VMGENID=y
-# virtio-scsi-pci and scsi-hd: disks that arrive while the machine runs. One controller at
-# boot, and a disk hot-added to it is a SCSI event the guest acts on at once - where a
+# virtio-scsi-pci and scsi-hd: disks that arrive while the machine runs (Spec.HotplugDisks).
+# There are no PCIe root ports: one controller at boot, and a disk hot-added to it is a SCSI event the guest acts on at once - where a
 # virtio-blk behind a PCIe root port is a native hotplug the guest takes ~135 ms to see and
 # ~6 s to let go of (pciehp's attention-button window), and each root port costs ~10 ms of
 # every boot (QEMU realizing it, the guest enumerating and probing it). Measured 2026-09-29,
