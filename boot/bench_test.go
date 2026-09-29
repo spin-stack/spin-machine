@@ -3,6 +3,7 @@
 package boot_test
 
 import (
+	"bytes"
 	"cmp"
 	"fmt"
 	"os"
@@ -31,6 +32,8 @@ type variant struct {
 	kernel  string            // a kernel other than the release's, for comparing configs
 	profile bool              // boot with `--profile`: initcall profiling, console silent
 	setup   string            // shell run with the overlay mounted, $MNT its root
+	flags   []string          // spin-machine boot flags after the rest: the feature matrix's axes
+	timeout time.Duration     // how long a boot may take before it is a hang; 70 s when zero
 }
 
 // Masks are written into the overlay and never passed as `systemd.mask=`. That parameter is
@@ -558,6 +561,7 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 	if v.kernel != "" {
 		args = append(args, "--kernel", v.kernel)
 	}
+	args = append(args, v.flags...)
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	// Its own process group, so the machine can be taken down as a whole. spin-machine
 	// execs QEMU in place now, so the pid is QEMU's; the group stays because it is what
@@ -569,7 +573,10 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 	if err != nil {
 		t.Fatalf("console pipe: %v", err)
 	}
-	cmd.Stderr = nil
+	// QEMU's own refusal goes to stderr, and a row that never boots is only worth reporting
+	// with it.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
 	// t0 before Start, so exec'ing QEMU and the firmware are inside the measurement. They
 	// are what the old harness left out at this end.
@@ -585,12 +592,18 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 	// The cap is for a machine that hangs. The normal path is Watch returning at the login
 	// prompt, and then this kills a machine that is working perfectly — which is the point:
 	// nothing after the phase being measured is being measured.
-	timer := time.AfterFunc(70*time.Second, kill)
+	timer := time.AfterFunc(cmp.Or(v.timeout, 70*time.Second), kill)
 	defer func() { timer.Stop(); kill(); _ = cmd.Wait() }()
 
 	run, err := boot.Watch(stdout, t0, time.Now, boot.Usable)
 	if err != nil {
 		t.Fatalf("reading the console: %v", err)
+	}
+	if !run.Reached(boot.Usable) {
+		// Watch stops at EOF; the process has exited or is about to be killed.
+		kill()
+		_ = cmd.Wait()
+		run.Output = append(run.Output, stderr.Bytes()...)
 	}
 	return run
 }

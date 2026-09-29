@@ -200,7 +200,7 @@ func TestSaveAndRestoreSayWhatQEMUNeeds(t *testing.T) {
 func release(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, f := range []string{"bin/qemu-system-x86_64", "bin/qemu-img", "kernel/vmlinux", "qemu/pvh.bin", "image/rootfs.qcow2"} {
+	for _, f := range []string{"bin/qemu-system-x86_64", "bin/qemu-system-x86_64-tcg", "bin/qemu-img", "kernel/vmlinux", "qemu/pvh.bin", "image/rootfs.qcow2"} {
 		p := filepath.Join(dir, f)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -234,6 +234,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 	every := base
 	every.QEMU, every.Kernel, every.Initrd, every.Firmware = "/q", "/k", "/i", "/f"
 	every.CPU, every.BootCPUs, every.MaxCPUs = "Skylake-Server-v4", 3, 8
+	every.Accel = "tcg"
 	every.Memory = machine.Memory{SizeMB: 1024, MaxMB: 4096, File: "/m", Shared: true}
 	every.HotplugPorts, every.VsockCID = 2, 7
 	every.Monitors = []machine.Monitor{{Socket: "/qmp"}}
@@ -250,6 +251,9 @@ func TestFlagsAreTheSpec(t *testing.T) {
 	deferred := defaults
 	deferred.IncomingDefer = true
 
+	emulated := defaults
+	emulated.Accel, emulated.QEMU = "tcg", filepath.Join(dir, "bin/qemu-system-x86_64-tcg")
+
 	noDisk := defaults
 	noDisk.Disks = nil
 	noDisk.Cmdline = machine.DefaultCmdline()
@@ -263,11 +267,12 @@ func TestFlagsAreTheSpec(t *testing.T) {
 		{"nothing given", nil, defaults, true},
 		{"everything given", []string{"--qemu", "/q", "--kernel", "/k", "--initrd", "/i", "--firmware", "/f",
 			"--disk", "/d", "--disk-format", "raw", "--disk-readonly", "--disk-serial", "ser", "--disk-cache", "none",
-			"--disk-direct-over-backing", "--memory", "1024", "--max-memory", "4096", "--cpu", "Skylake-Server-v4",
+			"--disk-direct-over-backing", "--accel", "tcg", "--memory", "1024", "--max-memory", "4096", "--cpu", "Skylake-Server-v4",
 			"--cpus", "3", "--max-cpus", "8", "--memory-file", "/m", "--memory-share", "--hotplug-ports", "2",
 			"--vsock-cid", "7", "--qmp", "/qmp", "--incoming", "file:/s", "--console", "", "--init", "/bin/sh",
 			"--root", "/dev/vdb", "--profile", "--append", "a=1 b"}, every, false},
 		{"incoming defer is a restore over QMP", []string{"--incoming", "defer"}, deferred, true},
+		{"tcg runs the release's TCG build", []string{"--accel", "tcg"}, emulated, true},
 		{"no disk mounts no root", []string{"--disk", "-"}, noDisk, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -400,5 +405,47 @@ func TestAttachOpensTheDiskThenPlugsIt(t *testing.T) {
 
 	if err := attach(attachFlags{qmp: "q.sock"}); err == nil || !strings.Contains(err.Error(), "--disk") {
 		t.Errorf("attach with no disk returned %v, want the flags it needs", err)
+	}
+}
+
+// compare reads two reports and says what moved; a report it cannot read is an error that
+// names the file, and not an empty comparison.
+func TestCompareSaysWhatMoved(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old := write("old.json", `{"release": "v1", "specs": [{"id": "a", "fingerprint": "x"}]}`)
+	nw := write("new.json", `{"release": "v2", "specs": [{"id": "a", "fingerprint": "y"}]}`)
+	var b strings.Builder
+	if err := compare(compareFlags{old: old, new: nw, threshold: 0.05}, &b); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "## v2 against v1") || !strings.Contains(b.String(), "| a | fingerprint |") {
+		t.Errorf("compare wrote:\n%s", b.String())
+	}
+
+	for _, tc := range []struct {
+		name string
+		o    compareFlags
+		want string
+	}{
+		{"no new report", compareFlags{old: old}, "--new are required"},
+		{"no old report", compareFlags{new: nw}, "--new are required"},
+		{"a report that is not there", compareFlags{old: filepath.Join(dir, "none"), new: nw}, "reading the report"},
+		{"a report that is not JSON", compareFlags{old: write("bad.json", "{"), new: nw}, "bad.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := compare(tc.o, io.Discard); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("compare returned %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+	if err := run([]string{"compare", "--old", old, "--new", nw}); err != nil {
+		t.Errorf("run compare: %v", err)
 	}
 }

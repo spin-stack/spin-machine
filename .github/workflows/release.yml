@@ -43,6 +43,8 @@ jobs:
     # and this job builds both plus the image. The GitHub Actions cache makes a warm run
     # far shorter; the ceiling is for the cold one.
     timeout-minutes: 360
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -200,3 +202,72 @@ jobs:
             _output/release/*.tar.gz
             _output/release/*.tar.gz.sha256
             _output/release/machine.env
+
+  # What every combination of the machine's features costs, booted from the tarball just
+  # published, as report.json beside it, and what moved against the release before it, at the
+  # end of the notes. A job of its own because it boots: a hosted runner has no /dev/kvm for
+  # it, and a time measured under emulation is not a time anybody's machine takes.
+  #
+  # The runner is one host, on purpose. Boot times compare only between reports taken on the
+  # same kind of host - compare says so when they were not - so every release is measured
+  # where the one before it was.
+  report:
+    needs: release
+    runs-on: [self-hosted, linux, x64, kvm]
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.version }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Task
+        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+
+      # The tarball as a consumer gets it, and not the tree the release job built: what is
+      # measured is what was published.
+      - name: Unpack the release
+        run: |
+          set -euo pipefail
+          rm -rf _output/report
+          mkdir -p _output/report
+          gh release download "$VERSION" -p '*.tar.gz' -D _output/report
+          tar -xzf _output/report/*.tar.gz -C _output/report
+          echo "RELEASE_TREE=$PWD/_output/report/spin-machine-${VERSION}-linux-x86_64/usr/share/spin-stack" >> "$GITHUB_ENV"
+
+      - name: Measure the feature matrix
+        run: task report OUTPUT_DIR="$RELEASE_TREE" OUT="$PWD/_output/report/report.json"
+
+      # Against the newest release before this one that published a report. The first
+      # release with a report has nothing to compare with, and says so.
+      - name: Publish the report, and what moved
+        run: |
+          set -euo pipefail
+          cd _output/report
+          gh release upload "$VERSION" report.json --clobber
+          previous=""
+          for tag in $(gh release list --limit 30 --json tagName -q '.[].tagName'); do
+            [ "$tag" = "$VERSION" ] && continue
+            if gh release download "$tag" -p report.json -O previous.json 2>/dev/null; then
+              previous="$tag"
+              break
+            fi
+          done
+          gh release view "$VERSION" --json body -q .body > notes.md
+          echo >> notes.md
+          if [ -n "$previous" ]; then
+            "$RELEASE_TREE/bin/spin-machine" compare --old previous.json --new report.json >> notes.md
+          else
+            echo "No earlier release published a report.json to compare the feature matrix with." >> notes.md
+          fi
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+          gh release edit "$VERSION" --notes-file notes.md

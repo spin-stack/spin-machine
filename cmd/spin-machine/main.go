@@ -34,6 +34,7 @@ import (
 	"syscall"
 	"time"
 
+	bootreport "github.com/spin-stack/spin-machine/boot"
 	"github.com/spin-stack/spin-machine/machine"
 )
 
@@ -57,6 +58,7 @@ Usage:
   spin-machine detach      [flags]   take it back, once the guest has let it go
   spin-machine save        [flags]   stop a running VM and write its state to a file
   spin-machine restore     [flags]   load a saved state into a VM booted with --incoming defer
+  spin-machine compare     [flags]   say what changed between two reports of the feature matrix
 
 spin-machine <command> -h lists a command's flags.
 `
@@ -91,6 +93,12 @@ func run(argv []string) error {
 		default:
 			return fingerprint(spec)
 		}
+	case "compare":
+		var o compareFlags
+		if err := parse(cmd, argv, o.register); err != nil {
+			return err
+		}
+		return compare(o, os.Stdout)
 	case "attach":
 		var o attachFlags
 		if err := parse(cmd, argv, o.register); err != nil {
@@ -171,6 +179,7 @@ type machineFlags struct {
 	memoryMB     int
 	maxMemMB     int
 	cpuModel     string
+	accel        string
 	cpus         int
 	maxCPUs      int
 	memFile      string
@@ -206,6 +215,7 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.IntVar(&o.memoryMB, "memory", 2048, "guest memory in MiB")
 	fs.IntVar(&o.maxMemMB, "max-memory", 0, "ceiling this VM may grow to and shrink back from, in MiB, through virtio-mem (0: fixed memory)")
 	fs.StringVar(&o.cpuModel, "cpu", "", "CPU model shown to the guest (default: host; name one, e.g. Skylake-Server-v4, to let VMs move between machines)")
+	fs.StringVar(&o.accel, "accel", "", "kvm (default) or tcg; tcg runs the release's TCG build unless --qemu names another")
 	fs.IntVar(&o.cpus, "cpus", 2, "boot vCPUs")
 	fs.IntVar(&o.maxCPUs, "max-cpus", 0, "vCPU hotplug ceiling (0: no hotplug)")
 	fs.StringVar(&o.memFile, "memory-file", "", "back guest RAM with this file instead of anonymous memory")
@@ -249,6 +259,14 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 	}
 
 	s := rel.Spec()
+	// The KVM build refuses -accel tcg, so emulating is a different binary as well as a
+	// different flag, and the release has both.
+	if o.accel == "tcg" && o.qemu == "" {
+		if s.QEMU, err = rel.QEMUTCG(); err != nil {
+			return machine.Spec{}, err
+		}
+	}
+	s.Accel = o.accel
 	s.QEMU = or(o.qemu, s.QEMU)
 	s.Kernel = or(o.kernel, s.Kernel)
 	s.Firmware = or(o.firmware, s.Firmware)
@@ -384,6 +402,38 @@ func fingerprint(s machine.Spec) error {
 // from the port number alone.
 func hotplugDiskID(port int) string  { return machine.HotplugPortID(port) + "-disk" }
 func hotplugDriveID(port int) string { return machine.HotplugPortID(port) + "-drive" }
+
+type compareFlags struct {
+	old, new  string
+	threshold float64
+}
+
+func (o *compareFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&o.old, "old", "", "the report to compare against, as `task report` writes it (required)")
+	fs.StringVar(&o.new, "new", "", "the report being judged (required)")
+	fs.Float64Var(&o.threshold, "threshold", 0.05, "a usable-time change smaller than this fraction is not reported")
+}
+
+// compare writes, as Markdown, what changed from one report of the feature matrix to the
+// next: a release against the one before it, or an experiment against the release it
+// started from.
+func compare(o compareFlags, w io.Writer) error {
+	if o.old == "" || o.new == "" {
+		return errors.New("compare: --old and --new are required")
+	}
+	var reports [2]bootreport.Report
+	for i, p := range []string{o.old, o.new} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("reading the report: %w", err)
+		}
+		if err := json.Unmarshal(b, &reports[i]); err != nil {
+			return fmt.Errorf("reading the report %s: %w", p, err)
+		}
+	}
+	bootreport.Diff(w, reports[0], reports[1], o.threshold)
+	return nil
+}
 
 type attachFlags struct {
 	qmp      string

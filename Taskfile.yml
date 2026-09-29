@@ -185,6 +185,7 @@ tasks:
       running one a disk or saves it (`spin-machine -h`).
     sources:
       - machine/**/*.go
+      - boot/*.go
       - cmd/**/*.go
       - go.mod
     generates:
@@ -192,6 +193,27 @@ tasks:
     cmds:
       - mkdir -p {{.OUTPUT_ABS}}/bin
       - CGO_ENABLED=0 go build -ldflags '-s -w' -o {{.OUTPUT_ABS}}/bin/spin-machine ./cmd/spin-machine
+
+  report:
+    desc: >-
+      Every combination of the machine's features, and the image's boot variants, booted and
+      written as JSON to OUT: what each is, whether QEMU runs it, and what a boot of it costs.
+      `spin-machine compare --old A --new B` says what changed between two - two releases, or a
+      release and an experiment. Needs /dev/kvm and a built release (OUTPUT_DIR); sudo for the
+      variants that edit the image. REPS= boots per row, ONLY=<regexp> for some rows,
+      FLAGS="--kernel ... --append ..." for an experiment on every boot.
+    deps: [tools]
+    vars:
+      OUT: '{{.OUT | default (printf "%s/report.json" .OUTPUT_ABS)}}'
+      REPS: '{{.REPS | default "3"}}'
+    cmds:
+      # TMPDIR on disk, because the overlays go there and cache=none is O_DIRECT, which
+      # tmpfs refuses: a /tmp on tmpfs would report every cache-none row as one QEMU refuses.
+      - mkdir -p {{.OUTPUT_ABS}}/report-tmp
+      - >-
+        TMPDIR={{.OUTPUT_ABS}}/report-tmp SPIN_MACHINE_OUTPUT={{.OUTPUT_ABS}} SPIN_REPORT={{.OUT}}
+        SPIN_REPORT_ONLY='{{.ONLY}}' SPIN_REPORT_FLAGS='{{.FLAGS}}' REPS={{.REPS}}
+        go test ./boot/ -run '^TestReport$' -count=1 -v -timeout 6h
 
   boot:bench:
     desc: >-
