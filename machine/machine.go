@@ -1222,7 +1222,7 @@ func (s Spec) appendNICs(args []string) []string {
 		// different machine.
 		dev := fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s,romfile=,%s,addr=0x%x",
 			i, n.MAC, virtioModern, slotNICBase+i)
-		if n.MTU > 0 {
+		if n.MTU > 0 { // mutate-exempt: the guest driver refuses an announced MTU below 68 (virtnet_probe), so 0 is the only small value a caller means
 			dev += fmt.Sprintf(",host_mtu=%d", n.MTU)
 		}
 		netdev := fmt.Sprintf("tap,id=net%d,fd=%d,vhost=on", i, n.TapFD)
