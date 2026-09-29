@@ -53,8 +53,8 @@ import (
 //	                        a workspace boots with: --max-cpus 16 --max-memory 8192
 //	SPIN_GRAPH=<fn,fn>      after the timed boots, GRAPH_REPS (default 3) more with these
 //	                        functions traced by function_graph to GRAPH_DEPTH (default 3),
-//	                        printed as a tree of p50s; see graph_test.go for what it can and
-//	                        cannot say
+//	                        printed as a tree of p50s, on kernel B with GRAPH_KERNEL=b; see
+//	                        graph_test.go for what it can and cannot say
 func TestKernelInitcalls(t *testing.T) {
 	if os.Getenv("SPIN_INITCALL_PROBE") == "" {
 		t.Skip("set SPIN_INITCALL_PROBE=1: boots a VM and needs sudo to write into its overlay")
