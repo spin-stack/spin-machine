@@ -353,3 +353,52 @@ func TestRunBuildsTheMachineOrSaysWhyNot(t *testing.T) {
 		})
 	}
 }
+
+// attach, against a monitor that answers as QEMU does: the node first and then the device on
+// it, and a device QEMU refuses takes its node away again, because the node holds the image
+// and its lock.
+func TestAttachOpensTheDiskThenPlugsIt(t *testing.T) {
+	disk := filepath.Join(t.TempDir(), "d.raw")
+	refused := `{"error": {"class": "GenericError", "desc": "no"}}`
+	for _, tc := range []struct {
+		name    string
+		replies []string
+		want    []string
+		wantErr string
+	}{
+		{name: "attached", replies: []string{ok, ok, ok}, want: []string{"blockdev-add", "device_add"}},
+		{name: "a node QEMU refuses", replies: []string{ok, refused},
+			want: []string{"blockdev-add"}, wantErr: "opening"},
+		{name: "a device QEMU refuses", replies: []string{ok, ok, refused, ok},
+			want: []string{"blockdev-add", "device_add", "blockdev-del"}, wantErr: "adding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMonitor(t, tc.replies...)
+			err := attach(attachFlags{qmp: m.socket, port: 1, disk: disk, format: "raw", serial: "s"})
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatal(err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("error %v, want one containing %q", err, tc.wantErr)
+			}
+			asked := m.commands(t)
+			var got []string
+			for _, r := range asked[1:] {
+				got = append(got, r.Execute)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("asked %v, want %v", got, tc.want)
+			}
+			if len(asked) > 2 {
+				dev := asked[2].Arguments
+				if dev["bus"] != "rp1" || dev["drive"] != "rp1-drive" || dev["serial"] != "s" {
+					t.Errorf("device_add %v, want the disk on rp1 over rp1-drive with its serial", dev)
+				}
+			}
+		})
+	}
+
+	if err := attach(attachFlags{qmp: "q.sock"}); err == nil || !strings.Contains(err.Error(), "--disk") {
+		t.Errorf("attach with no disk returned %v, want the flags it needs", err)
+	}
+}
