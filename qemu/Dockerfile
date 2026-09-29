@@ -101,18 +101,11 @@ RUN --mount=type=cache,sharing=locked,id=qemu-apk,target=/var/cache/apk \
 
 WORKDIR /build
 
-# Source tarball + extracted tree live in a cache mount, shared across builds.
+# Source tarball + extracted tree live in a cache mount, shared across builds. Each step that
+# reads the tree runs qemu/source.sh first, which says why.
+COPY qemu/source.sh /build/qemu-source.sh
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
-    tarball="/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" && \
-    if [ ! -f "$tarball" ]; then \
-        curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o "$tarball"; \
-    fi && \
-    # Checked on every build and not only after a download: the tarball lives in a cache
-    # mount, so the copy being compiled today may have arrived weeks ago.
-    echo "${QEMU_SHA256}  $tarball" | sha256sum -c - && \
-    if [ ! -d "/var/cache/qemu/qemu-${QEMU_VERSION}" ]; then \
-        tar -xf "$tarball" -C /var/cache/qemu; \
-    fi
+    sh /build/qemu-source.sh
 
 # The device set (see qemu/devices.mak) and the flags both builds share.
 #
@@ -261,6 +254,7 @@ ENV QEMU_FLAGS="\
 # build above.
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
     --mount=type=cache,sharing=locked,id=qemu-build-kvm-${QEMU_VERSION}-${QEMU_CONFIG_REV},target=/build/qemu-build-kvm \
+    sh /build/qemu-source.sh && \
     cp /build/spin-devices.mak \
        "/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/spin.mak" && \
     mkdir -p qemu-build-kvm && cd qemu-build-kvm && \
@@ -282,6 +276,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
 
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
     --mount=type=cache,sharing=locked,id=qemu-build-tcg-${QEMU_VERSION}-${QEMU_CONFIG_REV},target=/build/qemu-build-tcg \
+    sh /build/qemu-source.sh && \
     cp /build/spin-devices.mak \
        "/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/spin.mak" && \
     mkdir -p qemu-build-tcg && cd qemu-build-tcg && \
