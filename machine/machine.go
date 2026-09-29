@@ -93,6 +93,25 @@ func HotplugPortID(i int) string {
 	return fmt.Sprintf("rp%d", i)
 }
 
+// HotplugDisk is the device_add arguments for a disk arriving on hotplug port i, over the
+// block node named node. The device is modern-only virtio, as every virtio device given at
+// start is (see virtioModern); QMP takes that setting as a value rather than as part of an
+// option string, so the constant cannot be reused. A root port has one slot, so there is no
+// address. The id and the node are the caller's names: it is the one that deletes them.
+func HotplugDisk(i int, id, node, serial string) map[string]any {
+	dev := map[string]any{
+		"driver":         "virtio-blk-pci",
+		"id":             id,
+		"drive":          node,
+		"bus":            HotplugPortID(i),
+		"disable-legacy": "on",
+	}
+	if serial != "" {
+		dev["serial"] = serial
+	}
+	return dev
+}
+
 // virtioModern forces virtio 1.0 (modern-only) on a PCI virtio device.
 //
 // disable-legacy=on drops the legacy I/O BAR and the transitional device ID, so
