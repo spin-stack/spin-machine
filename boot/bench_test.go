@@ -764,6 +764,18 @@ func (r *rawRoot) link(l, target string) {
 
 func canSudo() bool { return exec.Command("sudo", "-n", "true").Run() == nil }
 
+// canEditImages is whether editOverlay can work here: sudo, and an NBD device once the module is
+// loaded. A runner in a container can have the first and not the second - modprobe succeeds on
+// the host's kernel and /dev/nbd0 is not in the container - and qemu-nbd then fails on every
+// boot that edits its overlay.
+func canEditImages() bool {
+	if !canSudo() || exec.Command("sudo", "-n", "modprobe", "nbd", "max_part=8").Run() != nil {
+		return false
+	}
+	_, err := os.Stat("/dev/nbd0")
+	return err == nil
+}
+
 // releaseTree is _output, or SPIN_MACHINE_OUTPUT, without releaseDir's checks: a test that runs
 // under TCG cannot ask for /dev/kvm.
 func releaseTree(t *testing.T) string {

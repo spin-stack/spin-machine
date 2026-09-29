@@ -93,9 +93,9 @@ func combinations() [][]choice {
 //
 // Needs /dev/kvm and a built release tree (SPIN_MACHINE_OUTPUT, or _output). The vsock rows
 // need /dev/vhost-vsock, the TCG rows the release's TCG build; without them those rows are
-// listed as skipped rather than reported as failing. With sudo the getty is replaced by an
-// echo, as in TestBootCost, and every variant of the image runs; without it the usable
-// column carries agetty's second and the variants that edit the image are skipped.
+// listed as skipped rather than reported as failing. With sudo and /dev/nbd0 the getty is
+// replaced by an echo, as in TestBootCost, and every variant of the image runs; without them
+// the usable column carries agetty's second and the variants that edit the image are skipped.
 func TestReport(t *testing.T) {
 	path := os.Getenv("SPIN_REPORT")
 	if path == "" {
@@ -124,7 +124,7 @@ func TestReport(t *testing.T) {
 			}
 		}
 	}
-	sudo := canSudo()
+	sudo := canEditImages()
 	var login map[string]string
 	if sudo {
 		r.Login, login = "echo", gettyDropin(gettyEcho)
@@ -205,7 +205,7 @@ func TestReport(t *testing.T) {
 			continue
 		}
 		if !sudo && (len(v.mask) > 0 || len(v.files) > 0 || len(v.links) > 0 || v.setup != "") {
-			r.Skipped = append(r.Skipped, boot.Skipped{ID: v.label, Why: "edits the image, which needs sudo"})
+			r.Skipped = append(r.Skipped, boot.Skipped{ID: v.label, Why: "edits the image, which needs sudo and /dev/nbd0"})
 			continue
 		}
 		v.flags = append(v.flags, flags...)
