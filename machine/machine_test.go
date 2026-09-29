@@ -740,10 +740,11 @@ func TestValidateRefuses(t *testing.T) {
 		t.Fatalf("the minimal spec with a NIC does not validate: %v", err)
 	}
 
-	// The least each bound allows: one megabyte, and the first descriptor that is not
-	// stdin, stdout or stderr.
+	// The least each bound allows: one megabyte, one vCPU, and the first descriptor that is
+	// not stdin, stdout or stderr.
 	s = spec(t)
 	s.Memory.SizeMB = 1
+	s.BootCPUs = 1
 	s.VsockCID, s.VsockFD = 3, 3
 	if err := s.validate(); err != nil {
 		t.Fatalf("the least each bound allows does not validate: %v", err)
