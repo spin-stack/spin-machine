@@ -448,4 +448,7 @@ func TestCompareSaysWhatMoved(t *testing.T) {
 	if err := run([]string{"compare", "--old", old, "--new", nw}); err != nil {
 		t.Errorf("run compare: %v", err)
 	}
+	if err := run([]string{"compare", "--nope"}); err == nil || !strings.Contains(err.Error(), "not defined") {
+		t.Errorf("run compare with a flag it does not take returned %v", err)
+	}
 }

@@ -39,6 +39,11 @@ func TestSummarise(t *testing.T) {
 	}
 }
 
+// one is a row of a single boot, which either reached a login prompt or did not.
+func one(id string, failed int) Row {
+	return Row{ID: id, Boot: Boot{Boots: 1, Failed: failed}}
+}
+
 func row(id, fp string, usable float64, failed int) Row {
 	return Row{ID: id, Fingerprint: fp, Args: []string{"-m", "2048"},
 		Boot: Boot{Boots: 3, Failed: failed, Phases: map[string]Summary{"usable": {P50: usable, P95: usable + 10, N: 3}}}}
@@ -48,13 +53,15 @@ func row(id, fp string, usable float64, failed int) Row {
 // ways a comparison can be of something other than two releases.
 func TestDiff(t *testing.T) {
 	host := Host{CPU: "a", CPUs: 8}
-	old := Report{Release: "v1", Host: host, Login: "echo", Artifacts: map[string]string{"kernel_sha256": "aaaaaaaaaaaaaaaa", "qemu_sha256": "q"},
+	old := Report{Release: "v1", Host: host, Login: "echo", Artifacts: map[string]string{"kernel_sha256": "aaaaaaaaaaaaa", "qemu_sha256": "q"},
 		Specs: []Row{row("same", "f", 100, 0), row("slower", "f", 100, 0), row("refused", "f", 100, 0),
-			row("fingerprint", "f", 100, 0), row("gone", "f", 100, 0), row("just under", "f", 100, 0)},
+			row("fingerprint", "f", 100, 0), row("gone", "f", 100, 0), row("just under", "f", 100, 0),
+			row("sub-millisecond", "f", 0.5, 0), one("one boot", 0)},
 		Variants: []Row{row("baseline", "", 200, 0)}}
 	nw := Report{Release: "v2", Host: host, Login: "echo", Artifacts: map[string]string{"kernel_sha256": "bbbbbbbbbbbbbbbb", "qemu_sha256": "q"},
 		Specs: []Row{row("same", "f", 101, 0), row("slower", "f", 120, 0), row("refused", "f", 0, 3),
-			row("fingerprint", "g", 100, 0), row("added", "f", 90, 0), row("just under", "f", 105, 0)},
+			row("fingerprint", "g", 100, 0), row("added", "f", 90, 0), row("just under", "f", 105, 0),
+			row("sub-millisecond", "f", 1, 0), one("one boot", 1)},
 		Variants: []Row{row("baseline", "", 200, 0)}}
 	nw.Specs[2].Boot.Phases = nil
 	nw.Specs[0].Args = []string{"-m", "4096"}
@@ -71,6 +78,8 @@ func TestDiff(t *testing.T) {
 		"| fingerprint | fingerprint | 100.0 / 110.0 → 100.0 / 110.0 |",
 		"| added | new row | 90.0 / 100.0 |",
 		"| gone | row gone | 100.0 / 110.0 |",
+		"| sub-millisecond | usable p50 +100.0% |",
+		"| one boot | boots: some → none |",
 		"### Image variants\n\nNo row changed beyond 5%.",
 	} {
 		if !strings.Contains(got, want) {
@@ -84,12 +93,12 @@ func TestDiff(t *testing.T) {
 	}
 
 	// A partial run, an experiment, another host and another login.
-	nw.Only, nw.Flags, nw.Release = "slower", []string{"--kernel", "/k"}, ""
+	nw.Only, nw.Flags, nw.Release = "slower", []string{"--kernel=/k"}, ""
 	nw.Host, nw.Login = Host{CPU: "b", CPUs: 4}, "agetty"
 	b.Reset()
-	Diff(&b, old, nw, 0.05)
+	Diff(&b, old, nw, 0.9)
 	got = b.String()
-	for _, want := range []string{"## an unreleased tree with --kernel /k against v1", "different hosts (a, 8 CPUs; b, 4 CPUs)", "reached differently (echo, agetty)"} {
+	for _, want := range []string{"## an unreleased tree with --kernel=/k against v1", "No row changed beyond 90%", "different hosts (a, 8 CPUs; b, 4 CPUs)", "reached differently (echo, agetty)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the diff has no %q:\n%s", want, got)
 		}
