@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-jose/go-jose/v4/testutils/require"
 	"github.com/go-openapi/testify/v2/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/spin-stack/spin-machine/machine"
 )
