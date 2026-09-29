@@ -55,6 +55,8 @@ import (
 //	                        functions traced by function_graph to GRAPH_DEPTH (default 3),
 //	                        printed as a tree of p50s, on kernel B with GRAPH_KERNEL=b; see
 //	                        graph_test.go for what it can and cannot say
+//	SPIN_CPU_SHARE=<fn>     after that, SHARE_REPS (default 3) boots per kernel with the
+//	                        scheduler traced: who had the CPU while initcall fn ran
 func TestKernelInitcalls(t *testing.T) {
 	if os.Getenv("SPIN_INITCALL_PROBE") == "" {
 		t.Skip("set SPIN_INITCALL_PROBE=1: boots a VM and needs sudo to write into its overlay")
@@ -142,6 +144,9 @@ WantedBy=multi-user.target
 	report(t, runs[cvs[0].label], top, reps)
 	if fns := os.Getenv("SPIN_GRAPH"); fns != "" {
 		graphReport(t, out, base, fns, envInt(t, "GRAPH_REPS", 3), envInt(t, "GRAPH_DEPTH", 3))
+	}
+	if fn := os.Getenv("SPIN_CPU_SHARE"); fn != "" {
+		cpuShareReport(t, out, base, fn, envInt(t, "SHARE_REPS", 3))
 	}
 }
 
