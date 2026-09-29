@@ -10,7 +10,7 @@ tool (
 	github.com/spin-stack/go-tools/cmd/versions
 )
 
-require github.com/spin-stack/go-tools v0.0.0-20260929023541-e4f04c0bb20a
+require github.com/spin-stack/go-tools v0.0.0-20260929100035-f55da7c4ecef
 
 require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
