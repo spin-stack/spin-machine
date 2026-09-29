@@ -147,6 +147,7 @@ func TestPercentile(t *testing.T) {
 		// boot — the one the number exists to expose — could never be reported.
 		{"p95 of five is the slowest", five, 0.95, 50, true},
 		{"p100", five, 1, 50, true},
+		{"past p100 is still the slowest", five, 1.5, 50, true},
 		{"an empty set has none, and says so", nil, 0.5, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
