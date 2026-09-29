@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -61,8 +62,9 @@ func TestArgs(t *testing.T) {
 		// is most of what makes this machine what it is.
 		name: "machine-wide flags",
 		want: []string{"-nodefaults", "-sandbox on,obsolete=deny", "vmgenid,guid=auto"},
-		// Anonymous RAM names no backend; the virtio-mem device is only for a ceiling.
-		absent: []string{"memory-backend", "virtio-mem", "-incoming"},
+		// Anonymous RAM names no backend; the virtio-mem device is only for a ceiling, and a
+		// vsock only for a CID.
+		absent: []string{"memory-backend", "virtio-mem", "-incoming", "vhost-vsock"},
 	}, {
 		// The slot map is the reason the kernel can be told pci=lastbus=0. A device
 		// that moved off its slot is a device the guest may not find, with no error.
@@ -259,6 +261,11 @@ func TestArgsCarriesTheShape(t *testing.T) {
 	args, err := s.Args()
 	if err != nil {
 		t.Fatal(err)
+	}
+	// exec passes an empty element as an argument of its own, which QEMU reads as a
+	// file name or refuses.
+	if i := slices.Index(args, ""); i >= 0 {
+		t.Errorf("argument %d is empty: %q", i, args)
 	}
 	sh := s.shape()
 	for _, c := range []struct{ flag, want string }{
@@ -726,6 +733,13 @@ func TestValidateRefuses(t *testing.T) {
 	s.VsockCID, s.VsockFD = 3, 3
 	if err := s.validate(); err != nil {
 		t.Fatalf("the least each bound allows does not validate: %v", err)
+	}
+
+	// A console by path is one of its two forms, not half of a conflict.
+	s = spec(t)
+	s.Serial = "stdio"
+	if err := s.validate(); err != nil {
+		t.Fatalf("a console by path does not validate: %v", err)
 	}
 }
 

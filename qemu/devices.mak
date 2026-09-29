@@ -78,7 +78,7 @@
 CONFIG_Q35=y
 
 # PCIe root ports, for devices that arrive while the machine runs. machine.go places
-# Spec.HotplugPorts of them at slotHotplugBase and names them rp0..rpN.
+# Spec.HotplugPorts of them at SlotHotplugBase and names them rp0..rpN.
 CONFIG_PCIE_PORT=y
 
 # --- the devices a VM gets -----------------------------------------------------------------
