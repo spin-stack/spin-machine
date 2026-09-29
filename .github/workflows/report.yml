@@ -49,6 +49,28 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
 
+      # What this runner can do, said before anything is measured: a row the report skips is one
+      # this host lacks the device for, and the summary says which before the report does.
+      - name: What this runner has
+        run: |
+          {
+            echo "### Runner $RUNNER_NAME"
+            echo
+            for dev in /dev/kvm /dev/vhost-vsock; do
+              if [ -r "$dev" ] && [ -w "$dev" ]; then echo "- $dev: usable"; else echo "- $dev: **not usable** ($(ls -l "$dev" 2>&1))"; fi
+            done
+            if sudo -n true 2>/dev/null; then
+              echo "- sudo -n: yes"
+              sudo -n modprobe nbd max_part=8 2>/dev/null || true
+              if [ -e /dev/nbd0 ]; then echo "- /dev/nbd0: present (image variants and the echo login run)"; else echo "- /dev/nbd0: **missing** (image variants are skipped, the login is agetty's)"; fi
+            else
+              echo "- sudo -n: **no** (image variants are skipped, the login is agetty's)"
+            fi
+            echo "- gh: $(command -v gh || echo '**missing**')"
+            echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm: nothing here can be measured"; exit 1; }
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
