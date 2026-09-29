@@ -5,14 +5,9 @@ package machine
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 // TestARootPortTakesADeviceWhoseBackendIsAnInheritedDescriptor is the question the empty
@@ -79,76 +74,29 @@ func TestARootPortTakesADeviceWhoseBackendIsAnInheritedDescriptor(t *testing.T) 
 	}
 	defer func() { _ = ours.Close() }()
 
-	cmd := exec.Command(qemu, append(args, "-S")...) // #nosec G204 -- the binary and arguments this test built
-	var out strings.Builder
-	cmd.Stderr, cmd.Stdout = &out, &out
-	cmd.ExtraFiles = []*os.File{theirs}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting %s: %v", qemu, err)
-	}
+	vm := startQEMU(t, qemu, append(args, "-S"), theirs)
 	_ = theirs.Close()
-	defer func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-	}()
-
-	conn := dialQMP(t, socket, &out)
-	defer func() { _ = conn.Close() }()
-	enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
-
-	var greeting struct {
-		QMP *struct{} `json:"QMP"`
-	}
-	if err := dec.Decode(&greeting); err != nil {
-		t.Fatalf("reading the QMP greeting: %v\n\nQEMU said:\n%s", err, out.String())
-	}
-
-	command := func(what string, req any) {
-		t.Helper()
-		if err := enc.Encode(req); err != nil {
-			t.Fatalf("sending %s: %v", what, err)
-		}
-		var reply struct {
-			Return json.RawMessage `json:"return"`
-			Error  *struct {
-				Desc string `json:"desc"`
-			} `json:"error"`
-		}
-		if err := dec.Decode(&reply); err != nil {
-			t.Fatalf("reading the reply to %s: %v\n\nQEMU said:\n%s", what, err, out.String())
-		}
-		if reply.Error != nil {
-			t.Fatalf("%s was refused: %s\n\nQEMU said:\n%s", what, reply.Error.Desc, out.String())
-		}
-	}
-
-	command("qmp_capabilities", map[string]string{"execute": "qmp_capabilities"})
+	q := dialQMP(t, socket, vm)
 
 	// The backend, on the descriptor the process inherited. "3" is a number and not a
 	// name, which is the whole point: a name would have to have been registered with
 	// getfd, and that needs SCM_RIGHTS on the monitor.
-	command("netdev_add", map[string]any{
-		"execute": "netdev_add",
-		"arguments": map[string]any{
-			"type": "socket",
-			"id":   "net0",
-			"fd":   "3",
-		},
+	q.do("netdev_add", map[string]any{
+		"type": "socket",
+		"id":   "net0",
+		"fd":   "3",
 	})
 
 	// And the device, into the root port. bus is the port's id — HotplugPortID(0) — which
 	// is what makes this a hotplug rather than an attempt at the root complex, and QEMU
 	// refuses the latter with "Bus 'pcie.0' does not support hotplugging".
-	command("device_add", map[string]any{
-		"execute": "device_add",
-		"arguments": map[string]any{
-			"driver":  "virtio-net-pci",
-			"id":      "nic0",
-			"netdev":  "net0",
-			"bus":     HotplugPortID(0),
-			"mac":     "52:54:00:00:00:01",
-			"romfile": "",
-		},
+	q.do("device_add", map[string]any{
+		"driver":  "virtio-net-pci",
+		"id":      "nic0",
+		"netdev":  "net0",
+		"bus":     HotplugPortID(0),
+		"mac":     "52:54:00:00:00:01",
+		"romfile": "",
 	})
 
 	// The device exists and is bound to the netdev built on the inherited descriptor.
@@ -158,54 +106,30 @@ func TestARootPortTakesADeviceWhoseBackendIsAnInheritedDescriptor(t *testing.T) 
 	// query-pci reports the root port with no devices behind it, which is true and is not
 	// the question. What device_add did is create and realize the device, and its binding
 	// to the backend is the part that could have silently not happened.
-	if err := enc.Encode(map[string]any{
-		"execute":   "qom-get",
-		"arguments": map[string]any{"path": "/machine/peripheral/nic0", "property": "netdev"},
-	}); err != nil {
-		t.Fatalf("sending qom-get: %v", err)
+	reply, err := q.try("qom-get", map[string]any{"path": "/machine/peripheral/nic0", "property": "netdev"})
+	if err != nil {
+		t.Fatalf("the NIC was accepted and there is no device at /machine/peripheral/nic0: %v", err)
 	}
-	var bound struct {
-		Return string `json:"return"`
-		Error  *struct {
-			Desc string `json:"desc"`
-		} `json:"error"`
+	var bound string
+	if err := json.Unmarshal(reply, &bound); err != nil {
+		t.Fatal(err)
 	}
-	if err := dec.Decode(&bound); err != nil {
-		t.Fatalf("reading qom-get: %v", err)
-	}
-	if bound.Error != nil {
-		t.Fatalf("the NIC was accepted and there is no device at /machine/peripheral/nic0: %s", bound.Error.Desc)
-	}
-	if bound.Return != "net0" {
+	if bound != "net0" {
 		t.Errorf("the NIC's backend is %q, want %q — the device was created and bound to nothing",
-			bound.Return, "net0")
+			bound, "net0")
 	}
 
 	// And the root port is what made it possible. The same device_add onto the root
 	// complex has to be refused, or the ports are a cost this machine pays for nothing.
-	if err := enc.Encode(map[string]any{
-		"execute": "device_add",
-		"arguments": map[string]any{
-			"driver": "virtio-net-pci",
-			"id":     "nic1",
-			"netdev": "net0",
-			"bus":    "pcie.0",
-		},
-	}); err != nil {
-		t.Fatalf("sending the root-complex device_add: %v", err)
-	}
-	var onRootComplex struct {
-		Error *struct {
-			Desc string `json:"desc"`
-		} `json:"error"`
-	}
-	if err := dec.Decode(&onRootComplex); err != nil {
-		t.Fatalf("reading the root-complex device_add: %v", err)
-	}
-	if onRootComplex.Error == nil {
+	if _, err := q.try("device_add", map[string]any{
+		"driver": "virtio-net-pci",
+		"id":     "nic1",
+		"netdev": "net0",
+		"bus":    "pcie.0",
+	}); err == nil {
 		t.Error("the root complex accepted a device_add; if that were true the empty root ports would be a bus the guest scans for nothing")
 	} else {
-		t.Logf("the root complex refused it, as it must: %s", onRootComplex.Error.Desc)
+		t.Logf("the root complex refused it, as it must: %v", err)
 	}
 }
 
@@ -220,23 +144,4 @@ func socketPair() (ours, theirs *os.File, err error) {
 		return nil, nil, fmt.Errorf("socketpair: %w", err)
 	}
 	return os.NewFile(uintptr(fds[0]), "netdev-a"), os.NewFile(uintptr(fds[1]), "netdev-b"), nil
-}
-
-func dialQMP(t *testing.T, socket string, out fmt.Stringer) net.Conn {
-	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		conn, err := net.Dial("unix", socket)
-		if err == nil {
-			if err := conn.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
-				t.Fatal(err)
-			}
-			return conn
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("QEMU never answered on %s: %v\n\nQEMU said:\n%s",
-				filepath.Base(socket), err, out.String())
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 }

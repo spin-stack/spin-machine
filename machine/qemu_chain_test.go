@@ -6,9 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 )
@@ -92,63 +90,16 @@ func TestAChainOverDescriptorsIsReadWithoutAPathAndSealedUnderAnOverlay(t *testi
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(qemu, append(args, "-S")...) // #nosec G204 -- the binary and arguments this test built
-	var out strings.Builder
-	cmd.Stderr, cmd.Stdout = &out, &out
-	cmd.ExtraFiles = files
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting %s: %v", qemu, err)
-	}
-	defer func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-	}()
+	vm := startQEMU(t, qemu, append(args, "-S"), files...)
+	q := dialQMP(t, socket, vm)
 
-	conn := dialQMP(t, socket, &out)
-	defer func() { _ = conn.Close() }()
-	enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
-	var greeting struct {
-		QMP *struct{} `json:"QMP"`
-	}
-	if err := dec.Decode(&greeting); err != nil || greeting.QMP == nil {
-		t.Fatalf("no QMP greeting on the handed-over monitor: %v\n\nQEMU said:\n%s", err, out.String())
-	}
-	command := func(what string, req any) json.RawMessage {
-		t.Helper()
-		if err := enc.Encode(req); err != nil {
-			t.Fatalf("sending %s: %v", what, err)
-		}
-		for {
-			var reply struct {
-				Return json.RawMessage `json:"return"`
-				Event  string          `json:"event"`
-				Error  *struct {
-					Desc string `json:"desc"`
-				} `json:"error"`
-			}
-			if err := dec.Decode(&reply); err != nil {
-				t.Fatalf("reading the reply to %s: %v\n\nQEMU said:\n%s", what, err, out.String())
-			}
-			if reply.Event != "" {
-				continue
-			}
-			if reply.Error != nil {
-				t.Fatalf("%s was refused: %s\n\nQEMU said:\n%s", what, reply.Error.Desc, out.String())
-			}
-			return reply.Return
-		}
-	}
-	command("qmp_capabilities", map[string]string{"execute": "qmp_capabilities"})
-
-	command("blockdev-add next's file", map[string]any{"execute": "blockdev-add", "arguments": map[string]any{
+	q.do("blockdev-add", map[string]any{
 		"driver": "file", "node-name": "next-file", "filename": "/dev/fdset/3", "aio": "io_uring", "locking": "on",
-	}})
-	command("blockdev-add next", map[string]any{"execute": "blockdev-add", "arguments": map[string]any{
+	})
+	q.do("blockdev-add", map[string]any{
 		"driver": "qcow2", "node-name": "next", "file": "next-file", "backing": nil,
-	}})
-	command("blockdev-snapshot", map[string]any{"execute": "blockdev-snapshot", "arguments": map[string]any{
-		"node": "blk0", "overlay": "next",
-	}})
+	})
+	q.do("blockdev-snapshot", map[string]any{"node": "blk0", "overlay": "next"})
 
 	var sets []struct {
 		ID  int `json:"fdset-id"`
@@ -156,7 +107,7 @@ func TestAChainOverDescriptorsIsReadWithoutAPathAndSealedUnderAnOverlay(t *testi
 			Opaque string `json:"opaque"`
 		} `json:"fds"`
 	}
-	if err := json.Unmarshal(command("query-fdsets", map[string]string{"execute": "query-fdsets"}), &sets); err != nil {
+	if err := json.Unmarshal(q.do("query-fdsets", nil), &sets); err != nil {
 		t.Fatal(err)
 	}
 	opaque := map[int]string{}
