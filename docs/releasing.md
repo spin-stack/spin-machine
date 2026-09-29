@@ -36,6 +36,35 @@ number anybody chose. Pushing a `v*` tag releases that version; running the work
 hand with no input generates the next sequence for today, tags the commit, and puts the
 three checksums in the release notes.
 
+## The feature matrix
+
+A release also says what it costs. After it publishes, the `report` job boots the tarball it
+just published, on a self-hosted runner labelled `kvm`, through every combination of the
+machine's features (accelerator, memory backing, vsock, hotplug ports, disk caching) and every
+boot variant of the image. It writes `report.json` beside the tarball: per row, the command
+line, the shape and fingerprint, whether QEMU ran it, and p50/p95 of each boot phase. It then
+appends `spin-machine compare` against the newest earlier release that has a report to the
+release notes. The axes are the `axes` table in `boot/report_test.go`; a new axis is measured
+against every other without anyone choosing which pairs matter.
+
+The same report is how an experiment is judged. Build the tree with the change, or keep the
+release and pass the change to every boot, and compare:
+
+```sh
+task report OUT=base.json
+task report OUT=exp.json FLAGS='--append mitigations=off'   # or --kernel /path/vmlinux
+_output/bin/spin-machine compare --old base.json --new exp.json
+```
+
+`ONLY=<regexp>` runs the rows whose id matches, and `REPS=` sets the boots per row (default 3,
+after one unmeasured boot that warms the page cache). Times compare only between reports taken
+on the same kind of host; `compare` says so when they were not.
+
+The runner needs `/dev/kvm` and `/dev/vhost-vsock` readable and writable by its user, and
+`sudo -n` for `modprobe nbd` and `qemu-nbd`: the image variants write into a throwaway overlay.
+Without `/dev/vhost-vsock` the vsock rows are listed as skipped, and without sudo the variants
+that edit the image are skipped too, and the getty is agetty rather than an echo.
+
 ## What a release owes
 
 Apache-2.0 covers the recipes, not what they build. A release tarball is almost entirely
