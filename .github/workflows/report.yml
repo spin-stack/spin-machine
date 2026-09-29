@@ -1,0 +1,113 @@
+name: Report
+
+# What every combination of the machine's features costs: a published release's tarball booted
+# through the feature matrix (boot/report_test.go), written as report.json, and compared with the
+# newest earlier release that has one.
+#
+# A workflow of its own because it boots: a hosted runner has no /dev/kvm for it, and a time
+# measured under emulation is not a time anybody's machine takes. The runner is one host, on
+# purpose - boot times compare only between reports taken on the same kind of host, and compare
+# says so when they were not. It needs /dev/kvm and /dev/vhost-vsock usable by its user, sudo -n
+# for modprobe nbd and qemu-nbd, and gh (docs/releasing.md).
+#
+# release.yml calls it with publish, which uploads report.json to the release and appends the
+# comparison to its notes. Run by hand it measures any release - to check the runner, or to see
+# a release against another - and keeps what it found as an artifact, touching no release.
+
+on:
+  workflow_call:
+    inputs:
+      version: { type: string, required: true }
+      ref: { type: string, required: true }
+      publish: { type: boolean, default: false }
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The release to measure, e.g. v20260929.01"
+        required: true
+        type: string
+      publish:
+        description: "Upload report.json to that release and append the comparison to its notes"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  report:
+    runs-on: [self-hosted, linux, x64, kvm]
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      # The harness from the ref asked for - the release's own tag when release.yml calls - and,
+      # run by hand, from where the run was started: a release older than the report has none.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Task
+        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+
+      # The tarball as a consumer gets it, and not a tree a build left: what is measured is what
+      # was published.
+      - name: Unpack the release
+        run: |
+          set -euo pipefail
+          rm -rf _output/report
+          mkdir -p _output/report
+          gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -p '*.tar.gz' -D _output/report
+          tar -xzf _output/report/*.tar.gz -C _output/report
+          echo "RELEASE_TREE=$PWD/_output/report/spin-machine-${VERSION}-linux-x86_64/usr/share/spin-stack" >> "$GITHUB_ENV"
+
+      - name: Measure the feature matrix
+        run: task report OUTPUT_DIR="$RELEASE_TREE" OUT="$PWD/_output/report/report.json"
+
+      # Against the newest release before this one that has a report. The first release with
+      # a report has nothing to compare with, and says so.
+      - name: Compare with the release before it
+        run: |
+          set -euo pipefail
+          cd _output/report
+          previous=""
+          for tag in $(gh release list -R "$GITHUB_REPOSITORY" --limit 30 --json tagName -q '.[].tagName'); do
+            [ "$tag" = "$VERSION" ] && continue
+            if gh release download "$tag" -R "$GITHUB_REPOSITORY" -p report.json -O previous.json 2>/dev/null; then
+              previous="$tag"
+              break
+            fi
+          done
+          if [ -n "$previous" ]; then
+            "$RELEASE_TREE/bin/spin-machine" compare --old previous.json --new report.json > compare.md
+          else
+            echo "No earlier release published a report.json to compare the feature matrix with." > compare.md
+          fi
+          cat compare.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-${{ inputs.version }}
+          path: |
+            _output/report/report.json
+            _output/report/compare.md
+          if-no-files-found: error
+
+      - name: Publish the report, and what moved
+        if: inputs.publish
+        run: |
+          set -euo pipefail
+          cd _output/report
+          gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" report.json --clobber
+          gh release view "$VERSION" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md
+          { echo; cat compare.md; } >> notes.md
+          gh release edit "$VERSION" -R "$GITHUB_REPOSITORY" --notes-file notes.md
