@@ -1,0 +1,26 @@
+ftrace: record fentry sites with objtool, which writes them as NOPs
+
+Where gcc accepts -mrecord-mcount, Kconfig picks the compiler to record the
+__fentry__ call sites, and the compiler leaves them as calls: ftrace_init()
+then rewrites every one of them (~41,000 on this kernel) into a NOP at boot.
+objtool can record the same sites and write the NOPs at build time
+(--mnop, CONFIG_OBJTOOL_NOP_MCOUNT), which x86 supports
+(HAVE_OBJTOOL_NOP_MCOUNT), and then ftrace_need_init_nop() is false and the
+rewrite does not happen. This makes that path the one taken.
+
+Measured 2026-09-29 on the lab runner (spin-machine boot:initcalls, 15 boots
+interleaved, 1 vCPU): -7.0 ms of kernel boot, all of it outside initcalls.
+The function tracer, fentry/fexit and kprobe_multi work as before.
+
+Not upstream: Kconfig prefers the compiler path wherever it exists.
+
+--- a/kernel/trace/Kconfig
++++ b/kernel/trace/Kconfig
+@@ -883,6 +883,7 @@
+ 	depends on $(cc-option,-mrecord-mcount)
+ 	depends on !FTRACE_MCOUNT_USE_PATCHABLE_FUNCTION_ENTRY
+ 	depends on DYNAMIC_FTRACE
++	depends on !HAVE_OBJTOOL_NOP_MCOUNT
+ 
+ config FTRACE_MCOUNT_USE_OBJTOOL
+ 	def_bool y
