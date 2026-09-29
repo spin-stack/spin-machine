@@ -365,9 +365,7 @@ func fingerprint(s machine.Spec) error {
 		return err
 	}
 	// The shape a *template* is taken from, which is the one the fingerprint
-	// hashes. Printing s.Shape() here instead would show a machine with
-	// anonymous RAM next to a number computed from one with a memory file, and
-	// the two would look like they disagreed.
+	// hashes.
 	shape := s.TemplateShape()
 	out := struct {
 		Fingerprint string        `json:"fingerprint"`

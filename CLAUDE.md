@@ -98,7 +98,7 @@ not silently become production behaviour.
 - **Accept interfaces, return structs**, and only introduce an interface when there is a
   second implementation or a test that genuinely needs one.
 - **Make the zero value useful** where it is cheap to do so, and validate where it is not.
-  `Spec.Validate` exists because a disk with no format is a guest that boots and finds a
+  `Spec.validate`, which `Args` runs, exists because a disk with no format is a guest that boots and finds a
   disk full of nothing — that is worth a check at the boundary, not a sensible default.
 - **Name things for what they are** to the reader, not for their type. `Shape`, `Spec`,
   `Fingerprint` are the words used when talking about this machine; use those.

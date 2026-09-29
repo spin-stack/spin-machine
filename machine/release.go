@@ -77,9 +77,6 @@ func OpenRelease(dir string) (*Release, error) {
 	return r, nil
 }
 
-// Dir is the root of the release tree.
-func (r *Release) Dir() string { return r.dir }
-
 // QEMU is the emulator every guest runs under: KVM only, no TCG.
 func (r *Release) QEMU() string { return filepath.Join(r.dir, qemuName) }
 
