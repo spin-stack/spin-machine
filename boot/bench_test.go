@@ -3,10 +3,12 @@
 package boot_test
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -320,18 +322,19 @@ var variants = []variant{
 	labelled("tmp on disk", without("tmp.mount", "systemd-tmpfiles-setup.service")),
 }
 
-// withKernelVariant adds a row booting a kernel built somewhere else, when SPIN_KERNEL_B
-// names one. Interleaved with the rest rather than run as a second pass, which is the only
-// way to compare two kernel configurations on a host that is not the same host from one
-// minute to the next: three consecutive runs of one kernel read 59.5, 96.8 and 167.7 ms.
+// kernelB is the kernel SPIN_KERNEL_B names, resolved, or "" when it names none. A test
+// that has one adds it as a row interleaved with the rest rather than run as a second pass,
+// which is the only way to compare two kernel configurations on a host that is not the same
+// host from one minute to the next: three consecutive runs of one kernel read 59.5, 96.8
+// and 167.7 ms.
 //
 // Not a hard-coded path, because a kernel built from a changed config is not in this
 // repository and a row naming a file nobody has fails for everyone who did not build it.
-func withKernelVariant(t *testing.T) {
+func kernelB(t *testing.T) string {
 	t.Helper()
 	k := os.Getenv("SPIN_KERNEL_B")
 	if k == "" {
-		return
+		return ""
 	}
 	abs, err := filepath.Abs(k)
 	if err != nil {
@@ -340,8 +343,7 @@ func withKernelVariant(t *testing.T) {
 	if _, err := os.Stat(abs); err != nil {
 		t.Fatalf("SPIN_KERNEL_B=%s: %v", abs, err)
 	}
-	variants = append(variants, variant{label: "kernel B", cpus: "2", memory: "2048",
-		files: gettyDropin(gettyEcho), kernel: abs})
+	return abs
 }
 
 // TestBootCost boots each variant many times, interleaved, and prints what each phase cost.
@@ -360,10 +362,14 @@ func TestBootCost(t *testing.T) {
 	}
 	out := releaseDir(t)
 	reps := envInt(t, "REPS", 20)
-	withKernelVariant(t)
+	vs := slices.Clone(variants)
+	if k := kernelB(t); k != "" {
+		vs = append(vs, variant{label: "kernel B", cpus: "2", memory: "2048",
+			files: gettyDropin(gettyEcho), kernel: k})
+	}
 
 	if !canSudo() {
-		for _, v := range variants {
+		for _, v := range vs {
 			if len(v.mask) > 0 {
 				t.Skipf("masking a unit means writing into the overlay through qemu-nbd, "+
 					"which needs sudo; %q cannot be measured here", v.label)
@@ -374,7 +380,7 @@ func TestBootCost(t *testing.T) {
 	samples := map[string]map[boot.Phase][]time.Duration{}
 	failures := map[string]int{}
 	for rep := range reps {
-		for _, v := range variants {
+		for _, v := range vs {
 			run := bootOnce(t, out, v)
 			if samples[v.label] == nil {
 				samples[v.label] = map[boot.Phase][]time.Duration{}
@@ -672,20 +678,96 @@ func mustRun(t *testing.T, name string, args ...string) {
 	}
 }
 
+// rawRoot is a private raw copy of a release's root filesystem, edited without mounts or NBD
+// by the release's own debugfs: the one the image was made and checked with, not the host's,
+// because an older one refuses a filesystem with features it does not know rather than editing
+// it. debugfs exits 0 whether or not an edit happened - a write or a symlink into a directory
+// that is not there included - so every edit here is read back.
+type rawRoot struct {
+	t       *testing.T
+	path    string // the raw image, for a -drive
+	debugfs string
+	input   string
+}
+
+func newRawRoot(t *testing.T, out, base string) *rawRoot {
+	t.Helper()
+	dir := t.TempDir()
+	r := &rawRoot{t: t, path: filepath.Join(dir, "rootfs.raw"), debugfs: filepath.Join(out, "bin/debugfs"),
+		input: filepath.Join(dir, "input")}
+	mustRun(t, filepath.Join(out, "bin/qemu-img"), "convert", "-f", "qcow2", "-O", "raw", base, r.path)
+	return r
+}
+
+func (r *rawRoot) edit(request string) {
+	r.t.Helper()
+	mustRun(r.t, r.debugfs, "-w", "-R", request, r.path)
+}
+
+// mkdirParent makes p's parent. mkdir fails on a directory that is there, which is not a failure
+// here; what is made in it is what is checked.
+func (r *rawRoot) mkdirParent(p string) {
+	_ = exec.Command(r.debugfs, "-w", "-R", "mkdir "+filepath.Dir(p), r.path).Run()
+}
+
+func (r *rawRoot) stat(p string) string {
+	out, _ := exec.Command(r.debugfs, "-R", "stat "+p, r.path).CombinedOutput()
+	return string(out)
+}
+
+func (r *rawRoot) write(p, content string) {
+	r.t.Helper()
+	if err := os.WriteFile(r.input, []byte(content), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+	r.mkdirParent(p)
+	r.edit("write " + r.input + " " + p)
+	if b, err := exec.Command(r.debugfs, "-R", "cat "+p, r.path).Output(); err != nil || string(b) != content {
+		r.t.Fatalf("%s is not in the guest's root as written (%v)", p, err)
+	}
+}
+
+// remove fails on a path that is not there, so that an experiment removing something the image
+// no longer has fails rather than measuring the image as built under another name.
+func (r *rawRoot) remove(p string) {
+	r.t.Helper()
+	if !strings.Contains(r.stat(p), "Inode:") {
+		r.t.Fatalf("%s is not in the image, so removing it tests nothing", p)
+	}
+	r.edit("rm " + p)
+	if strings.Contains(r.stat(p), "Inode:") {
+		r.t.Fatalf("%s is still in the guest's root", p)
+	}
+}
+
+func (r *rawRoot) link(l, target string) {
+	r.t.Helper()
+	r.mkdirParent(l)
+	r.edit("symlink " + l + " " + target)
+	if !strings.Contains(r.stat(l), "Type: symlink") {
+		r.t.Fatalf("%s is not a symlink in the guest's root", l)
+	}
+}
+
 func canSudo() bool { return exec.Command("sudo", "-n", "true").Run() == nil }
 
-// releaseDir is the release tree the benchmarks boot: _output, or SPIN_RELEASE - a tree laid out
-// the same way, for measuring a kernel or an image built somewhere else without writing it over
-// what `task build` made.
-func releaseDir(t *testing.T) string {
+// releaseTree is _output, or SPIN_MACHINE_OUTPUT, without releaseDir's checks: a test that runs
+// under TCG cannot ask for /dev/kvm.
+func releaseTree(t *testing.T) string {
 	t.Helper()
-	out, err := filepath.Abs(filepath.Join("..", "_output"))
-	if r := os.Getenv("SPIN_RELEASE"); r != "" {
-		out, err = filepath.Abs(r)
-	}
+	out, err := filepath.Abs(cmp.Or(os.Getenv("SPIN_MACHINE_OUTPUT"), filepath.Join("..", "_output")))
 	if err != nil {
 		t.Fatalf("locating the release: %v", err)
 	}
+	return out
+}
+
+// releaseDir is the release tree the benchmarks boot: _output, or SPIN_MACHINE_OUTPUT - a tree
+// laid out the same way, for measuring a kernel or an image built somewhere else without writing
+// it over what `task build` made.
+func releaseDir(t *testing.T) string {
+	t.Helper()
+	out := releaseTree(t)
 	for _, f := range []string{
 		"bin/spin-machine", "bin/qemu-img", "kernel/vmlinux", "image/rootfs.qcow2",
 	} {

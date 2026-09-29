@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -112,11 +111,11 @@ func TestRestoreFirstRequest(t *testing.T) {
 	fmt.Fprintf(&r, "\ntemplate resident in the host's page cache, p50 MiB: ")
 	for _, c := range cases {
 		fmt.Fprintf(&r, "%s %s after the restore, %s after the first request; ", c,
-			fmtMiB(s50(res[c].residentRestored)), fmtMiB(s50(res[c].residentServed)))
+			fmtMiB(pct(res[c].residentRestored, 50)), fmtMiB(pct(res[c].residentServed, 50)))
 	}
 	fmt.Fprintf(&r, "\nreclaimed: the first request ran before the reclaim, the second after it; "+
 		"the VM's cgroup held %s MiB before and %s MiB after (p50)\n",
-		fmtMiB(s50(res["reclaimed"].before)), fmtMiB(s50(res["reclaimed"].after)))
+		fmtMiB(pct(res["reclaimed"].before, 50)), fmtMiB(pct(res["reclaimed"].after, 50)))
 	t.Log(r.String())
 }
 
@@ -140,7 +139,7 @@ type restoreSamples struct {
 type request struct{ host, guest, majflt []float64 }
 
 func (q request) String() string {
-	return fmt.Sprintf("%s (%s) [%.0f]", p50p95(q.host), p50p95(q.guest), s50(q.majflt))
+	return fmt.Sprintf("%s (%s) [%.0f]", p50p95(q.host), p50p95(q.guest), pct(q.majflt, 50))
 }
 
 func (q *request) add(host, guest, majflt float64) {
@@ -451,19 +450,8 @@ func majorFaults(t *testing.T, pid int) int {
 
 func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
-func s50(v []float64) float64 {
-	if len(v) == 0 {
-		return 0
-	}
-	s := append([]float64(nil), v...)
-	sort.Float64s(s)
-	return pct(s, 50)
-}
-
 func p50p95(v []float64) string {
-	s := append([]float64(nil), v...)
-	sort.Float64s(s)
-	return fmt.Sprintf("%.1f / %.1f", pct(s, 50), pct(s, 95))
+	return fmt.Sprintf("%.1f / %.1f", pct(v, 50), pct(v, 95))
 }
 
 func fmtMiB(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }

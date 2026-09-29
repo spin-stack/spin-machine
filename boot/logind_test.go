@@ -21,10 +21,7 @@ func TestLogindSessions(t *testing.T) {
 	if os.Getenv("SPIN_LOGIND_TEST") != "1" {
 		t.Skip("set SPIN_LOGIND_TEST=1 to check first SSH login in a built image")
 	}
-	out, err := filepath.Abs("../_output")
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := releaseTree(t)
 	rel, err := machine.OpenRelease(out)
 	if err != nil {
 		t.Fatal(err)
@@ -33,34 +30,7 @@ func TestLogindSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	raw := filepath.Join(dir, "rootfs.raw")
-	mustRun(t, filepath.Join(out, "bin/qemu-img"), "convert", "-f", "qcow2", "-O", "raw", base, raw)
-	// The debugfs the image was made and checked with, not the host's: an older one refuses a
-	// filesystem with features it does not know rather than editing it.
-	debugfsBin := filepath.Join(out, "bin/debugfs")
-	debugfs := func(command string) string {
-		t.Helper()
-		output, err := exec.Command(debugfsBin, "-w", "-R", command, raw).CombinedOutput()
-		if err != nil {
-			t.Fatalf("debugfs %s: %v\n%s", command, err, output)
-		}
-		return string(output)
-	}
-	write := func(path, content string) {
-		t.Helper()
-		src := filepath.Join(dir, "input")
-		if err := os.WriteFile(src, []byte(content), 0644); err != nil {
-			t.Fatal(err)
-		}
-		// debugfs returns success even if the write failed. Read the guest file
-		// back to ensure the experiment actually installed its input.
-		debugfs("write " + src + " " + path)
-		got, err := exec.Command(debugfsBin, "-R", "cat "+path, raw).Output()
-		if err != nil || string(got) != content {
-			t.Fatalf("guest file %s differs from its input: %v", path, err)
-		}
-	}
+	root := newRawRoot(t, out, base)
 	// The shipped image does not start logind at boot: the first login activates it over
 	// the Varlink socket, which is worth 18 ms (see the 10-seats.conf drop-in). So the
 	// state this asserts before any login is `inactive`, and a machine that answers
@@ -73,20 +43,16 @@ func TestLogindSessions(t *testing.T) {
 	// no error anywhere (2026-09-12).
 	expectedState := "inactive"
 	if os.Getenv("SPIN_LOGIND_NO_SEATS") == "1" {
-		path := "/etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf"
-		debugfs("rm " + path)
-		if strings.Contains(debugfs("stat "+path), "Inode:") {
-			t.Fatal("the drop-in is still in the image; the experiment would prove nothing")
-		}
+		root.remove("/etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf")
 	}
 	for _, name := range []string{"logind-check.sh", "logind-session.sh"} {
 		content, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		write("/"+name, string(content))
+		root.write("/"+name, string(content))
 	}
-	write("/etc/systemd/system/logind-check.service", `[Unit]
+	root.write("/etc/systemd/system/logind-check.service", `[Unit]
 Description=Check on-demand sessions in a disposable guest
 After=multi-user.target
 [Service]
@@ -96,15 +62,15 @@ ExecStart=/bin/sh /logind-check.sh
 StandardOutput=journal+console
 StandardError=journal+console
 `)
-	write("/etc/systemd/system/logind-check.timer", `[Timer]
+	root.write("/etc/systemd/system/logind-check.timer", `[Timer]
 OnBootSec=3s
 AccuracySec=100ms
 `)
-	debugfs("symlink /etc/systemd/system/timers.target.wants/logind-check.timer /etc/systemd/system/logind-check.timer")
+	root.link("/etc/systemd/system/timers.target.wants/logind-check.timer", "/etc/systemd/system/logind-check.timer")
 	spec := rel.Spec()
 	spec.BootCPUs = 2
 	spec.Memory.SizeMB = 1024
-	spec.Disks = []machine.Disk{{Path: raw, Format: "raw"}}
+	spec.Disks = []machine.Disk{{Path: root.path, Format: "raw"}}
 	spec.Serial = "stdio"
 	c := machine.DefaultCmdline()
 	c.Root = "/dev/vda"

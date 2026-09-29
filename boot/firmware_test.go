@@ -9,11 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/spin-stack/spin-machine/boot"
 )
 
 // Firmware A/B, against a caller-supplied diagnostic initrd.
@@ -106,16 +107,11 @@ func TestFirmwareCost(t *testing.T) {
 	fmt.Fprintf(&b, "\nmilliseconds from the moment before QEMU is exec'd, p50/p95 over %d boots\n\n", reps)
 	fmt.Fprintf(&b, "%-10s %10s %10s\n", "FIRMWARE", "P50", "P95")
 	for _, v := range order {
-		s := append([]float64(nil), samples[v]...)
-		sort.Float64s(s)
-		fmt.Fprintf(&b, "%-10s %10.2f %10.2f\n", v, pct(s, 50), pct(s, 95))
+		fmt.Fprintf(&b, "%-10s %10.2f %10.2f\n", v, pct(samples[v], 50), pct(samples[v], 95))
 	}
 	// The difference, stated rather than left to the reader: it is the number the decision
 	// turns on, and it is small enough that a reader who has to subtract will round it up.
-	sb, pa := append([]float64(nil), samples["seabios"]...), append([]float64(nil), samples["patched"]...)
-	sort.Float64s(sb)
-	sort.Float64s(pa)
-	fmt.Fprintf(&b, "\np50 reduction: %.2f ms\n", pct(sb, 50)-pct(pa, 50))
+	fmt.Fprintf(&b, "\np50 reduction: %.2f ms\n", pct(samples["seabios"], 50)-pct(samples["patched"], 50))
 	t.Log(b.String())
 }
 
@@ -429,17 +425,10 @@ func mustCwd(t *testing.T) string {
 	return d
 }
 
-// pct is nearest-rank on an already sorted slice, matching boot.Percentile so the two
-// harnesses cannot disagree about what a p95 is.
-func pct(sorted []float64, p int) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	i := (p*len(sorted) + 99) / 100
-	if i < 1 {
-		i = 1
-	}
-	return sorted[i-1]
+// pct is boot.Percentile in the shape a format argument needs: one value, p in percent.
+func pct(v []float64, p int) float64 {
+	x, _ := boot.Percentile(v, float64(p)/100)
+	return x
 }
 
 // orElse is the override or the default, and exists so that a probe varying one argument

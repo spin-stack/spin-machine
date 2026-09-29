@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -99,9 +98,6 @@ WantedBy=multi-user.target
 		total = append(total, tt)
 	}
 
-	sort.Float64s(kernel)
-	sort.Float64s(userspace)
-	sort.Float64s(total)
 	t.Logf("\nsystemd's own split, p50/p95 over %d boots\n\n"+
 		"  %-12s %8.1f %8.1f ms\n  %-12s %8.1f %8.1f ms\n  %-12s %8.1f %8.1f ms\n",
 		reps,

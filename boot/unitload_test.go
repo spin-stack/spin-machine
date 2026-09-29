@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -138,8 +137,7 @@ func reportUnitLoad(t *testing.T, console string, reps int) {
 	fmt.Fprintf(&b, "%-20s %8s %8s %6s\n", "CONFIGURATION", "P50", "P95", "N")
 	var first, second float64
 	for i, tag := range dedup(order) {
-		s := append([]float64(nil), samples[tag]...)
-		sort.Float64s(s)
+		s := samples[tag]
 		fmt.Fprintf(&b, "%-20s %8.1f %8.1f %6d ms\n", tag, pct(s, 50), pct(s, 95), len(s))
 		switch i {
 		case 0:
