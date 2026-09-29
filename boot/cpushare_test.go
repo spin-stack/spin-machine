@@ -43,7 +43,7 @@ WantedBy=multi-user.target
 	// Not --profile: it passes trace_event=initcall:*, and a second trace_event= replaces the
 	// first rather than adding to it.
 	v.profile = false
-	v.extra = "trace_event=initcall:*,sched:sched_switch trace_buf_size=16M"
+	v.extra = "trace_event=initcall:*,sched:sched_switch,workqueue:workqueue_execute_start,workqueue:workqueue_execute_end trace_buf_size=16M"
 
 	kernels := []struct{ label, path string }{{"release", ""}}
 	if k := kernelB(t); k != "" {
@@ -104,18 +104,24 @@ WantedBy=multi-user.target
 }
 
 // "  kworker/0:1-12  [000] d..2.  0.034567: sched_switch: prev_comm=... ==> next_comm=kworker/0:2 next_pid=13 ..."
-var reTraceEvent = regexp.MustCompile(`^\s*(.+?)-(\d+)\s+\[(\d+)\].*?\s(\d+\.\d+): (sched_switch|initcall_start|initcall_finish): (.*)$`)
+var reTraceEvent = regexp.MustCompile(`^\s*(.+?)-(\d+)\s+\[(\d+)\].*?\s(\d+\.\d+): (sched_switch|initcall_start|initcall_finish|workqueue_execute_start|workqueue_execute_end): (.*)$`)
 
-var reNextComm = regexp.MustCompile(`next_comm=(.+?) next_pid=`)
+var (
+	reNext     = regexp.MustCompile(`next_comm=(.+?) next_pid=(\d+)`)
+	reWorkFunc = regexp.MustCompile(`function (\S+)`)
+)
 
 // cpuShare is the milliseconds each task spent on the CPU between the initcall's start and
 // finish events, by comm, with the window's total under "(window)". Tasks are named without the
-// number after a slash, so kworker/0:1 and kworker/0:2 are one kworker.
+// number after a slash, so kworker/0:1 and kworker/0:2 are one kworker; a kworker running a work
+// item is named by the item's function, "kworker:trace_eval_sync", because which kworker ran it
+// says nothing and what it ran is the answer.
 func cpuShare(trace, initcall string) map[string]float64 {
 	type cpu struct {
-		task string
-		at   float64
+		task, pid string
+		at        float64
 	}
+	work := map[string]string{} // pid -> the work function it is executing
 	cpus := map[string]*cpu{}
 	share := map[string]float64{}
 	open, start := false, 0.0
@@ -127,19 +133,23 @@ func cpuShare(trace, initcall string) map[string]float64 {
 		ts, _ := strconv.ParseFloat(m[4], 64)
 		c := cpus[m[3]]
 		if c == nil {
-			c = &cpu{task: m[1], at: ts}
+			c = &cpu{task: m[1], pid: m[2], at: ts}
 			cpus[m[3]] = c
 		}
 		account := func(until float64) {
 			if open && until > c.at {
-				share[taskName(c.task)] += (until - max(c.at, start)) * 1000
+				name := taskName(c.task)
+				if w := work[c.pid]; w != "" {
+					name += ":" + w
+				}
+				share[name] += (until - max(c.at, start)) * 1000
 			}
 		}
 		switch m[5] {
 		case "initcall_start":
 			if strings.HasPrefix(m[6], "func="+initcall+"+") {
 				open, start = true, ts
-				c.task, c.at = m[1], ts
+				c.task, c.pid, c.at = m[1], m[2], ts
 			}
 		case "initcall_finish":
 			if open && strings.HasPrefix(m[6], "func="+initcall+"+") {
@@ -149,10 +159,18 @@ func cpuShare(trace, initcall string) map[string]float64 {
 			}
 		case "sched_switch":
 			account(ts)
-			if n := reNextComm.FindStringSubmatch(m[6]); n != nil {
-				c.task = n[1]
+			if n := reNext.FindStringSubmatch(m[6]); n != nil {
+				c.task, c.pid = n[1], n[2]
 			}
 			c.at = ts
+		case "workqueue_execute_start", "workqueue_execute_end":
+			account(ts)
+			c.at = ts
+			if f := reWorkFunc.FindStringSubmatch(m[6]); f != nil && m[5] == "workqueue_execute_start" {
+				work[m[2]] = f[1]
+			} else {
+				delete(work, m[2])
+			}
 		}
 	}
 	return map[string]float64{}
@@ -168,12 +186,14 @@ func taskName(comm string) string {
 func TestTheCPUIsSharedOutByTaskWithinTheInitcall(t *testing.T) {
 	trace := `       swapper/0-1       [000] .....     0.010000: initcall_start: func=acpi_init+0x0/0x420
        swapper/0-1       [000] d..2.     0.012000: sched_switch: prev_comm=swapper/0 prev_pid=1 prev_prio=120 prev_state=R+ ==> next_comm=kworker/u4:0 next_pid=11 next_prio=120
+    kworker/u4:0-11      [000] .....     0.013000: workqueue_execute_start: work struct 00000000deadbeef: function trace_eval_sync
+    kworker/u4:0-11      [000] .....     0.015000: workqueue_execute_end: work struct 00000000deadbeef: function trace_eval_sync
     kworker/u4:0-11      [000] d..2.     0.016000: sched_switch: prev_comm=kworker/u4:0 prev_pid=11 prev_prio=120 prev_state=I ==> next_comm=swapper/0 next_pid=1 next_prio=120
        swapper/0-1       [000] .....     0.020000: initcall_finish: func=acpi_init+0x0/0x420 ret=0
        swapper/0-1       [000] d..2.     0.021000: sched_switch: prev_comm=swapper/0 prev_pid=1 prev_prio=120 prev_state=R+ ==> next_comm=kworker/u4:1 next_pid=12 next_prio=120
 `
 	got := cpuShare(trace, "acpi_init")
-	want := map[string]float64{"swapper": 6, "kworker": 4, "(window)": 10}
+	want := map[string]float64{"swapper": 6, "kworker": 2, "kworker:trace_eval_sync": 2, "(window)": 10}
 	for k, w := range want {
 		if d := got[k] - w; d > 1e-9 || d < -1e-9 {
 			t.Errorf("%s: %v ms, want %v (all: %v)", k, got[k], w, got)
