@@ -14,9 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-openapi/testify/v2/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/spin-stack/spin-machine/machine"
 )
 
@@ -507,14 +504,25 @@ func TestDetachTakesTheDiskBackThenClosesIt(t *testing.T) {
 // is dialled, at either end of the range.
 func TestATargetIsOneTheControllerAddresses(t *testing.T) {
 	var a attachFlags
-	require.NoError(t, parse("attach", []string{"--qmp", "q", "--disk", "d"}, a.register))
+	if err := parse("attach", []string{"--qmp", "q", "--disk", "d"}, a.register); err != nil {
+		t.Fatal(err)
+	}
 	var d detachFlags
-	require.NoError(t, parse("detach", []string{"--qmp", "q"}, d.register))
-	assert.Equal(t, 0, a.target)
-	assert.Equal(t, 0, d.target)
+	if err := parse("detach", []string{"--qmp", "q"}, d.register); err != nil {
+		t.Fatal(err)
+	}
+	if a.target != 0 || d.target != 0 {
+		t.Errorf("targets %d and %d named by nobody, want 0", a.target, d.target)
+	}
 
-	require.NoError(t, checkTarget(0))
-	require.NoError(t, checkTarget(machine.MaxHotplugDisks-1))
-	assert.ErrorContains(t, checkTarget(machine.MaxHotplugDisks), "targets 0 to 255")
-	assert.ErrorContains(t, checkTarget(-1), "target -1")
+	for _, target := range []int{0, machine.MaxHotplugDisks - 1} {
+		if err := checkTarget(target); err != nil {
+			t.Errorf("target %d refused: %v", target, err)
+		}
+	}
+	for target, want := range map[int]string{machine.MaxHotplugDisks: "targets 0 to 255", -1: "target -1"} {
+		if err := checkTarget(target); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("target %d: %v, want an error containing %q", target, err, want)
+		}
+	}
 }
