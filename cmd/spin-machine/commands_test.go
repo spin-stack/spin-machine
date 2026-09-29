@@ -327,6 +327,27 @@ func TestRunBuildsTheMachineOrSaysWhyNot(t *testing.T) {
 		t.Errorf("args printed %q, want the release's QEMU and -snapshot over its base image", printed)
 	}
 
+	// fingerprint prints the number together with the shape that went into it.
+	r, w, err = os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	err = run([]string{"fingerprint", "--release", dir})
+	os.Stdout = stdout
+	_ = w.Close()
+	printed, _ = io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fp struct {
+		Fingerprint string
+		Shape       struct{ Machine string }
+	}
+	if err := json.Unmarshal(printed, &fp); err != nil || len(fp.Fingerprint) != 64 || fp.Shape.Machine == "" {
+		t.Errorf("fingerprint printed %q (%v), want a sha256 and the shape it hashed", printed, err)
+	}
+
 	for _, tc := range []struct {
 		name string
 		argv []string

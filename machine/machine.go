@@ -1523,7 +1523,7 @@ func hostCPUModel() (string, error) {
 			return strings.TrimSpace(value), nil
 		}
 	}
-	if err := sc.Err(); err != nil {
+	if err := sc.Err(); err != nil { // mutate-exempt: either way the caller gets an error; only its wording differs
 		return "", fmt.Errorf("reading /proc/cpuinfo: %w", err)
 	}
 	return "", errors.New("no model name in /proc/cpuinfo")
