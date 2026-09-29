@@ -1,0 +1,167 @@
+name: Lab
+
+# One of the boot/ experiments, run on the KVM runner against a published release: the same Task
+# targets a developer runs, on a host that is doing nothing else.
+#
+# A workflow and not a laptop because a boot time is only worth comparing on a quiet host, and a
+# developer's machine is not one: three runs of one kernel on one read 59.5, 96.8 and 167.7 ms
+# (boot/bench_test.go), and 61 ms against 105 ms minutes apart on 2026-09-29, a hybrid CPU putting
+# the vCPU on an efficiency core. The runner is the host report.yml measures releases on, so what
+# an experiment finds compares with the releases' own reports.
+#
+# An experiment is a release plus, optionally, a kernel another workflow built: kernel_run names a
+# Kernel workflow run (kernel.yml builds any branch on dispatch and uploads vmlinux-<sha>), and that
+# kernel becomes SPIN_KERNEL_B, which boot:bench, boot:initcalls and report boot interleaved with
+# the release's own - the only comparison this runner's minute-to-minute drift leaves honest.
+#
+# vars is `KEY=VALUE; KEY=VALUE`, each exported to the target: REPS, TOP, ONLY, FLAGS and the
+# SPIN_* switches the target's test documents. Only those names are taken, so a typo fails here
+# rather than being ignored by the target. It is not a sandbox: Task templates some of them into
+# shell commands, and whoever can dispatch this can push code that runs on the same runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment:
+        description: "The boot/ target to run"
+        required: true
+        type: choice
+        options:
+          - boot:bench
+          - boot:initcalls
+          - boot:userspace
+          - boot:systemd
+          - boot:unitload
+          - boot:restore
+          - boot:ssh-load
+          - boot:memory-policy
+          - report
+      release:
+        description: "The release to boot, e.g. v20260929.01 (default: the newest)"
+        required: false
+        type: string
+      kernel_run:
+        description: "A Kernel workflow run id whose vmlinux is compared against the release's (SPIN_KERNEL_B)"
+        required: false
+        type: string
+      vars:
+        description: "KEY=VALUE; KEY=VALUE for the target, e.g. REPS=20; TOP=40"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+# One runner: a second experiment queues rather than shares its CPUs with the first.
+concurrency:
+  group: lab
+  cancel-in-progress: false
+
+jobs:
+  lab:
+    runs-on: [self-hosted, linux, x64, kvm]
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPERIMENT: ${{ inputs.experiment }}
+      RELEASE: ${{ inputs.release }}
+      KERNEL_RUN: ${{ inputs.kernel_run }}
+      VARS: ${{ inputs.vars }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Task
+        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+
+      - name: Unpack the release
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE" ]; then
+            RELEASE=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          rm -rf _output/lab
+          mkdir -p _output/lab/tmp
+          gh release download "$RELEASE" -R "$GITHUB_REPOSITORY" -p '*.tar.gz' -D _output/lab
+          tar -xzf _output/lab/*.tar.gz -C _output/lab
+          {
+            echo "RELEASE=$RELEASE"
+            echo "SPIN_MACHINE_OUTPUT=$PWD/_output/lab/spin-machine-${RELEASE}-linux-x86_64/usr/share/spin-stack"
+            # On disk: the overlays go here, and cache=none is O_DIRECT, which tmpfs refuses.
+            echo "TMPDIR=$PWD/_output/lab/tmp"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch the kernel to compare
+        if: inputs.kernel_run != ''
+        run: |
+          set -euo pipefail
+          [[ "$KERNEL_RUN" =~ ^[0-9]+$ ]] || { echo "::error::kernel_run is a run id, got: $KERNEL_RUN"; exit 1; }
+          gh run download "$KERNEL_RUN" -R "$GITHUB_REPOSITORY" -p 'vmlinux-*' -D _output/lab/kernel-b
+          k=$(find _output/lab/kernel-b -name vmlinux -type f | head -1)
+          [ -n "$k" ] || { echo "::error::run $KERNEL_RUN has no vmlinux artifact"; exit 1; }
+          echo "SPIN_KERNEL_B=$PWD/$k" >> "$GITHUB_ENV"
+
+      - name: Take the variables
+        run: |
+          set -euo pipefail
+          IFS=';' read -ra pairs <<< "$VARS"
+          for pair in "${pairs[@]}"; do
+            pair="${pair#"${pair%%[![:space:]]*}"}"
+            pair="${pair%"${pair##*[![:space:]]}"}"
+            [ -z "$pair" ] && continue
+            key="${pair%%=*}"
+            [[ "$pair" == *=* && "$key" =~ ^(REPS|TOP|GAP|ONLY|FLAGS|WS_MIB|MEMORY_MIB|DEBUG|SPIN_[A-Z0-9_]+)$ ]] ||
+              { echo "::error::not a variable this workflow passes on: $pair"; exit 1; }
+            case "$key" in
+              SPIN_MACHINE_OUTPUT|SPIN_KERNEL_B) echo "::error::$key is set by this workflow"; exit 1 ;;
+            esac
+            echo "$pair" >> "$GITHUB_ENV"
+          done
+
+      - name: What this run is
+        run: |
+          {
+            echo "### $EXPERIMENT on $RUNNER_NAME"
+            echo
+            echo "- release: $RELEASE"
+            echo "- kernel B: ${SPIN_KERNEL_B:+run $KERNEL_RUN}${SPIN_KERNEL_B:-none}"
+            echo "- vars: ${VARS:-none}"
+            echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
+            echo "- load: $(cut -d' ' -f1-3 /proc/loadavg)"
+            if sudo -n true 2>/dev/null; then echo "- sudo -n: yes"; else echo "- sudo -n: **no** (targets that edit an overlay skip)"; fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm"; exit 1; }
+
+      # report writes its JSON where OUT says; the others print their tables through t.Log.
+      - name: Run the experiment
+        run: |
+          set -o pipefail
+          task "$EXPERIMENT" OUTPUT_DIR="$SPIN_MACHINE_OUTPUT" OUT="$PWD/_output/lab/report.json" 2>&1 | tee _output/lab/lab.log
+
+      - name: What it found
+        if: always()
+        run: |
+          [ -f _output/lab/lab.log ] || exit 0
+          {
+            echo
+            echo '```'
+            grep -E '^\s{4}\S' _output/lab/lab.log | sed 's/^    //' | tail -300
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lab-${{ github.run_id }}
+          path: |
+            _output/lab/lab.log
+            _output/lab/report.json
+          if-no-files-found: ignore
