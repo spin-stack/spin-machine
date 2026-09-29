@@ -25,15 +25,17 @@ import (
 // window of the initcall named, the p50 milliseconds each task spent on the CPU.
 func cpuShareReport(t *testing.T, out string, base variant, initcall string, reps int) {
 	t.Helper()
-	// Only the window leaves the guest: sched_switch fires through the whole boot, and every byte
-	// on the serial port is a VM exit - the unfiltered trace did not finish in three minutes.
+	// Only the trace up to the window's end leaves the guest: sched_switch fires through the whole
+	// boot, and every byte on the serial port is a VM exit - the unfiltered trace did not finish
+	// in three minutes. From the start and not from the window's, because a work item running
+	// in it may have begun before it.
 	const dump = `[Unit]
 Description=Print the scheduler and initcall trace events
 After=multi-user.target
 [Service]
 Type=oneshot
 StandardOutput=null
-ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; sed -n '/initcall_start: func=FN+/,/initcall_finish: func=FN+/p' /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
+ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; sed -n '1,/initcall_finish: func=FN+/p' /sys/kernel/tracing/trace | grep -E 'sched_switch|workqueue_execute|initcall_(start|finish): func=FN[+]'; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
 [Install]
 WantedBy=multi-user.target
 `
