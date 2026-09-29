@@ -40,7 +40,8 @@ three checksums in the release notes.
 
 A release also says what it costs. After it publishes, the `report` job boots the tarball it
 just published, on a self-hosted runner labelled `kvm`, through every combination of the
-machine's features (accelerator, memory backing, vsock, hotplug ports, disk caching) and every
+machine's features (accelerator; memory anonymous, restored from a template's file, shared for
+freezing one, or with a virtio-mem ceiling; vsock; hotplug ports; disk caching) and every
 boot variant of the image. It writes `report.json` beside the tarball: per row, the command
 line, the shape and fingerprint, whether QEMU ran it, and p50/p95 of each boot phase. It then
 appends `spin-machine compare` against the newest earlier release that has a report to the
