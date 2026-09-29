@@ -64,26 +64,3 @@ not been given a memory file yet could never find the template it would itself p
 `spin-machine fingerprint` prints it with the shape that went into it, because the number
 alone answers "did it change?" and not "what changed?".
 
-### Reusing hashes in a launcher
-
-A long-lived launcher can reuse artifact hashes between VM creations:
-
-```go
-var fingerprints machine.FingerprintCache // once per launcher, not once per VM
-fp, err := fingerprints.Fingerprint(spec)
-```
-
-The cache opens and stats the artifacts on every call, rehashing when inode, device,
-size, mtime or ctime changes; it recomputes the complete machine identity each time.
-Files modified within the last second are hashed without caching, because consecutive
-writes can share the same filesystem timestamp. Once that window has elapsed, the
-next call hashes the file again before making its hash reusable; callers never sleep.
-Use it with local release files kept unchanged while VMs use them. Metadata cannot
-prove content against a privileged writer or a filesystem with unreliable timestamps;
-`spec.Fingerprint()` still reads and hashes every byte. No cache is implicit in it.
-
-Measured 2026-09-21 on an i9-13900HK, two artifacts totalling 76 MiB: 42.2–42.7 ms
-uncached, 5.1–5.2 µs for a warm cache with a named CPU, and 168–169 µs with `CPU=host`
-(which rereads the host CPU identity). The first call still pays for hashing. These
-are fingerprint costs, not end-to-end VM creation measurements; the `boot` CLI does
-not call `Fingerprint` itself.

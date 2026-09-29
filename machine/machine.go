@@ -52,37 +52,37 @@ import (
 // left free — the q35 convention puts VGA there, and this machine has no
 // display adapter at all.
 const (
-	SlotVsock   = 0x02
-	SlotRNG     = 0x03
-	SlotBalloon = 0x04
+	slotVsock   = 0x02
+	slotRNG     = 0x03
+	slotBalloon = 0x04
 
-	SlotDiskBase = 0x05
-	SlotDiskMax  = 0x0f
+	slotDiskBase = 0x05
+	slotDiskMax  = 0x0f
 
-	SlotNICBase = 0x10
-	SlotNICMax  = 0x19
+	slotNICBase = 0x10
+	slotNICMax  = 0x19
 
 	// Root ports for devices that arrive while the machine runs. Taken off the
-	// top of the NIC range, the way SlotMem was: every slot below is where it
+	// top of the NIC range, the way slotMem was: every slot below is where it
 	// was, and ten NICs is still more than anything asks for.
-	SlotHotplugBase = 0x1a
-	SlotHotplugMax  = 0x1d
+	slotHotplugBase = 0x1a
+	slotHotplugMax  = 0x1d
 
 	// Taken off the top of the NIC range rather than inserted anywhere earlier:
 	// every slot below this one is where it was, so this did not renumber a
 	// single existing device. Fifteen NICs was not a number anything needed.
-	SlotMem = 0x1e
+	slotMem = 0x1e
 )
 
-// MaxDisks and MaxNICs bound the fixed slot ranges above. Exceeding either is a
+// maxDisks and maxNICs bound the fixed slot ranges above. Exceeding either is a
 // configuration error, caught before a command line is built rather than by the
 // guest not finding a device.
 const (
-	MaxDisks = SlotDiskMax - SlotDiskBase + 1
-	MaxNICs  = SlotNICMax - SlotNICBase + 1
+	maxDisks = slotDiskMax - slotDiskBase + 1
+	maxNICs  = slotNICMax - slotNICBase + 1
 
 	// MaxHotplugPorts bounds Spec.HotplugPorts.
-	MaxHotplugPorts = SlotHotplugMax - SlotHotplugBase + 1
+	MaxHotplugPorts = slotHotplugMax - slotHotplugBase + 1
 )
 
 // HotplugPortID names the root port a device arriving at run time is attached to. Whoever
@@ -106,7 +106,7 @@ const virtioModern = "disable-legacy=on"
 // and reads a doubled one as a literal. Every free-form value a caller supplies goes
 // through it: a disk path "a,readonly=off" is otherwise a second option, not part of
 // the path. A value picked from a fixed set — a disk's format and cache mode, the
-// accelerator, a CPU model name — is not escaped but refused by Validate when it is not
+// accelerator, a CPU model name — is not escaped but refused by validate when it is not
 // one of the set, because an escaped "qcow2,,x" is still not a format.
 func qemuOpt(v string) string { return strings.ReplaceAll(v, ",", ",,") }
 
@@ -596,7 +596,7 @@ type Spec struct {
 
 	// Cmdline is the kernel command line. A typed value rather than a rendered string,
 	// so that what String always adds — pci=lastbus=0 and the rest — cannot be left
-	// out by a caller who built the line some other way, and so that Validate can see
+	// out by a caller who built the line some other way, and so that validate can see
 	// what the line is made of.
 	Cmdline Cmdline
 
@@ -639,12 +639,11 @@ type Shape struct {
 	Memory  string
 }
 
-// Shape returns the machine's shape.
+// shape returns the machine's shape.
 //
 // It reports the shape of a machine with *file-backed* RAM whenever the spec has
-// a memory file, because that changes the machine string. A caller comparing
-// fingerprints across templates should build the spec it would actually run.
-func (s Spec) Shape() Shape {
+// a memory file, because that changes the machine string.
+func (s Spec) shape() Shape {
 	accel := s.accel()
 	cpu := s.CPU
 	if cpu == "" {
@@ -783,7 +782,7 @@ func (s Spec) machineOpts() string {
 }
 
 // accelArg is -accel: the accelerator, and under KVM the descriptor set /dev/kvm is in
-// when the caller opened it (Validate refuses one for any other accelerator).
+// when the caller opened it (validate refuses one for any other accelerator).
 func accelArg(accel string, kvmFDSet int) string {
 	if kvmFDSet == 0 {
 		return accel
@@ -811,7 +810,7 @@ func (s Spec) TemplateShape() Shape {
 	if forTemplate.Memory.File == "" {
 		forTemplate.Memory.File = "-"
 	}
-	return forTemplate.Shape()
+	return forTemplate.shape()
 }
 
 func smpArg(bootCPUs, maxCPUs int) string {
@@ -844,10 +843,10 @@ func nonEmpty(values ...string) []string {
 	return kept
 }
 
-// Validate reports what is wrong with a spec, before a command line is built
+// validate reports what is wrong with a spec, before a command line is built
 // from it. Every check here is something that otherwise fails as a guest that
 // boots and finds the world subtly wrong.
-func (s Spec) Validate() error {
+func (s Spec) validate() error {
 	switch {
 	case s.QEMU == "":
 		return errors.New("no QEMU binary")
@@ -885,10 +884,10 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("memory is %d MB", s.Memory.SizeMB)
 	case s.Memory.Shared && s.Memory.File == "":
 		return errors.New("Memory.Shared with no Memory.File to share")
-	case len(s.Disks) > MaxDisks:
-		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), MaxDisks)
-	case len(s.NICs) > MaxNICs:
-		return fmt.Errorf("%d NICs, and the slot range holds %d", len(s.NICs), MaxNICs)
+	case len(s.Disks) > maxDisks:
+		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), maxDisks)
+	case len(s.NICs) > maxNICs:
+		return fmt.Errorf("%d NICs, and the slot range holds %d", len(s.NICs), maxNICs)
 	case s.HotplugPorts < 0 || s.HotplugPorts > MaxHotplugPorts:
 		return fmt.Errorf("%d root ports for devices arriving later, and the slot range holds %d",
 			s.HotplugPorts, MaxHotplugPorts)
@@ -1004,11 +1003,11 @@ func (d Disk) validate(sets map[int]bool) error {
 
 // Args returns the QEMU command line, without the binary itself.
 func (s Spec) Args() ([]string, error) {
-	if err := s.Validate(); err != nil {
+	if err := s.validate(); err != nil {
 		return nil, err
 	}
 
-	shape := s.Shape()
+	shape := s.shape()
 	args := make([]string, 0, 64)
 	args = append(args,
 		"-L", s.Firmware,
@@ -1119,7 +1118,7 @@ func (s Spec) appendDevices(args []string) []string {
 	args = append(args, "-device", "vmgenid,guid=auto")
 
 	args = append(args, "-device",
-		fmt.Sprintf("virtio-rng-pci,%s,addr=0x%x", virtioModern, SlotRNG))
+		fmt.Sprintf("virtio-rng-pci,%s,addr=0x%x", virtioModern, slotRNG))
 
 	// The balloon, and the only way a running VM here gives memory back.
 	//
@@ -1146,11 +1145,11 @@ func (s Spec) appendDevices(args []string) []string {
 	// upon, and it reads back as zero on restore. The template ends up sparser.
 	args = append(args, "-device",
 		fmt.Sprintf("virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on,%s,addr=0x%x",
-			virtioModern, SlotBalloon))
+			virtioModern, slotBalloon))
 
 	if s.VsockCID != 0 {
 		dev := fmt.Sprintf("vhost-vsock-pci,guest-cid=%d,%s,addr=0x%x",
-			s.VsockCID, virtioModern, SlotVsock)
+			s.VsockCID, virtioModern, slotVsock)
 		if s.VsockFD != 0 {
 			dev += fmt.Sprintf(",vhostfd=%d", s.VsockFD)
 		}
@@ -1175,7 +1174,7 @@ func (s Spec) appendDevices(args []string) []string {
 		args = append(args,
 			"-object", fmt.Sprintf("memory-backend-ram,id=%s,size=%dM", memGrowthID, growth),
 			"-device", fmt.Sprintf("virtio-mem-pci,id=vmem0,memdev=%s,requested-size=0,%s,addr=0x%x",
-				memGrowthID, virtioModern, SlotMem))
+				memGrowthID, virtioModern, slotMem))
 	}
 
 	// Empty root ports, for devices this machine will be given while it runs. See
@@ -1185,7 +1184,7 @@ func (s Spec) appendDevices(args []string) []string {
 	// number inside a root port is always 0, because a root port has exactly one.
 	for i := range s.HotplugPorts {
 		args = append(args, "-device", fmt.Sprintf("pcie-root-port,id=%s,chassis=%d,addr=0x%x",
-			HotplugPortID(i), i+1, SlotHotplugBase+i))
+			HotplugPortID(i), i+1, slotHotplugBase+i))
 	}
 	return args
 }
@@ -1199,7 +1198,7 @@ func (s Spec) appendDisks(args []string) []string {
 			args = append(args, "-drive", d.driveArg(i))
 		}
 		dev := fmt.Sprintf("virtio-blk-pci,drive=blk%d,%s,addr=0x%x",
-			i, virtioModern, SlotDiskBase+i)
+			i, virtioModern, slotDiskBase+i)
 		if d.Serial != "" {
 			dev += ",serial=" + qemuOpt(d.Serial)
 		}
@@ -1222,7 +1221,7 @@ func (s Spec) appendNICs(args []string) []string {
 		// which is the right way round — a machine that cannot do this is a
 		// different machine.
 		dev := fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s,romfile=,%s,addr=0x%x",
-			i, n.MAC, virtioModern, SlotNICBase+i)
+			i, n.MAC, virtioModern, slotNICBase+i)
 		if n.MTU > 0 {
 			dev += fmt.Sprintf(",host_mtu=%d", n.MTU)
 		}
@@ -1286,7 +1285,7 @@ func (s Spec) appendFDSets(args []string) []string {
 
 // appendIncoming is -incoming, when the machine is to be restored rather than booted.
 func (s Spec) appendIncoming(args []string) []string {
-	// -incoming, in whichever of its two forms this machine was given. Validate has
+	// -incoming, in whichever of its two forms this machine was given. validate has
 	// already refused a spec carrying both.
 	//
 	// The URI form was declared and never emitted: Spec.Incoming was read by nobody, so
@@ -1319,13 +1318,12 @@ func (s Spec) appendIncoming(args []string) []string {
 // every VM restored from one have their memory in a file whatever the spec being
 // asked was configured with.
 func (s Spec) Fingerprint() (string, error) {
-	return s.fingerprint(fileSum, HostCPUModel)
+	return s.fingerprint(hostCPUModel)
 }
 
-// fingerprint is Fingerprint with its two readers of the host passed in: how a file
-// is hashed (FingerprintCache memoises it) and which CPU this host has (a test is
-// two hosts).
-func (s Spec) fingerprint(sumFile func(string) (string, error), hostCPU func() (string, error)) (string, error) {
+// fingerprint is Fingerprint with the host's CPU passed in, because a test is two
+// hosts.
+func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 	h := sha256.New()
 
 	// Length-prefixed, so that no two different machines can produce the same
@@ -1351,7 +1349,7 @@ func (s Spec) fingerprint(sumFile func(string) (string, error), hostCPU func() (
 			write(f.name, "none")
 			continue
 		}
-		sum, err := sumFile(f.path)
+		sum, err := fileSum(f.path)
 		if err != nil {
 			return "", fmt.Errorf("fingerprinting %s: %w", f.name, err)
 		}
@@ -1368,10 +1366,7 @@ func (s Spec) fingerprint(sumFile func(string) (string, error), hostCPU func() (
 
 // identity is everything the fingerprint hashes except the contents of those three
 // files: the machine's shape, its device topology, and the host's own CPU when the
-// guest is being shown it. It is recomputed on every fingerprint, cached or not, so
-// that FingerprintCache memoises only the expensive half — 76 MB of SHA-256, 29 ms
-// on a machine measured — and never keys a hash on a list of inputs someone has to
-// keep in step with this one.
+// guest is being shown it.
 func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 	shape := s.TemplateShape()
 
@@ -1449,16 +1444,16 @@ func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 // The devices below are the ones that are there at that moment, on both sides.
 func (s Spec) topology() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", SlotRNG, SlotBalloon)
+	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", slotRNG, slotBalloon)
 	// Whose the root ports' hotplug is: the chipset's state, and the ACPI tables the guest read,
 	// differ with it (see Args), and a state loaded into the other kind is a guest whose slots
 	// nothing answers for.
 	b.WriteString(";ich9-lpc:pcie-native-hotplug")
 	if s.VsockCID != 0 {
-		fmt.Fprintf(&b, ";vhost-vsock-pci@%#x", SlotVsock)
+		fmt.Fprintf(&b, ";vhost-vsock-pci@%#x", slotVsock)
 	}
 	if s.Memory.MaxMB > s.Memory.SizeMB {
-		fmt.Fprintf(&b, ";virtio-mem-pci@%#x", SlotMem)
+		fmt.Fprintf(&b, ";virtio-mem-pci@%#x", slotMem)
 	}
 	if s.Serial != "" || s.SerialFDSet != 0 {
 		b.WriteString(";isa-serial")
@@ -1467,7 +1462,7 @@ func (s Spec) topology() string {
 	// though what they are for is not. A machine restored into one with a different
 	// number of them is a machine whose bus does not match its own device state.
 	if s.HotplugPorts > 0 {
-		fmt.Fprintf(&b, ";pcie-root-port@%#x*%d", SlotHotplugBase, s.HotplugPorts)
+		fmt.Fprintf(&b, ";pcie-root-port@%#x*%d", slotHotplugBase, s.HotplugPorts)
 	}
 	// The NICs, by how many and where, and deliberately not by MAC or by descriptor.
 	//
@@ -1492,7 +1487,7 @@ func (s Spec) topology() string {
 	// turns "the operator changed the MTU" into a template that is rebuilt rather than a
 	// restore that fails.
 	if len(s.NICs) > 0 {
-		fmt.Fprintf(&b, ";virtio-net-pci@%#x*%d", SlotNICBase, len(s.NICs))
+		fmt.Fprintf(&b, ";virtio-net-pci@%#x*%d", slotNICBase, len(s.NICs))
 		for _, n := range s.NICs {
 			fmt.Fprintf(&b, ",mtu=%d", n.MTU)
 		}
@@ -1500,7 +1495,7 @@ func (s Spec) topology() string {
 	return b.String()
 }
 
-// HostCPUModel reports the host CPU's model name, which model "host" makes part
+// hostCPUModel reports the host CPU's model name, which model "host" makes part
 // of what a template describes.
 //
 // The model name and not the feature flags. The flags would be the exact thing —
@@ -1512,7 +1507,7 @@ func (s Spec) topology() string {
 // It reads only as far as the first processor's model name, which is in the first
 // few hundred bytes: /proc/cpuinfo is generated on read, one block per CPU, so on a
 // large host reading all of it costs a block per core for a line the first one has.
-func HostCPUModel() (string, error) {
+func hostCPUModel() (string, error) {
 	f, err := os.Open("/proc/cpuinfo")
 	if err != nil {
 		return "", fmt.Errorf("reading /proc/cpuinfo: %w", err)

@@ -41,7 +41,7 @@ func argValue(args []string, flag string) string {
 	return ""
 }
 
-// nic is a NIC Validate accepts, for a test about something else.
+// nic is a NIC validate accepts, for a test about something else.
 func nic() NIC { return NIC{TapFD: 3, MAC: "52:54:00:00:00:01"} }
 
 // What Args puts on the command line, one machine per row. Each row is the whole
@@ -227,7 +227,7 @@ func TestArgsCarriesTheShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sh := s.Shape()
+	sh := s.shape()
 	for _, c := range []struct{ flag, want string }{
 		{"-machine", sh.Machine},
 		{"-accel", sh.Accel},
@@ -463,7 +463,7 @@ func TestFingerprint(t *testing.T) {
 			if tc.a != nil {
 				tc.a(t, &a)
 			}
-			fa, err := a.fingerprint(fileSum, host(intel))
+			fa, err := a.fingerprint(host(intel))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -475,7 +475,7 @@ func TestFingerprint(t *testing.T) {
 			if tc.hostB != "" {
 				hostB = tc.hostB
 			}
-			fb, err := b.fingerprint(fileSum, host(hostB))
+			fb, err := b.fingerprint(host(hostB))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -493,9 +493,6 @@ func TestFingerprint(t *testing.T) {
 func TestCmdline(t *testing.T) {
 	withInit := DefaultCmdline()
 	withInit.Init = "/sbin/custom-init"
-	withInit.InitArgs = []string{"-vsock-rpc-port=1025"}
-	quoted := withInit
-	quoted.InitArgs = []string{"-name", "two words", ""}
 
 	for _, tc := range []struct {
 		name   string
@@ -519,16 +516,9 @@ func TestCmdline(t *testing.T) {
 			"TERM=dumb",
 		},
 	}, {
-		name:   "init and its arguments",
+		name:   "init",
 		c:      withInit,
-		suffix: "init=/sbin/custom-init -- -vsock-rpc-port=1025",
-	}, {
-		// An argument with a space is one argument to init only in quotes, which the
-		// kernel's parser strips; unquoted it is two. And an empty one is otherwise
-		// nothing at all.
-		name:   "init arguments that need quotes",
-		c:      quoted,
-		suffix: `init=/sbin/custom-init -- -name "two words" ""`,
+		suffix: "init=/sbin/custom-init",
 	}, {
 		// A profiling boot goes silent, not verbose: registering a console replays the
 		// whole ring into it inside an initcall, and the profile then measures itself.
@@ -571,7 +561,7 @@ func TestProfilingLeavesTheCallersCmdlineAlone(t *testing.T) {
 	}
 }
 
-// Validate is the boundary, and every case in it is something that otherwise
+// validate is the boundary, and every case in it is something that otherwise
 // fails as a guest that boots and finds the world subtly wrong. There was one
 // test for one of them; a case added without a test is a check nobody notices
 // stopped firing.
@@ -591,13 +581,13 @@ func TestValidateRefuses(t *testing.T) {
 		{"a memory ceiling below the boot size", func(s *Spec) { s.Memory.SizeMB, s.Memory.MaxMB = 2048, 512 }},
 		{"shared memory with no file to share", func(s *Spec) { s.Memory.Shared = true }},
 		{"more disks than the slot range holds", func(s *Spec) {
-			s.Disks = make([]Disk, MaxDisks+1)
+			s.Disks = make([]Disk, maxDisks+1)
 			for i := range s.Disks {
 				s.Disks[i] = Disk{Path: "/a.qcow2", Format: "qcow2"}
 			}
 		}},
 		{"more NICs than the slot range holds", func(s *Spec) {
-			s.NICs = make([]NIC, MaxNICs+1)
+			s.NICs = make([]NIC, maxNICs+1)
 			for i := range s.NICs {
 				s.NICs[i] = nic()
 			}
@@ -645,10 +635,6 @@ func TestValidateRefuses(t *testing.T) {
 		// The kernel command line: each of these boots a guest that is told something
 		// other than what the caller wrote.
 		{"a root device with a space", func(s *Spec) { s.Cmdline.Root = "/dev/vda quiet" }},
-		{"init arguments with no init", func(s *Spec) { s.Cmdline.InitArgs = []string{"-v"} }},
-		{"an init argument with a quote", func(s *Spec) {
-			s.Cmdline.Init, s.Cmdline.InitArgs = "/sbin/init", []string{`a"b`}
-		}},
 		{"an extra parameter that ends the kernel's part", func(s *Spec) { s.Cmdline.Extra = []string{"quiet -- x"} }},
 		{"a command line the kernel would truncate", func(s *Spec) {
 			s.Cmdline.Extra = []string{strings.Repeat("x", maxCmdline)}
@@ -680,8 +666,8 @@ func TestValidateRefuses(t *testing.T) {
 		t.Run(tc.what, func(t *testing.T) {
 			s := spec(t)
 			tc.breaks(&s)
-			if err := s.Validate(); err == nil {
-				t.Fatalf("Validate accepted %s", tc.what)
+			if err := s.validate(); err == nil {
+				t.Fatalf("validate accepted %s", tc.what)
 			}
 			if _, err := s.Args(); err == nil {
 				t.Fatalf("Args built a command line for %s", tc.what)
@@ -692,11 +678,11 @@ func TestValidateRefuses(t *testing.T) {
 	// And the specs the cases above are made from have to pass, or every one of them
 	// would pass for the wrong reason.
 	s := spec(t)
-	if err := s.Validate(); err != nil {
+	if err := s.validate(); err != nil {
 		t.Fatalf("the minimal spec does not validate: %v", err)
 	}
 	s.NICs = []NIC{nic()}
-	if err := s.Validate(); err != nil {
+	if err := s.validate(); err != nil {
 		t.Fatalf("the minimal spec with a NIC does not validate: %v", err)
 	}
 }

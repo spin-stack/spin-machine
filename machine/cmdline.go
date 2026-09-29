@@ -3,7 +3,6 @@
 package machine
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -16,9 +15,9 @@ import (
 // can be trusted, that there is no timer to probe for — and getting one of them
 // wrong shows up as boot time, not as an error.
 //
-// What is *not* here is the guest's init and its arguments. Those belong to
+// What is *not* here is the guest's init. It belongs to
 // whatever software runs inside, which this repository does not build and should
-// not have an opinion about; pass them in Init and InitArgs.
+// not have an opinion about; pass it in Init.
 type Cmdline struct {
 	// Console the kernel prints to. "ttyS0" is the ISA 16550 this machine has.
 	// Empty means the kernel prints to nothing: the ring buffer still records
@@ -30,15 +29,9 @@ type Cmdline struct {
 	Quiet    bool
 	LogLevel int
 
-	// Init is the program the kernel runs as PID 1, and InitArgs what follows it
-	// after a "--". Empty leaves both out, and the kernel picks its default.
-	//
-	// An argument that is empty or holds whitespace is written in double quotes, which
-	// the kernel's parser (next_arg in lib/cmdline.c) strips, so init receives it as one
-	// argument. An argument holding a double quote cannot be written at all — the
-	// parser has no escape — and Validate refuses it.
-	Init     string
-	InitArgs []string
+	// Init is the program the kernel runs as PID 1. Empty leaves it out, and the
+	// kernel picks its default.
+	Init string
 
 	// Root, when set, is passed as root= and tells the kernel to mount a block
 	// device rather than stay on an initramfs. "/dev/vda" is the first disk in
@@ -205,15 +198,6 @@ func (c Cmdline) String() string {
 
 	if c.Init != "" {
 		parts = append(parts, "init="+c.Init)
-		if len(c.InitArgs) > 0 {
-			parts = append(parts, "--")
-			for _, a := range c.InitArgs {
-				if a == "" || strings.ContainsFunc(a, isSpace) {
-					a = `"` + a + `"`
-				}
-				parts = append(parts, a)
-			}
-		}
 	}
 
 	return strings.Join(parts, " ")
@@ -221,8 +205,8 @@ func (c Cmdline) String() string {
 
 // maxCmdline is COMMAND_LINE_SIZE on x86 (arch/x86/include/uapi/asm/setup.h), counting
 // the terminating NUL. The kernel copies the command line into a buffer of that size
-// and truncates the rest without a word, and what is last here is init and its
-// arguments: a long line boots a guest whose PID 1 is not the one asked for.
+// and truncates the rest without a word, and what is last here is init: a long line
+// boots a guest whose PID 1 is not the one asked for.
 const maxCmdline = 2048
 
 // validate refuses a command line the kernel would read as something else.
@@ -232,14 +216,6 @@ func (c Cmdline) validate() error {
 	} {
 		if strings.ContainsFunc(f.value, isSpace) || strings.Contains(f.value, `"`) {
 			return fmt.Errorf("%s %q: one kernel parameter cannot hold whitespace or a quote", f.name, f.value)
-		}
-	}
-	if len(c.InitArgs) > 0 && c.Init == "" {
-		return errors.New("InitArgs with no Init: String would drop them without a word")
-	}
-	for _, a := range c.InitArgs {
-		if strings.Contains(a, `"`) {
-			return fmt.Errorf("init argument %q holds a double quote, which the kernel's parser cannot carry", a)
 		}
 	}
 	for _, e := range c.Extra {
