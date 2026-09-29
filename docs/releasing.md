@@ -61,7 +61,12 @@ _output/bin/spin-machine compare --old base.json --new exp.json
 after one unmeasured boot that warms the page cache). Times compare only between reports taken
 on the same kind of host; `compare` says so when they were not.
 
-The runner needs `/dev/kvm` and `/dev/vhost-vsock` readable and writable by its user, and
+`report.yml` is the job, and it runs by hand too: `gh workflow run report.yml -f
+version=<release>` measures any published release and keeps `report.json` and the comparison as
+an artifact without touching the release - how the runner is checked, and how two releases are
+compared after the fact (`-f publish=true` does what a release does).
+
+The runner needs `/dev/kvm` and `/dev/vhost-vsock` readable and writable by its user, `gh`, and
 `sudo -n` for `modprobe nbd` and `qemu-nbd`: the image variants write into a throwaway overlay.
 Without `/dev/vhost-vsock` the vsock rows are listed as skipped, and without sudo the variants
 that edit the image are skipped too, and the getty is agetty rather than an echo.
