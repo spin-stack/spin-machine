@@ -613,12 +613,7 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 // drop-in can live and no kernel parameter reaches it here.
 func editOverlay(t *testing.T, overlay string, v variant) {
 	t.Helper()
-	const dev = "/dev/nbd0"
-	mustRun(t, "sudo", "modprobe", "nbd", "max_part=8")
-	if !nbdAppears(dev) {
-		t.Fatalf("%s did not appear after modprobe nbd", dev)
-	}
-	mustRun(t, "sudo", "qemu-nbd", "--connect="+dev, "-f", "qcow2", overlay)
+	dev := connectNBD(t, overlay)
 	defer mustRun(t, "sudo", "qemu-nbd", "--disconnect", dev)
 
 	// The device's size arrives after qemu-nbd returns: a mount before it reads a device of
@@ -785,6 +780,37 @@ func canEditImages() bool {
 // nbdAppears waits for dev. modprobe returns when the module is loaded, and the device nodes
 // come after it, from udev: on a runner that had never loaded it, qemu-nbd right after modprobe
 // failed on "/dev/nbd0: No such file or directory" with the node there a moment later.
+// connectNBD attaches overlay to an NBD device nobody holds and returns it. Not /dev/nbd0 alone:
+// the devices are the host kernel's, and two lab runners on one host each took nbd0 - the second
+// got "Failed to set NBD socket" and its run failed (2026-09-29). A device is held while its
+// /sys/block/nbdN/pid exists; one taken between that look and the connect fails the connect,
+// and the next is tried.
+func connectNBD(t *testing.T, overlay string) string {
+	t.Helper()
+	mustRun(t, "sudo", "modprobe", "nbd", "max_part=8")
+	if !nbdAppears("/dev/nbd0") {
+		t.Fatal("/dev/nbd0 did not appear after modprobe nbd")
+	}
+	devs, err := filepath.Glob("/sys/block/nbd*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last string
+	for _, d := range devs {
+		if _, err := os.Stat(filepath.Join(d, "pid")); err == nil {
+			continue
+		}
+		dev := "/dev/" + filepath.Base(d)
+		out, err := exec.Command("sudo", "qemu-nbd", "--connect="+dev, "-f", "qcow2", overlay).CombinedOutput()
+		if err == nil {
+			return dev
+		}
+		last = fmt.Sprintf("%s: %v: %s", dev, err, out)
+	}
+	t.Fatalf("no free NBD device among %d; the last tried: %s", len(devs), last)
+	return ""
+}
+
 func nbdAppears(dev string) bool {
 	for range 50 {
 		if _, err := os.Stat(dev); err == nil {
