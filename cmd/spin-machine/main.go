@@ -421,15 +421,17 @@ func compare(o compareFlags, w io.Writer) error {
 	if o.old == "" || o.new == "" {
 		return errors.New("compare: --old and --new are required")
 	}
-	var reports [2]bootreport.Report
-	for i, p := range []string{o.old, o.new} {
+	var reports []bootreport.Report
+	for _, p := range []string{o.old, o.new} {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return fmt.Errorf("reading the report: %w", err)
 		}
-		if err := json.Unmarshal(b, &reports[i]); err != nil {
+		var r bootreport.Report
+		if err := json.Unmarshal(b, &r); err != nil {
 			return fmt.Errorf("reading the report %s: %w", p, err)
 		}
+		reports = append(reports, r)
 	}
 	bootreport.Diff(w, reports[0], reports[1], o.threshold)
 	return nil
