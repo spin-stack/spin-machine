@@ -735,11 +735,17 @@ func TestValidateRefuses(t *testing.T) {
 		t.Fatalf("the least each bound allows does not validate: %v", err)
 	}
 
-	// A console by path is one of its two forms, not half of a conflict.
+	// A console is a path or a descriptor set, and either alone is not half of a conflict.
 	s = spec(t)
 	s.Serial = "stdio"
 	if err := s.validate(); err != nil {
 		t.Fatalf("a console by path does not validate: %v", err)
+	}
+	s = spec(t)
+	s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}}
+	s.SerialFDSet = 1
+	if err := s.validate(); err != nil {
+		t.Fatalf("a console by descriptor does not validate: %v", err)
 	}
 }
 
