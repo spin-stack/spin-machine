@@ -106,6 +106,15 @@ func TestArgs(t *testing.T) {
 		set:    func(s *Spec) { s.NICs = []NIC{nic()} },
 		absent: []string{"host_mtu"},
 	}, {
+		// chassis is a root port's identity to the guest's ACPI, and two ports with one
+		// chassis are a guest that hotplugs into the wrong one or neither.
+		name: "root ports",
+		set:  func(s *Spec) { s.HotplugPorts = 2 },
+		want: []string{
+			"pcie-root-port,id=rp0,chassis=1,addr=0x1a ",
+			"pcie-root-port,id=rp1,chassis=2,addr=0x1b ",
+		},
+	}, {
 		// Growing a VM is virtio-mem, not ACPI DIMM slots: -m carries the ceiling and
 		// no slots=, and the device holds the region between boot memory and ceiling
 		// with nothing plugged until somebody asks.
@@ -216,6 +225,18 @@ func TestArgs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// An unnamed CPU is the silicon under KVM and everything QEMU can emulate under TCG,
+// which refuses "host" outright.
+func TestAnUnnamedCPUFollowsTheAccelerator(t *testing.T) {
+	for accel, want := range map[string]string{"kvm": "host,", "tcg": "max,"} {
+		s := spec(t)
+		s.Accel = accel
+		if got := s.shape().CPU; !strings.HasPrefix(got, want) {
+			t.Errorf("-accel %s: -cpu %q, want %q first", accel, got, want)
+		}
 	}
 }
 
@@ -684,6 +705,62 @@ func TestValidateRefuses(t *testing.T) {
 	s.NICs = []NIC{nic()}
 	if err := s.validate(); err != nil {
 		t.Fatalf("the minimal spec with a NIC does not validate: %v", err)
+	}
+
+	// The least each bound allows: one megabyte, and the first descriptor that is not
+	// stdin, stdout or stderr.
+	s = spec(t)
+	s.Memory.SizeMB = 1
+	s.VsockCID, s.VsockFD = 3, 3
+	if err := s.validate(); err != nil {
+		t.Fatalf("the least each bound allows does not validate: %v", err)
+	}
+}
+
+// What the fingerprint says is present when a template's state is loaded. Two machines
+// that differ in one of these differ on the bus, so each has to be in the string when the
+// device is there and out of it when it is not; a check that is only "the two
+// fingerprints differ" holds none of them, because an inverted test still differs.
+func TestTopologyNamesTheDevicesPresentAtRestore(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		set    func(*Spec)
+		want   string
+		absent string
+	}{
+		{name: "no vsock", set: func(*Spec) {}, absent: "vhost-vsock-pci"},
+		{name: "a vsock", set: func(s *Spec) { s.VsockCID = 7 }, want: ";vhost-vsock-pci@0x2"},
+		{name: "no memory ceiling", set: func(s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB }, absent: "virtio-mem-pci"},
+		{name: "a memory ceiling", set: func(s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB + 1 }, want: ";virtio-mem-pci@0x1e"},
+		{name: "no console", set: func(*Spec) {}, absent: "isa-serial"},
+		{name: "a console by path", set: func(s *Spec) { s.Serial = "file:/log" }, want: ";isa-serial"},
+		{name: "a console by descriptor", set: func(s *Spec) { s.SerialFDSet = 1 }, want: ";isa-serial"},
+		{name: "no root ports", set: func(*Spec) {}, absent: "pcie-root-port"},
+		{name: "one root port", set: func(s *Spec) { s.HotplugPorts = 1 }, want: ";pcie-root-port@0x1a*1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec(t)
+			tc.set(&s)
+			got := s.topology()
+			if tc.want != "" && !strings.Contains(got, tc.want) {
+				t.Errorf("topology %q, want it to hold %q", got, tc.want)
+			}
+			if tc.absent != "" && strings.Contains(got, tc.absent) {
+				t.Errorf("topology %q, want no %q", got, tc.absent)
+			}
+		})
+	}
+}
+
+// Under model host the fingerprint carries this host's CPU. Every host this runs on has a
+// model name in /proc/cpuinfo.
+func TestHostCPUModelReadsThisHost(t *testing.T) {
+	model, err := hostCPUModel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model == "" {
+		t.Fatal("an empty CPU model name")
 	}
 }
 
