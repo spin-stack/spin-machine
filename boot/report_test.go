@@ -53,7 +53,7 @@ var axes = []axis{
 		{"ceiling", []string{"--max-memory", "4096"}},
 	}},
 	{"vsock", []choice{{"off", nil}, {"on", []string{"--vsock-cid", "1000"}}}},
-	{"hotplug", []choice{{"0", nil}, {"2", []string{"--hotplug-ports", "2"}}}},
+	{"hotplug", []choice{{"off", nil}, {"on", []string{"--hotplug-disks", "4"}}}},
 	// How the host caches the root disk: QEMU's default, O_DIRECT for the whole chain, and
 	// O_DIRECT for the overlay only with the shared base on the page cache.
 	{"disk", []choice{

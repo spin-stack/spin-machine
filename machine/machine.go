@@ -62,11 +62,11 @@ const (
 	slotNICBase = 0x10
 	slotNICMax  = 0x19
 
-	// Root ports for devices that arrive while the machine runs. Taken off the
-	// top of the NIC range, the way slotMem was: every slot below is where it
-	// was, and ten NICs is still more than anything asks for.
-	slotHotplugBase = 0x1a
-	slotHotplugMax  = 0x1d
+	// The SCSI controller disks that arrive while the machine runs are added to. Taken
+	// off the top of the NIC range, the way slotMem was: every slot below is where it
+	// was, and ten NICs is still more than anything asks for. 0x1b-0x1d, which held
+	// the root ports this replaced, are free.
+	slotHotplug = 0x1a
 
 	// Taken off the top of the NIC range rather than inserted anywhere earlier:
 	// every slot below this one is where it was, so this did not renumber a
@@ -81,30 +81,31 @@ const (
 	maxDisks = slotDiskMax - slotDiskBase + 1
 	maxNICs  = slotNICMax - slotNICBase + 1
 
-	// MaxHotplugPorts bounds Spec.HotplugPorts.
-	MaxHotplugPorts = slotHotplugMax - slotHotplugBase + 1
+	// MaxHotplugDisks bounds Spec.HotplugDisks: the targets a virtio-scsi controller
+	// addresses, 0 to 255.
+	MaxHotplugDisks = 256
 )
 
-// HotplugPortID names the root port a device arriving at run time is attached to. Whoever
-// hotplugs the device passes it as the device's bus, and the numbering is the machine's:
-// port i is the i'th device this machine can be given while it runs, whatever that device
-// turns out to be.
-func HotplugPortID(i int) string {
-	return fmt.Sprintf("rp%d", i)
-}
+// hotplugController is the virtio-scsi controller's id; its bus is hotplugBus.
+const (
+	hotplugController = "scsi0"
+	hotplugBus        = hotplugController + ".0"
+)
 
-// HotplugDisk is the device_add arguments for a disk arriving on hotplug port i, over the
-// block node named node. The device is modern-only virtio, as every virtio device given at
-// start is (see virtioModern); QMP takes that setting as a value rather than as part of an
-// option string, so the constant cannot be reused. A root port has one slot, so there is no
-// address. The id and the node are the caller's names: it is the one that deletes them.
+// HotplugDisk is the device_add arguments for the disk arriving at hotplug position i, over
+// the block node named node: a scsi-hd at target i of the machine's controller, LUN 0, so the
+// position is the disk's address and two disks cannot be given the same one. The serial is the
+// disk's name to the guest, as a virtio-blk's is, read there from the unit serial number page
+// (VPD page 0x80) rather than from /sys/block/*/serial. The id and the node are the caller's
+// names: it is the one that deletes them.
 func HotplugDisk(i int, id, node, serial string) map[string]any {
 	dev := map[string]any{
-		"driver":         "virtio-blk-pci",
-		"id":             id,
-		"drive":          node,
-		"bus":            HotplugPortID(i),
-		"disable-legacy": "on",
+		"driver":  "scsi-hd",
+		"id":      id,
+		"drive":   node,
+		"bus":     hotplugBus,
+		"scsi-id": i,
+		"lun":     0,
 	}
 	if serial != "" {
 		dev["serial"] = serial
@@ -548,25 +549,25 @@ type Spec struct {
 	Disks []Disk
 	NICs  []NIC
 
-	// HotplugPorts is how many devices this machine can be given while it runs.
+	// HotplugDisks is how many disks this machine can be given at once while it runs, at
+	// HotplugDisk positions 0 to HotplugDisks-1, and zero for none.
 	//
-	// A device that arrives later cannot go where the ones on the command line go: those
-	// slots are on the q35 root complex, and QEMU refuses device_add there — "Bus 'pcie.0'
-	// does not support hotplugging". What accepts a device at run time is a PCIe root
-	// port, so this is that many empty root ports, each one a bus with a free slot.
+	// A disk that arrives later cannot go where the ones on the command line go: those
+	// slots are on the q35 root complex, and QEMU refuses device_add there - "Bus 'pcie.0'
+	// does not support hotplugging". What takes one here is a virtio-scsi controller, on
+	// the command line whenever this is not zero: a disk added to it is a SCSI event the
+	// guest acts on at once.
 	//
-	// A root port takes any PCIe device, so a port is not a disk's or a NIC's: the caller
-	// decides what goes in which. It was named for disks when disks were the only thing
-	// that arrived late, and the name was a claim about the bus that was never true.
+	// It replaced a PCIe root port per disk, which cost more at every step, measured
+	// 2026-09-29 with four: ~10 ms of each boot per port (QEMU realizing it, the guest
+	// enumerating and probing it) against ~10 ms for the controller; ~135 ms for the guest
+	// to see a disk against 1.5; and ~6 s for it to let one go - pciehp waits out an
+	// attention button's cancel window - against under 1.
 	//
-	// Zero by default, and a machine that asks for none is byte-for-byte the machine it
-	// was before this existed. It is not free: each port is a bridge the guest enumerates
-	// at boot and a bus it has to scan, and the ports are in the fingerprint, so a machine
-	// with them does not share a template with one without.
-	//
-	// What it buys is a machine that can exist before the workload does — started, resumed
-	// and waiting, and given its disk and its NIC when they turn up.
-	HotplugPorts int
+	// The controller is in the fingerprint and the count is not: every position is a
+	// target of the same controller, so machines that differ only in how many disks they
+	// may be given share a template.
+	HotplugDisks int
 
 	// VsockCID, when non-zero, gives the machine a vhost-vsock device with that
 	// context id. It is how anything inside the guest is reached: this machine
@@ -907,9 +908,9 @@ func (s Spec) validate() error {
 		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), maxDisks)
 	case len(s.NICs) > maxNICs:
 		return fmt.Errorf("%d NICs, and the slot range holds %d", len(s.NICs), maxNICs)
-	case s.HotplugPorts < 0 || s.HotplugPorts > MaxHotplugPorts:
-		return fmt.Errorf("%d root ports for devices arriving later, and the slot range holds %d",
-			s.HotplugPorts, MaxHotplugPorts)
+	case s.HotplugDisks < 0 || s.HotplugDisks > MaxHotplugDisks:
+		return fmt.Errorf("%d disks arriving later, and the controller addresses %d",
+			s.HotplugDisks, MaxHotplugDisks)
 	}
 	if err := s.Cmdline.validate(); err != nil {
 		return fmt.Errorf("kernel command line: %w", err)
@@ -1095,10 +1096,10 @@ func appendChipset(args []string) []string {
 	// request never reaches the point of stopping the VM.
 	args = append(args, "-global", "ICH9-LPC.disable_s3=1", "-global", "ICH9-LPC.disable_s4=1")
 
-	// The root ports' hotplug is the guest kernel's own (pciehp), not ACPI's. A q35 hands it to
-	// ACPI by default, and its _OSC then withholds native control; the guest kernel has no
-	// acpiphp, so nothing in it answered: a disk added was seen only after a rescan, and one
-	// asked to go (device_del) never went.
+	// No ACPI PCI hotplug. Disks arrive on a SCSI controller and the machine has no bridge for
+	// it to serve, and a q35 left to its default hands PCIe hotplug to ACPI, whose _OSC then
+	// withholds native control from a guest kernel with no acpiphp: when this machine had root
+	// ports, a disk added was seen only after a rescan and one asked to go never went.
 	args = append(args, "-global", "ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off")
 
 	// A reset ends the process instead of starting the machine again.
@@ -1123,8 +1124,8 @@ func (s Spec) appendBoot(args []string) []string {
 }
 
 // appendDevices is every device this machine has whatever it is given: vmgenid, the
-// RNG and the balloon, and the vsock, the virtio-mem region and the root ports when the
-// spec asks for them.
+// RNG and the balloon, and the vsock, the virtio-mem region and the hotplug controller when
+// the spec asks for them.
 func (s Spec) appendDevices(args []string) []string {
 	// The VM Generation ID, whose value QEMU randomises for every VM it starts.
 	//
@@ -1196,14 +1197,11 @@ func (s Spec) appendDevices(args []string) []string {
 				memGrowthID, virtioModern, slotMem))
 	}
 
-	// Empty root ports, for devices this machine will be given while it runs. See
-	// Spec.HotplugPorts: the root complex takes no device_add, and a root port does.
-	//
-	// chassis is the port's identity to the guest's ACPI and has to be unique; the slot
-	// number inside a root port is always 0, because a root port has exactly one.
-	for i := range s.HotplugPorts {
-		args = append(args, "-device", fmt.Sprintf("pcie-root-port,id=%s,chassis=%d,addr=0x%x",
-			HotplugPortID(i), i+1, slotHotplugBase+i))
+	// The controller disks this machine is given while it runs are added to. See
+	// Spec.HotplugDisks: the root complex takes no device_add, and a SCSI bus does.
+	if s.HotplugDisks > 0 {
+		args = append(args, "-device", fmt.Sprintf("virtio-scsi-pci,id=%s,%s,addr=0x%x",
+			hotplugController, virtioModern, slotHotplug))
 	}
 	return args
 }
@@ -1464,9 +1462,9 @@ func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 func (s Spec) topology() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", slotRNG, slotBalloon)
-	// Whose the root ports' hotplug is: the chipset's state, and the ACPI tables the guest read,
-	// differ with it (see Args), and a state loaded into the other kind is a guest whose slots
-	// nothing answers for.
+	// Whose PCI hotplug is: the chipset's state, and the ACPI tables the guest read, differ with
+	// it (see Args), and a state loaded into the other kind is a guest whose slots nothing
+	// answers for.
 	b.WriteString(";ich9-lpc:pcie-native-hotplug")
 	if s.VsockCID != 0 {
 		fmt.Fprintf(&b, ";vhost-vsock-pci@%#x", slotVsock)
@@ -1477,17 +1475,17 @@ func (s Spec) topology() string {
 	if s.Serial != "" || s.SerialFDSet != 0 {
 		b.WriteString(";isa-serial")
 	}
-	// The empty root ports, which are devices present when the state is loaded even
-	// though what they are for is not. A machine restored into one with a different
-	// number of them is a machine whose bus does not match its own device state.
-	if s.HotplugPorts > 0 {
-		fmt.Fprintf(&b, ";pcie-root-port@%#x*%d", slotHotplugBase, s.HotplugPorts)
+	// The hotplug controller, which is a device present when the state is loaded even
+	// though the disks it is for are not. How many it may be given is not here: they are
+	// targets on the one controller, and not devices on the bus.
+	if s.HotplugDisks > 0 {
+		fmt.Fprintf(&b, ";virtio-scsi-pci@%#x", slotHotplug)
 	}
 	// The NICs, by how many and where, and deliberately not by MAC or by descriptor.
 	//
 	// A NIC is on the command line when the machine starts, so it is present when state is
 	// loaded, and a template frozen from a machine without one cannot be loaded into a
-	// machine that has one. That is the same rule as the root ports above, and the reason
+	// machine that has one. That is the same rule as the hotplug controller above, and the reason
 	// disks are *not* here is the reverse of it: a disk is added after the restore, so a
 	// machine that will be given one looks exactly like the template it came from.
 	//

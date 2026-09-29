@@ -169,9 +169,9 @@ as a Task target.
   PATH` opens the socket that `attach`, `detach` and `save` talk to.
 
 ```sh
-spin-machine boot --hotplug-ports 2 --qmp /tmp/q.sock --init /bin/sh &
-spin-machine attach --qmp /tmp/q.sock --port 0 --disk disk.raw   # vdb, in the guest
-spin-machine detach --qmp /tmp/q.sock --port 0                   # waits for the guest
+spin-machine boot --hotplug-disks 2 --qmp /tmp/q.sock --init /bin/sh &
+spin-machine attach --qmp /tmp/q.sock --target 0 --disk disk.raw   # sda, in the guest
+spin-machine detach --qmp /tmp/q.sock --target 0
 ```
 
 ## Taskfiles

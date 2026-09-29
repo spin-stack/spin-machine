@@ -121,14 +121,11 @@ func TestArgs(t *testing.T) {
 			"netdev=net1,mac=52:54:00:00:00:02,romfile=,disable-legacy=on,addr=0x11 ",
 		},
 	}, {
-		// chassis is a root port's identity to the guest's ACPI, and two ports with one
-		// chassis are a guest that hotplugs into the wrong one or neither.
-		name: "root ports",
-		set:  func(s *Spec) { s.HotplugPorts = 2 },
-		want: []string{
-			"pcie-root-port,id=rp0,chassis=1,addr=0x1a ",
-			"pcie-root-port,id=rp1,chassis=2,addr=0x1b ",
-		},
+		// Disks that arrive later are added to one controller, whatever their number.
+		name:   "hotplug disks",
+		set:    func(s *Spec) { s.HotplugDisks = 4 },
+		want:   []string{"-device virtio-scsi-pci,id=scsi0,disable-legacy=on,addr=0x1a "},
+		absent: []string{"pcie-root-port"},
 	}, {
 		// Growing a VM is virtio-mem, not ACPI DIMM slots: -m carries the ceiling and
 		// no slots=, and the device holds the region between boot memory and ceiling
@@ -256,10 +253,11 @@ func TestAnUnnamedCPUFollowsTheAccelerator(t *testing.T) {
 }
 
 // A disk arriving at run time is the same modern-only virtio device a disk given at start
-// is, on the root port it was asked for, and its serial is left out rather than sent empty.
+// A disk arriving at run time is a SCSI disk at the target it was asked for, on the machine's
+// controller, and its serial is left out rather than sent empty.
 func TestHotplugDisk(t *testing.T) {
 	want := map[string]any{
-		"driver": "virtio-blk-pci", "id": "d", "drive": "n", "bus": "rp1", "disable-legacy": "on",
+		"driver": "scsi-hd", "id": "d", "drive": "n", "bus": "scsi0.0", "scsi-id": 1, "lun": 0,
 	}
 	if got := HotplugDisk(1, "d", "n", ""); !reflect.DeepEqual(got, want) {
 		t.Errorf("HotplugDisk with no serial = %v, want %v", got, want)
@@ -648,8 +646,8 @@ func TestValidateRefuses(t *testing.T) {
 				s.NICs[i] = nic()
 			}
 		}},
-		{"more root ports than the slot range holds", func(s *Spec) { s.HotplugPorts = MaxHotplugPorts + 1 }},
-		{"a negative number of root ports", func(s *Spec) { s.HotplugPorts = -1 }},
+		{"more hotplug disks than the controller addresses", func(s *Spec) { s.HotplugDisks = MaxHotplugDisks + 1 }},
+		{"a negative number of hotplug disks", func(s *Spec) { s.HotplugDisks = -1 }},
 		{"a disk with no path", func(s *Spec) { s.Disks = []Disk{{Format: "qcow2"}} }},
 		// A wrong guess is a guest that boots and finds a disk full of nothing.
 		{"a disk with no format", func(s *Spec) { s.Disks = []Disk{{Path: "/a.qcow2"}} }},
@@ -783,8 +781,8 @@ func TestTopologyNamesTheDevicesPresentAtRestore(t *testing.T) {
 		{name: "no console", set: func(*Spec) {}, absent: "isa-serial"},
 		{name: "a console by path", set: func(s *Spec) { s.Serial = "file:/log" }, want: ";isa-serial"},
 		{name: "a console by descriptor", set: func(s *Spec) { s.SerialFDSet = 1 }, want: ";isa-serial"},
-		{name: "no root ports", set: func(*Spec) {}, absent: "pcie-root-port"},
-		{name: "one root port", set: func(s *Spec) { s.HotplugPorts = 1 }, want: ";pcie-root-port@0x1a*1"},
+		{name: "no hotplug controller", set: func(*Spec) {}, absent: "virtio-scsi-pci"},
+		{name: "a hotplug controller", set: func(s *Spec) { s.HotplugDisks = 1 }, want: ";virtio-scsi-pci@0x1a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := spec(t)
