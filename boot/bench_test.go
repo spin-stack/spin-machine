@@ -621,11 +621,15 @@ func editOverlay(t *testing.T, overlay string, v variant) {
 	mustRun(t, "sudo", "qemu-nbd", "--connect="+dev, "-f", "qcow2", overlay)
 	defer mustRun(t, "sudo", "qemu-nbd", "--disconnect", dev)
 
-	// The kernel needs a moment to read the partition table it will not find: this image is
-	// partitionless, so the device itself is the filesystem.
+	// The device's size arrives after qemu-nbd returns: a mount before it reads a device of
+	// zero bytes and fails with "can't read superblock", which a runner reconnecting right after
+	// the previous boot's disconnect did (the kernel logged the capacity change 7 ms after the
+	// failed mount). blkid -p and not blkid: without it blkid answers from its cache, and said
+	// ext4 about a device that was still empty.
 	var ok bool
 	for range 20 {
-		if exec.Command("sudo", "blkid", dev).Run() == nil {
+		size, err := exec.Command("sudo", "blockdev", "--getsize64", dev).Output()
+		if err == nil && strings.TrimSpace(string(size)) != "0" && exec.Command("sudo", "blkid", "-p", dev).Run() == nil {
 			ok = true
 			break
 		}
