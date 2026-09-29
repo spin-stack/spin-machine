@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"io"
 	"net"
@@ -23,48 +22,32 @@ import (
 // and not only to the replies it got back.
 type monitor struct {
 	socket string
-	asked  chan []qmpRequest
+	done   chan served
 }
 
-type qmpRequest struct {
-	Execute   string         `json:"execute"`
-	Arguments map[string]any `json:"arguments"`
+type served struct {
+	asked []qmpRequest
+	err   error
 }
 
 func newMonitor(t *testing.T, replies ...string) *monitor {
 	t.Helper()
-	m := &monitor{socket: filepath.Join(t.TempDir(), "qmp.sock"), asked: make(chan []qmpRequest, 1)}
+	m := &monitor{socket: filepath.Join(t.TempDir(), "qmp.sock"), done: make(chan served, 1)}
 	l, err := net.Listen("unix", m.socket)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = l.Close() })
+	// The goroutine sends what serve said instead of reporting it: a t.Error after the
+	// test has already given up on it panics.
 	go func() {
-		var asked []qmpRequest
-		defer func() { m.asked <- asked }()
 		c, err := l.Accept()
 		if err != nil {
+			m.done <- served{err: err}
 			return
 		}
-		defer func() { _ = c.Close() }()
-		if _, err := io.WriteString(c, `{"QMP": {"version": {}, "capabilities": []}}`+"\n"); err != nil {
-			return
-		}
-		r := bufio.NewReader(c)
-		for _, reply := range replies {
-			line, err := r.ReadString('\n')
-			if err != nil {
-				return
-			}
-			var req qmpRequest
-			if err := json.Unmarshal([]byte(line), &req); err != nil {
-				return
-			}
-			asked = append(asked, req)
-			if _, err := io.WriteString(c, reply+"\n"); err != nil {
-				return
-			}
-		}
+		asked, err := serve(c, replies)
+		m.done <- served{asked, err}
 	}()
 	return m
 }
@@ -73,8 +56,11 @@ func newMonitor(t *testing.T, replies ...string) *monitor {
 func (m *monitor) commands(t *testing.T) []qmpRequest {
 	t.Helper()
 	select {
-	case asked := <-m.asked:
-		return asked
+	case s := <-m.done:
+		if s.err != nil {
+			t.Error(s.err)
+		}
+		return s.asked
 	case <-time.After(5 * time.Second):
 		t.Fatal("the monitor was never let go")
 		return nil

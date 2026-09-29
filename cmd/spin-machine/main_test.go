@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -113,7 +114,10 @@ func TestQMP(t *testing.T) {
 					released <- err
 				}()
 			} else {
-				go func() { released <- serve(monitor, tc.replies) }()
+				go func() {
+					_, err := serve(monitor, tc.replies)
+					released <- err
+				}()
 			}
 
 			q, err := newQMP(client, 100*time.Millisecond)
@@ -136,34 +140,46 @@ func TestQMP(t *testing.T) {
 	}
 }
 
+type qmpRequest struct {
+	Execute   string         `json:"execute"`
+	Arguments map[string]any `json:"arguments"`
+}
+
 // serve is the scripted monitor: a greeting, then one reply per request read. It
-// returns nil once the client has closed the connection, and an error if the client
-// is still holding it a second after the script ran out.
-func serve(c net.Conn, replies []string) error {
+// returns what it was asked once the client has closed the connection, and an error
+// if the client is still holding it a second after the script ran out.
+func serve(c net.Conn, replies []string) ([]qmpRequest, error) {
 	defer func() { _ = c.Close() }()
 	if _, err := io.WriteString(c, `{"QMP": {"version": {}, "capabilities": []}}`+"\n"); err != nil {
-		return err
+		return nil, err
 	}
+	var asked []qmpRequest
 	r := bufio.NewReader(c)
 	for _, reply := range replies {
-		if _, err := r.ReadString('\n'); err != nil {
-			return err
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return asked, err
 		}
+		var req qmpRequest
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			return asked, err
+		}
+		asked = append(asked, req)
 		if _, err := io.WriteString(c, reply+"\n"); err != nil {
-			return err
+			return asked, err
 		}
 	}
 	// A pipe the client has already closed refuses a deadline with ErrClosedPipe,
 	// which is the answer being waited for.
 	if err := c.SetReadDeadline(time.Now().Add(time.Second)); errors.Is(err, io.ErrClosedPipe) {
-		return nil
+		return asked, nil
 	} else if err != nil {
-		return err
+		return asked, err
 	}
 	if _, err := r.ReadByte(); !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
-		return errors.New("the client kept the monitor after the conversation ended")
+		return asked, errors.New("the client kept the monitor after the conversation ended")
 	}
-	return nil
+	return asked, nil
 }
 
 // How a command ends. Only main ends the process: a command that exited on its own
