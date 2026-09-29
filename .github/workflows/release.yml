@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     # QEMU and the kernel are each tens of minutes from cold, on a runner with two cores,
     # and this job builds both plus the image. The GitHub Actions cache makes a warm run
     # far shorter; the ceiling is for the cold one.
