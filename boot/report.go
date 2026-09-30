@@ -228,7 +228,8 @@ func renames(old, new []Row) map[string]Row {
 		}
 	}
 	nearest := func(r Row, among []Row) (Row, bool) {
-		best, n, tie := Row{}, -1, false
+		var best Row
+		n, found, tie := 0, false, false
 		for _, c := range among {
 			if !sameAxes(r, c) {
 				continue
@@ -238,13 +239,13 @@ func renames(old, new []Row) map[string]Row {
 				continue
 			}
 			switch {
-			case n < 0 || d < n:
-				best, n, tie = c, d, false
+			case !found || d < n:
+				best, n, found, tie = c, d, true, false
 			case d == n:
 				tie = true
 			}
 		}
-		return best, n >= 0 && !tie
+		return best, found && !tie
 	}
 	out := map[string]Row{}
 	for _, r := range news {
@@ -285,10 +286,7 @@ func distance(a, b []string) int {
 	}
 	d := 0
 	for _, n := range count {
-		if n < 0 {
-			n = -n
-		}
-		d += n
+		d += max(n, -n)
 	}
 	return d
 }

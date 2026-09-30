@@ -83,12 +83,19 @@ func TestDiff(t *testing.T) {
 	twinA := axes("twin,x=1", 100, map[string]string{"twin": "y", "x": "1"}, "-twin", "1")
 	twinB := axes("twin,x=2", 100, map[string]string{"twin": "y", "x": "2"}, "-twin", "2")
 	twinNew := axes("twin", 100, map[string]string{"twin": "y"}, "-twin")
-	old.Specs = append(old.Specs, renamedOld, sibling, otherMem, twinA, twinB)
-	nw.Specs = append(nw.Specs, renamedNew, twinNew)
-	// A variant renamed with its command line changed is not the same variant.
-	old.Variants = append(old.Variants, row("fast", "", 100, 0))
-	nw.Variants = append(nw.Variants, row("faster", "", 90, 0))
-	nw.Variants[1].Args = []string{"-m", "4096"}
+	// An axis added: two new rows as near as each other to one old row.
+	grown := axes("grown", 100, map[string]string{"grown": "y"}, "-grown")
+	grownA := axes("grown,z=1", 100, map[string]string{"grown": "y", "z": "1"}, "-grown", "1")
+	grownB := axes("grown,z=2", 100, map[string]string{"grown": "y", "z": "2"}, "-grown", "2")
+	old.Specs = append(old.Specs, renamedOld, sibling, otherMem, twinA, twinB, grown)
+	nw.Specs = append(nw.Specs, renamedNew, twinNew, grownA, grownB)
+	// A variant renamed with its command line kept is the same variant; with it changed, even
+	// by one argument, it is not.
+	old.Variants = append(old.Variants, row("fast", "", 100, 0), row("slow", "", 100, 0))
+	nw.Variants = append(nw.Variants, row("faster", "", 90, 0), row("sluggish", "", 80, 0))
+	old.Variants[1].Args = []string{"-fast"}
+	nw.Variants[1].Args = []string{"-fast", "-x"}
+	old.Variants[2].Args, nw.Variants[2].Args = []string{"-slow"}, []string{"-slow"}
 
 	var b bytes.Buffer
 	Diff(&b, old, nw, 0.05)
@@ -110,8 +117,12 @@ func TestDiff(t *testing.T) {
 		"| twin | new row |",
 		"| twin,x=1 | row gone |",
 		"| twin,x=2 | row gone |",
+		"| grown,z=1 | new row |",
+		"| grown,z=2 | new row |",
+		"| grown | row gone |",
 		"| faster | new row |",
 		"| fast | row gone |",
+		"| sluggish | was slow, usable p50 -20.0% |",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the diff has no %q:\n%s", want, got)
