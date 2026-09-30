@@ -13,7 +13,7 @@ vars:
   # Where the runtime image is published, which `fetch` below reads back. The tag is the
   # pinned version, so asking for this repository's QEMU and asking for the one this commit
   # says it runs are the same question.
-  QEMU_PUBLISHED_IMAGE: '{{.QEMU_PUBLISHED_IMAGE | default "ghcr.io/spin-stack/spin-machine/qemu"}}'
+  QEMU_PUBLISHED_IMAGE: ghcr.io/spin-stack/spin-machine/qemu
 
 tasks:
 
@@ -112,24 +112,6 @@ tasks:
       # Which asserts the fetched tree is whole and that both binaries run here — the same
       # question asked of a built one, and worth asking of a downloaded one twice over.
       - task: verify
-
-  image:
-    desc: >-
-      Build the QEMU runtime image locally (--load, not pushed). A convenience for
-      consumers that would rather pull an image than a tarball — the binaries in it are the
-      same static ones, and need nothing from the image around them.
-    cmds:
-      - |
-        docker buildx build \
-          --file qemu/Dockerfile \
-          --target runtime \
-          --platform linux/amd64 \
-          --cache-from {{.QEMU_CACHE_FROM}} \
-          $({{.VERSIONS}} args alpine qemu debian debian-snapshot qboot) \
-          --build-arg JOBS={{.QEMU_JOBS}} \
-          --tag {{.QEMU_IMAGE}}:{{.QEMU_VERSION}} \
-          --load \
-          .
 
   version:
     desc: Print the pinned QEMU version (the single source of truth for CI tags).

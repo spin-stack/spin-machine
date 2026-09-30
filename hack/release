@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# One tarball, one version: qemu-system-x86_64, qemu-img, the five firmware files, vmlinux
-# and rootfs.qcow2.
+# One tarball, one version: QEMU, its firmware, the kernel, the base image and the tools that
+# make and read its filesystem.
 #
-# Not because it is tidy. `machine.Spec.Fingerprint` hashes the QEMU binary, the kernel and
-# the initrd by content to decide whether a VM may restore from a template, so a release in
-# which any of them moved is a different machine and every template taken against the
-# previous one stops matching. Shipping them separately would let two of the three drift
-# and leave the third to notice.
+# Not because it is tidy. `machine.Spec.Fingerprint` hashes by content the files that make a
+# machine - the ones hack/fingerprint-diff names - so a release in which any of them moved is
+# a different machine. Shipping them separately would let them drift apart and leave the
+# last one to notice.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,9 +62,12 @@ done
 echo "e2fsprogs:"
 # mkfs.ext4 and the configuration it reads, together: what an ext4 is made with is what the
 # binary and mke2fs.conf default to, and a release carrying one without the other pins half
-# of it. e2fsck, dumpe2fs and debugfs are built too and stay in _output: the image build and
-# the tests here use them, and nothing that takes a release does.
-require "${OUTPUT_DIR}/bin/mkfs.ext4" "${SHARE}/bin/mkfs.ext4" "the mkfs.ext4 binary" 0755
+# of it. debugfs, e2fsck and dumpe2fs from the same build: the boot/ probes edit a copy of the
+# base image with this debugfs, because an older one refuses a filesystem with features it
+# does not know, and a release is what the lab runs them against.
+for b in mkfs.ext4 debugfs e2fsck dumpe2fs; do
+  require "${OUTPUT_DIR}/bin/${b}" "${SHARE}/bin/${b}" "the ${b} binary" 0755
+done
 require "${OUTPUT_DIR}/e2fsprogs/mke2fs.conf" "${SHARE}/e2fsprogs/mke2fs.conf" "mke2fs.conf"
 
 echo "Firmware:"
@@ -169,7 +171,7 @@ qboot ${QBOOT_COMMIT}
             and then qboot-pam.patch applied to that source, and the compiler flags in that file
 
 e2fsprogs ${E2FSPROGS_VERSION}
-  binary:   usr/share/spin-stack/bin/mkfs.ext4
+  binaries: usr/share/spin-stack/bin/mkfs.ext4, debugfs, e2fsck, dumpe2fs
   config:   usr/share/spin-stack/e2fsprogs/mke2fs.conf, upstream's, from the same tarball
   source:   https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
   sha256:   ${E2FSPROGS_SHA256}

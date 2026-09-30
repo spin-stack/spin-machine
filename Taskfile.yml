@@ -1,25 +1,16 @@
 # spin-machine — a virtual machine: QEMU, the guest kernel, the base image, and the
 # definition of the machine they make.
 #
-# The four are one thing. A VM restored from a template loads device and CPU state into a
-# machine that has to be the same shape as the one the template was frozen from, and
-# nothing checks that at run time. So `machine.Spec.Fingerprint` hashes the QEMU binary,
-# the kernel, the initrd and the guest's firmware by content together with the machine's
-# shape, and a release in
-# which any of them moved has a different fingerprint by construction. That is why they
-# ship as one tarball with one version: shipped separately, two could drift and leave the
-# third to notice.
+# The four are one thing. `machine.Spec.Fingerprint` hashes by content the binaries and the
+# firmware a guest runs, together with the machine's shape, so a release in which any of them
+# moved has a different fingerprint by construction. That is why they ship as one tarball with
+# one version: shipped separately, they could drift apart and leave the last one to notice.
 #
-#   task build            everything, into _output/
-#   task shell            boot the machine and look around inside it
-#   task test             the machine definition
-#   task release          one tarball, one version
-#   task versions         which pins in versions.yaml are behind; task bump NAME=... moves one
-#
-# What is in this file is the vars every part reads and the targets that cross all of them.
-# Each part's own targets live beside the thing they build — qemu/Taskfile.yml,
-# kernel/Taskfile.yml, image/Taskfile.yml — namespaced, so `task qemu:build` is next to
-# qemu/Dockerfile and nobody reads three hundred lines to change one flag.
+# This file holds the vars every part reads and the targets that cross all of them, in the
+# order a change travels: build, verify, release, then trying the machine and keeping the
+# pins. Each part's own targets live beside what they build — qemu/, kernel/, e2fsprogs/,
+# image/ — and the probes that measure a boot in boot/, each namespaced, so `task qemu:build`
+# is next to qemu/Dockerfile. `task --list` is the catalogue.
 #
 # What is deliberately NOT here: the software that runs inside a guest. This repository
 # builds a machine and knows nothing about what boots on it, and there is no exception to
@@ -48,6 +39,9 @@ includes:
   image:
     taskfile: image/Taskfile.yml
     dir: '{{.ROOT_DIR}}'
+  boot:
+    taskfile: boot/Taskfile.yml
+    dir: '{{.ROOT_DIR}}'
 
 vars:
   ROOT_DIR:
@@ -65,57 +59,31 @@ vars:
   OUTPUT_ABS:
     sh: realpath -m "{{.OUTPUT_DIR}}"
 
-  # One version for all three artefacts. See the header.
-  #
-  # --dirty, and it is the whole point of the line. Without it, `task release` on a tagged
-  # commit with edits in the tree produces spin-machine-v20260914.03-linux-x86_64.tar.gz
-  # with version=v20260914.03 in its manifest: the same name and the same declared identity
-  # as the release that was actually published, around different bytes. machine.env is how
-  # a host explains why its templates stopped matching, so it is the one file that must not
-  # be able to claim an identity the bytes do not have.
-  #
-  # The fallback is --tags --always --dirty rather than a bare hash, matching what
-  # hack/release defaults to on its own: v20260914.03-1-g86d2386 says which release this is
-  # one commit past, where 86d2386 says nothing until somebody looks it up.
-  VERSION:
-    sh: |
-      echo "${VERSION:-$(git describe --tags --exact-match --dirty 2>/dev/null \
-        || git describe --tags --always --dirty 2>/dev/null \
-        || echo dev)}"
-
   # The version pins are NOT here. They are in versions.yaml, and each part's Taskfile hands
-  # the Dockerfile the entries it builds from (`{{.VERSIONS}} args <name>...`).
-  #
-  # They were once here, and this file had to be in every workflow's path filter, since a
-  # bump in it must rebuild what it pins. So `task lint` gaining a check, or a comment being
-  # fixed, fired QEMU, the kernel and the base image — three builds, tens of minutes each, for
-  # an edit that could not have changed any of them. versions.yaml is in every path filter
-  # too, and the same thing is avoided differently: each workflow first asks hack/touches
-  # whether the change reaches its own entries, and skips the build when it does not.
-  #
-  # What is left here is what does not change an artefact: how many jobs to compile with,
-  # where to put the output, which cache backend to use.
+  # the Dockerfile the entries it builds from (`{{.VERSIONS}} args <name>...`): a pin in this
+  # file would put it in every workflow's path filter, and a comment fixed here would rebuild
+  # QEMU, the kernel and the base image. What is here does not change an artefact.
   #
   # go-tools' command, at the version go.mod pins (its tool directive): the tool is only ever
   # run from a checkout, and Go's build cache makes the second run of it as fast as a binary
   # would be.
   VERSIONS: go tool versions
+  # How many jobs to compile with. CI sets them to its runner's cores.
   QEMU_JOBS: '{{.QEMU_JOBS | default 8}}'
-  KERNEL_ARCH: '{{.KERNEL_ARCH | default "x86_64"}}'
   KERNEL_NPROC: '{{.KERNEL_NPROC | default 8}}'
+  # The one architecture this machine is built for; every build is --platform linux/amd64.
+  KERNEL_ARCH: x86_64
 
   # Where BuildKit reads and writes its cache: a directory under the repository for a
   # developer, GitHub's cache service in CI. One name to switch — `CACHE_BACKEND=gha` — and
   # every scope below is decided here, next to the builds they belong to, rather than as
-  # eight cache strings pasted into workflow files.
+  # cache strings pasted into workflow files.
   #
   # The scopes are why this is a var and not a string in a workflow. `type=gha` defaults to
   # the scope `buildkit`, and Docker's own documentation says what that means for a
   # repository with more than one build: "each build will overwrite the cache of the
-  # previous, leaving only the final cache." Four builds sharing that default is four builds
-  # each destroying the last one's cache and then missing on the next run. The names have to
-  # be distinct, and — this is the part that is easy to get wrong — they have to be the
-  # *same* names in the per-artefact workflows and in the release, or a release warms
+  # previous, leaving only the final cache." The names have to be distinct, and they have to
+  # be the *same* names in the per-artefact workflows and in the release, or a release warms
   # nothing that the lane on main already paid for.
   #
   # `gha` needs one thing this file cannot give it — see the note in
@@ -131,7 +99,7 @@ vars:
   # export" on a kernel build (2026-09-30), on every PR and dispatch that warmed nothing a
   # release reads. So the lanes export on a push to main, and nothing else does.
   CACHE_EXPORT: '{{.CACHE_EXPORT | default "true"}}'
-  BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default (printf "%s/.cache/buildkit" .ROOT_DIR)}}'
+  BUILDKIT_CACHE_DIR: '{{.ROOT_DIR}}/.cache/buildkit'
 
   QEMU_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/qemu{{end}}'
   QEMU_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qemu,mode=max,compression=zstd{{end}}{{end}}'
@@ -147,28 +115,18 @@ vars:
 
   # mkosi's package cache, which is not a BuildKit cache because mkosi does not run under
   # BuildKit (see image/Dockerfile). A rebuild of the base image is ~1.5 GB of apt.
-  MKOSI_CACHE_DIR: '{{.MKOSI_CACHE_DIR | default (printf "%s/.cache/mkosi" .ROOT_DIR)}}'
-  IMAGE_BUILDER_TAG: '{{.IMAGE_BUILDER_TAG | default "spin-machine/image-builder:dev"}}'
-
-  # Where the QEMU runtime image is published. The default is a local tag so
-  # `task qemu:image` needs no registry.
-  QEMU_IMAGE: '{{.QEMU_IMAGE | default "spin-stack/spin-machine-qemu"}}'
-
-  # An external runtime to check a release against, and the guest init it boots. Both
-  # empty by default: nothing here needs them, and `task verify:consumer` says so and
-  # skips rather than pointing at a path that may not exist.
-  #
-  # CONSUMER_RUNTIME is a command that takes `--image <qcow2>` and a `--` command to run
-  # in the guest, and CONSUMER_INITRD the initrd it expects to boot.
-  CONSUMER_RUNTIME: '{{.CONSUMER_RUNTIME | default ""}}'
-  CONSUMER_INITRD: '{{.CONSUMER_INITRD | default ""}}'
-  SUDO: '{{.SUDO | default "sudo"}}'
+  MKOSI_CACHE_DIR: '{{.ROOT_DIR}}/.cache/mkosi'
+  IMAGE_BUILDER_TAG: spin-machine/image-builder:dev
 
 tasks:
 
   default:
     cmds:
       - task --list
+
+  # ==========================================================================
+  # Build
+  # ==========================================================================
 
   build:
     desc: Build QEMU, the guest kernel, e2fsprogs, the base image and the tools into _output/
@@ -196,135 +154,9 @@ tasks:
       - mkdir -p {{.OUTPUT_ABS}}/bin
       - CGO_ENABLED=0 go build -ldflags '-s -w' -o {{.OUTPUT_ABS}}/bin/spin-machine ./cmd/spin-machine
 
-  report:
-    desc: >-
-      Every combination of the machine's features, and the image's boot variants, booted and
-      written as JSON to OUT: what each is, whether QEMU runs it, and what a boot of it costs.
-      `spin-machine compare --old A --new B` says what changed between two - two releases, or a
-      release and an experiment. Needs /dev/kvm and a built release (OUTPUT_DIR); sudo for the
-      variants that edit the image. REPS= boots per row, ONLY=<regexp> for some rows,
-      FLAGS="--kernel ... --append ..." for an experiment on every boot.
-    deps: [tools]
-    vars:
-      OUT: '{{.OUT | default (printf "%s/report.json" .OUTPUT_ABS)}}'
-      REPS: '{{.REPS | default "3"}}'
-    cmds:
-      # TMPDIR on disk, because the overlays and memory files go there: gigabytes a tmpfs
-      # /tmp holds in RAM.
-      - mkdir -p {{.OUTPUT_ABS}}/report-tmp
-      - >-
-        TMPDIR={{.OUTPUT_ABS}}/report-tmp SPIN_MACHINE_OUTPUT={{.OUTPUT_ABS}} SPIN_REPORT={{.OUT}}
-        SPIN_REPORT_ONLY='{{.ONLY}}' SPIN_REPORT_FLAGS='{{.FLAGS}}' REPS={{.REPS}}
-        go test ./boot/ -run '^TestReport$' -count=1 -v -timeout 6h
-
-  boot:bench:
-    desc: >-
-      What a boot costs, measured from the host and repeated enough to believe. Needs
-      /dev/kvm, a built release, and sudo — variants that mask a unit write into a throwaway
-      overlay through qemu-nbd. REPS= to change the count, DEBUG=1 for kernel and systemd
-      logging (which inflates what it measures, equally in every variant).
-    cmds:
-      - SPIN_BOOT_BENCH=1 go test ./boot/ -run TestBootCost -v -timeout 60m
-
-  boot:restore:
-    desc: >-
-      What a restored template takes to do its first piece of work, with the template in the
-      host's page cache, evicted before the restore, and reclaimed from the VM's cgroup while
-      it idled. Needs /dev/kvm, a built release and a systemd user manager; no sudo. REPS=,
-      WS_MIB= (the guest's working set), MEMORY_MIB=.
-    cmds:
-      - SPIN_RESTORE_BENCH=1 go test ./boot/ -run TestRestoreFirstRequest -count=1 -v -timeout 30m
-
-  boot:ssh-load:
-    desc: >-
-      SSH logins into a guest under load: idle, every vCPU busy from a service and from a login
-      session, and memory down to 64 and 16 MiB available, with what the guest was under (PSI)
-      beside each. Needs /dev/kvm and a built release; no sudo. REPS= boots.
-    cmds:
-      - SPIN_SSH_LOAD=1 go test ./boot/ -run '^TestSSHUnderLoad$' -count=1 -v -timeout 30m
-
-  boot:memory-policy:
-    desc: >-
-      A process that takes memory until something stops it, in a login session of a 1 GiB
-      guest: logins while it grows, how long until it is gone and what killed it, with the image
-      as built and without MGLRU's min_ttl_ms. Needs /dev/kvm and a built release; no sudo.
-      REPS= boots per variant.
-    cmds:
-      - SPIN_MEMORY_POLICY=1 go test ./boot/ -run '^TestMemoryPolicy$' -count=1 -v -timeout 90m
-
-  boot:logind:
-    desc: >-
-      Check first SSH login, reconnect, user services and logout in a disposable guest.
-      Needs a built release; uses KVM when available, otherwise TCG.
-      The image does not start logind at boot, so this checks the thing that makes that
-      safe: that the first login activates it and gets a real session. SPIN_LOGIND_NO_SEATS=1
-      removes the drop-in that allows it and is expected to fail, not to measure anything.
-    cmds:
-      - SPIN_LOGIND_TEST=1 go test ./boot/ -run '^TestLogindSessions$' -count=1 -v -timeout 5m
-
-  boot:initcalls:
-    desc: >-
-      Where the kernel's own boot goes, initcall by initcall, as a p50 over REPS boots.
-      Needs KVM, a built release and sudo. It boots with the console silent and reads the
-      ring buffer afterwards, because initcall_debug on a serial console puts a VM exit
-      inside every interval it reports. TOP= how many rows, REPS= how many boots.
-    cmds:
-      - SPIN_INITCALL_PROBE=1 go test ./boot/ -run TestKernelInitcalls -count=1 -v -timeout 30m
-
-  boot:unitload:
-    desc: >-
-      What systemd spends loading units and building the initial transaction, from its own
-      instrumentation: `systemd --test` reports it at LOG_INFO where a real boot logs it at
-      LOG_DEBUG. Many runs inside one boot, so there is no boot-to-boot noise, and it
-      measures the generators by masking two that cannot do anything on this machine. Needs
-      KVM, a built release and sudo.
-    cmds:
-      - SPIN_UNITLOAD_PROBE=1 go test ./boot/ -run TestUnitLoadCost -count=1 -v -timeout 15m
-
-  boot:userspace:
-    desc: >-
-      systemd's own account of the boot: its kernel/userspace split, `blame` and the
-      critical chain, read after the boot rather than during it. Needs KVM, a built release
-      and sudo. Read a critical chain as what finished last, never as what was blocking —
-      see the "console no dev" row in boot/bench_test.go for what that mistake cost.
-    cmds:
-      - SPIN_USERSPACE_PROBE=1 go test ./boot/ -run TestUserspaceCost -count=1 -v -timeout 15m
-
-  boot:systemd:
-    desc: >-
-      Inside early userspace, in systemd's own words: debug logging to the journal, read
-      afterwards, ranked by the gaps in it. Needs KVM, a built release and sudo. It inflates
-      the phase it measures, so the absolute numbers are not `task boot:bench`'s — the shape
-      is what it is for. GAP= the floor in ms, TOP= how many gaps.
-    cmds:
-      - SPIN_SYSTEMD_DEBUG=1 go test ./boot/ -run TestSystemdDebug -count=1 -v -timeout 15m
-
-  boot:firmware-stages:
-    desc: >-
-      Where the time before the kernel goes on the machine a workspace boots: QEMU's start and
-      each of the firmware's steps (PCI walk, fw_cfg directory, ACPI, e820, SMBIOS, command
-      line, initrd), from QEMU's own trace of the firmware's fw_cfg selects and exits. Needs
-      KVM and a built release; no sudo. REPS= boots, FLAGS= the machine's spin-machine flags.
-    cmds:
-      - SPIN_FIRMWARE_STAGES=1 go test ./boot/ -run '^TestFirmwareStages$' -count=1 -v -timeout 20m
-
-  boot:firmware:
-    desc: >-
-      Whether the machine's firmware runs it: qboot boots, publishes vmgenid's table and
-      survives a restore with the guest reseeding - a firmware with no WRITE_POINTER loses
-      vmgenid, and a lost vmgenid has no symptom - and SeaBIOS, the fallback, still boots.
-      Needs KVM and a built release; SPIN_PROBE_INITRD= names a diagnostic initrd, and
-      without it boot/probeinit is built into one.
-    cmds:
-      - SPIN_FIRMWARE_PROBE=1 go test ./boot/ -run '^TestFirmwareRuns$' -count=1 -v -timeout 20m
-
-  boot:trace:
-    desc: >-
-      One boot's console printed against the host's clock, for finding a gap that belongs to
-      neither systemd nor the kernel. SPIN_GETTY_EXEC= replaces agetty to tell its own delays
-      apart from the tty's.
-    cmds:
-      - SPIN_BOOT_TRACE=1 go test ./boot/ -run TestBootTrace -v -timeout 10m
+  # ==========================================================================
+  # Verify
+  # ==========================================================================
 
   test:
     desc: Test the machine definition, under the race detector, with its coverage in coverage.out and held to a floor.
@@ -343,23 +175,6 @@ tasks:
           if (got + 0 < floor + 0) { printf "coverage is %s%%, below the floor of %s%%\n", got, floor; exit 1 }
           printf "coverage: %s%% (floor %s%%)\n", got, floor
         }'
-
-  versions:
-    desc: Say which of versions.yaml's pins are behind their upstream (exits 1 when any is).
-    cmds:
-      - '{{.VERSIONS}} check'
-
-  bump:
-    desc: >-
-      Pin one entry of versions.yaml at a version, the newest by default
-      (task bump NAME=qemu [TO=11.2.0]). Nothing is built: the entry's note says what the
-      bump is checked with.
-    requires:
-      vars: [NAME]
-    # TO and not VERSION: VERSION is this file's, the release's own `git describe`, and it is
-    # always set. Named VERSION, a bump with no version asked for mkosi v20260927.01-2-g30b717b.
-    cmds:
-      - '{{.VERSIONS}} bump {{.NAME}} {{.TO}}'
 
   lint:
     desc: >-
@@ -446,24 +261,11 @@ tasks:
 
   fingerprint:
     desc: >-
-      Print this machine's identity: the hash of the QEMU binary, the kernel, the initrd and
-      the guest's firmware (the BIOS and pvh.bin) by content, together with the arguments
-      that decide the machine's shape. Two
-      machines with the same fingerprint can exchange templates.
+      Print this machine's identity (machine.Spec.Fingerprint): the files a guest runs, by
+      content, and the arguments that decide its shape.
     deps: [tools]
     cmds:
       - '{{.OUTPUT_ABS}}/bin/spin-machine fingerprint --release {{.OUTPUT_ABS}} {{.CLI_ARGS}}'
-
-  shell:
-    desc: >-
-      Boot this machine and get a shell inside the base image, to see how it feels and what
-      it is missing. `task shell INIT=/bin/bash` boots a bare shell instead of systemd.
-    aliases: [vm]
-    interactive: true
-    cmds:
-      - task: image:shell
-        vars:
-          INIT: '{{.INIT}}'
 
   # ==========================================================================
   # Release
@@ -473,87 +275,132 @@ tasks:
     desc: Build everything and pack one versioned tarball.
     cmds:
       - task: build
-      # No QEMU_VERSION or KERNEL_VERSION: hack/release reads them, and the tarball
-      # checksums, from versions.yaml itself.
-      - VERSION="{{.VERSION}}" OUTPUT_DIR="{{.OUTPUT_ABS}}" KERNEL_ARCH="{{.KERNEL_ARCH}}" hack/release
+      # hack/release decides the version (VERSION, or `git describe --tags --always --dirty`)
+      # and reads the pins and their checksums from versions.yaml itself: nothing is passed in
+      # that could disagree with what was built.
+      - OUTPUT_DIR="{{.OUTPUT_ABS}}" hack/release
 
-  verify:consumer:
+  # ==========================================================================
+  # Trying the machine
+  # ==========================================================================
+
+  shell:
     desc: >-
-      Check a release against an external runtime, if one is configured. Pass
-      CONSUMER_RUNTIME=<command> and CONSUMER_INITRD=<path>; with neither, this says so and
-      skips. Nothing in this repository needs it — it is the assertion that a release is
-      usable by something that boots guests.
+      Boot this machine and get a shell inside the base image, to see how it feels and what it
+      is missing: systemd, with the console logged in as root. INIT=/bin/bash boots a bare
+      shell instead; MEMORY and CPUS override the defaults.
+    aliases: [vm]
+    interactive: true
+    deps: [tools]
+    vars:
+      # systemd, because that is what this image is: a userland whose first process is
+      # /sbin/init. Booting a bare shell instead answers a different question than the one
+      # `task shell` is for — `systemd-analyze` in it replies "System has not been booted
+      # with systemd as init system (PID 1)", which is true and useless. INIT=/bin/bash is
+      # still there for when systemd is the thing that is broken.
+      INIT: '{{.INIT | default "/sbin/init"}}'
+      MEMORY: '{{.MEMORY | default "2048"}}'
+      CPUS: '{{.CPUS | default "2"}}'
     cmds:
-      - task: release
+      # Booted through _output/bin/spin-machine, which builds its command line from the
+      # machine package next door. That is the point of running it this way rather than
+      # writing the QEMU line here: the definition of the machine is executed by this
+      # repository, so a slot map or a kernel argument that stopped working stops working
+      # here first.
       - |
         set -euo pipefail
-        if [ -z "{{.CONSUMER_RUNTIME}}" ]; then
-          echo "no CONSUMER_RUNTIME set — skipping. This repository builds a machine and"
-          echo "does not ship the software that boots on it; point this at a runtime to"
-          echo "check a release end to end:"
-          echo "  task verify:consumer CONSUMER_RUNTIME=<cmd> CONSUMER_INITRD=<path>"
-          exit 0
-        fi
+        out={{.OUTPUT_ABS}}
+        for f in "$out/bin/spin-machine" "$out/bin/qemu-system-x86_64" "$out/kernel/vmlinux" \
+                 "$out/image/rootfs.qcow2"; do
+          test -f "$f" || { echo "missing $f — run: task build" >&2; exit 1; }
+        done
 
-        rel={{.OUTPUT_ABS}}/release/spin-machine-{{.VERSION}}-linux-{{.KERNEL_ARCH}}
-        test -f "$rel.tar.gz" || { echo "no release tarball at $rel.tar.gz" >&2; exit 1; }
+        # No --disk: spin-machine boots the base under a throwaway overlay (QEMU's
+        # -snapshot), so everything typed in this shell is written where a container's
+        # writes would go, and the base — which every VM maps read-only, many at once —
+        # cannot be touched. The hash around the session checks that rather than trusts it.
+        before=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)
 
-        # Removed with sudo: the VM below runs as root and leaves its state and log
-        # directories owned by root inside $stage, so a plain rm -rf leaves them and the
-        # trap prints permission errors after a run that succeeded.
-        stage=$(mktemp -d); trap '{{.SUDO}} rm -rf "$stage"' EXIT
-        tar -xzf "$rel.tar.gz" -C "$stage"
-        share="$stage/$(basename "$rel")/usr/share/spin-stack"
+        echo "booting {{.INIT}} in the base image — {{.MEMORY}} MiB, {{.CPUS}} vCPU"
+        echo "  writes go to a throwaway overlay; the base is read-only and checked after"
+        case "{{.INIT}}" in
+          */init) echo "  systemd; the console autologins as root (the image carries no password)" ;;
+        esac
+        echo "  leave with: 'poweroff -f', or Ctrl-A then X"
+        echo
 
-        # A release is not bootable on its own, by design: the guest's init belongs to
-        # whoever runs guests. This is where the two halves are put together.
-        if [ -n "{{.CONSUMER_INITRD}}" ]; then
-          test -f "{{.CONSUMER_INITRD}}" || {
-            echo "no initrd at {{.CONSUMER_INITRD}}" >&2; exit 1; }
-          cp "{{.CONSUMER_INITRD}}" "$share/kernel/"
-        fi
-
-        # The image inside the tarball, and not the one in _output. They are the same
-        # file today and the point of this task is the day they are not: a release is
-        # verified by booting what it ships, or it is not verified.
-        img="$share/image/rootfs.qcow2"
-        test -f "$img" || { echo "the tarball carries no image at $img" >&2; exit 1; }
-
-        # Three questions, because "it printed something" answers none of them.
+        # Root is /dev/vda straight into the image (the CLI's default), with no initrd at
+        # all. The kernel has virtio-blk and ext4 built in and build.sh writes a
+        # partitionless filesystem, so there is nothing for one to do: mounting root is the kernel's job here and
+        # systemd mounts the rest.
         #
-        # One: does a write inside the guest reach the disk and come back? A boot that
-        # cannot write has a read-only overlay or no overlay at all, and prints exactly
-        # what a working one prints.
-        marker="spin-machine-$(date -u +%s)-$$"
-        before=$(sha256sum "$img" | cut -d' ' -f1)
-        out=$({{.SUDO}} SPIN_MACHINE_SHARE="$share" {{.CONSUMER_RUNTIME}} \
-                --image "$img" -- /bin/sh -c \
-                "echo $marker > /root/marker; sync; cat /root/marker" 2>/dev/null)
-        [ "$out" = "$marker" ] || {
-          echo "the guest could not write and read back a file; it printed: $out" >&2
-          exit 1; }
+        # Booting a debug initramfs here is a second init, and the two reasons for one are
+        # both gone. It mounted /proc, /sys, devtmpfs and devpts, which systemd does itself
+        # and only a bare `init=/bin/sh` ever needed. And it wrote a symlink enabling a
+        # serial login, which was needed while this image masked systemd-udevd: no
+        # dev-ttyS0.device unit existed and serial-getty@ttyS0's BindsTo could never be
+        # satisfied. udev runs; the getty starts on its own. Measured 2026-09-10: 207ms to a login
+        # prompt this way, against 163ms through the initramfs — 44ms for a second init
+        # doing what the first one does.
+        #
+        # accel=kvm with no fallback, from the machine package: the binary in _output/bin
+        # cannot emulate, on purpose. A host with no /dev/kvm gets an error here rather
+        # than a guest at a tenth of the speed.
+        "$out/bin/spin-machine" boot \
+          --release "$out" \
+          --memory {{.MEMORY}} --cpus {{.CPUS}} \
+          --init {{.INIT}} || true
 
-        # Two: is that write private to the VM that made it? Every VM maps this one file
-        # through a backing chain, so a write that leaked out of an overlay is a container
-        # reading another container's disk.
-        leaked=$({{.SUDO}} SPIN_MACHINE_SHARE="$share" {{.CONSUMER_RUNTIME}} \
-                   --image "$img" -- /bin/sh -c \
-                   "cat /root/marker 2>/dev/null || echo absent" 2>/dev/null)
-        [ "$leaked" = "absent" ] || {
-          echo "a second VM saw the first one's write: $leaked" >&2
-          echo "the overlays are not isolated, or the base image was written to." >&2
-          exit 1; }
+        echo
+        after=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)
+        if [ "$before" != "$after" ]; then
+          echo "👹 the base image changed during that session: $before -> $after" >&2
+          echo "   every overlay in existence is now built on a file that moved." >&2
+          exit 1
+        fi
+        echo "rootfs.qcow2 unchanged; the overlay's writes are gone"
 
-        # Three: is the base itself untouched? It is the check that costs nothing and
-        # catches the worst failure — a base that moved under every overlay built on it.
-        after=$(sha256sum "$img" | cut -d' ' -f1)
-        [ "$before" = "$after" ] || {
-          echo "the base image changed during a boot: $before -> $after" >&2
-          echo "every overlay in existence is now built on a file that moved." >&2
-          exit 1; }
+  report:
+    desc: >-
+      Every combination of the machine's features, and the image's boot variants, booted and
+      written as JSON to OUT: what each is, whether QEMU runs it, and what a boot of it costs.
+      `spin-machine compare --old A --new B` says what changed between two - two releases, or a
+      release and an experiment. Needs /dev/kvm and a built release (OUTPUT_DIR); sudo for the
+      variants that edit the image. REPS= boots per row, ONLY=<regexp> for some rows,
+      FLAGS="--kernel ... --append ..." for an experiment on every boot.
+    deps: [tools]
+    vars:
+      OUT: '{{.OUT | default (printf "%s/report.json" .OUTPUT_ABS)}}'
+      REPS: '{{.REPS | default "3"}}'
+    cmds:
+      # TMPDIR on disk, because the overlays and memory files go there: gigabytes a tmpfs
+      # /tmp holds in RAM.
+      - mkdir -p {{.OUTPUT_ABS}}/report-tmp
+      - >-
+        TMPDIR={{.OUTPUT_ABS}}/report-tmp SPIN_MACHINE_OUTPUT={{.OUTPUT_ABS}} SPIN_REPORT={{.OUT}}
+        SPIN_REPORT_ONLY='{{.ONLY}}' SPIN_REPORT_FLAGS='{{.FLAGS}}' REPS={{.REPS}}
+        go test ./boot/ -run '^TestReport$' -count=1 -v -timeout 6h
 
-        echo "OK: the packaged image boots under {{.CONSUMER_RUNTIME}}; writes land in the"
-        echo "    overlay, do not leak to the next VM, and leave the base byte-identical"
+  # ==========================================================================
+  # Keeping the pins and the tree
+  # ==========================================================================
+
+  versions:
+    desc: Say which of versions.yaml's pins are behind their upstream (exits 1 when any is).
+    cmds:
+      - '{{.VERSIONS}} check'
+
+  bump:
+    desc: >-
+      Pin one entry of versions.yaml at a version, the newest by default
+      (task bump NAME=qemu [TO=11.2.0]). Nothing is built: the entry's note says what the
+      bump is checked with.
+    requires:
+      vars: [NAME]
+    # TO and not VERSION: VERSION is the release's version, set in a release run's environment.
+    # Named VERSION, a bump with no version asked for mkosi v20260927.01-2-g30b717b.
+    cmds:
+      - '{{.VERSIONS}} bump {{.NAME}} {{.TO}}'
 
   clean:
     desc: Remove build output. Leaves the caches; use clean:cache for those.
