@@ -143,7 +143,13 @@ jobs:
       # Docker) into the tree, where the probe looks for it.
       - name: Build the firmware to compare
         if: inputs.experiment == 'boot:firmware'
-        run: task qemu:qboot OUTPUT_DIR="$SPIN_MACHINE_OUTPUT"
+        # The build exports its cache, which buildx's default docker driver refuses: a
+        # docker-container builder of the lab's own, made once and reused.
+        run: |
+          set -euo pipefail
+          docker buildx use spin-machine-lab 2>/dev/null ||
+            docker buildx create --name spin-machine-lab --driver docker-container --use
+          task qemu:qboot OUTPUT_DIR="$SPIN_MACHINE_OUTPUT"
 
       # A release tarball carries no spin-machine, and releaseDir skips without one: built from
       # this checkout into the tree, as report does through its tools dependency.
