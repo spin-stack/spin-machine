@@ -34,6 +34,7 @@ on:
           - boot:unitload
           - boot:restore
           - boot:ssh-load
+          - boot:kernel-pages
           - boot:memory-policy
           - boot:firmware
           - report
