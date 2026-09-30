@@ -47,13 +47,14 @@ func TestFirmwareStages(t *testing.T) {
 	args := machineArgs(t, out, append([]string{"--disk", "-", "--initrd", initrd, "--console", "file:/dev/stdout"}, flags...))
 
 	var runs []map[string]stage
-	var spent []map[string]float64
+	var spent, starts []map[string]float64
 	for range reps {
-		st, w := traceOneBoot(t, args)
-		runs, spent = append(runs, st), append(spent, w)
+		st, w, qs := traceOneBoot(t, args)
+		runs, spent, starts = append(runs, st), append(spent, w), append(starts, qs)
 	}
 	t.Log(stageTable(runs))
-	t.Log(waitTable(spent, 15))
+	t.Log(waitTable("the firmware's largest waits", spent, 15))
+	t.Log(waitTable("QEMU's start, exec to the firmware's first instruction", starts, 15))
 }
 
 // stage is one step's wall time and the exits to QEMU inside it.
@@ -78,15 +79,21 @@ func machineArgs(t *testing.T, out string, flags []string) []string {
 }
 
 // traceOneBoot boots once with QEMU tracing the firmware's selects, its PCI walk and every exit
-// to QEMU, waits for the diagnostic init, and returns each step's time and the firmware's waits.
-func traceOneBoot(t *testing.T, args []string) (map[string]stage, map[string]float64) {
+// to QEMU, waits for the diagnostic init, and returns each step's time, the firmware's waits and
+// QEMU's start.
+func traceOneBoot(t *testing.T, args []string) (map[string]stage, map[string]float64, map[string]float64) {
 	t.Helper()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "trace")
-	full := append(slices.Clone(args[1:]),
-		"-msg", "timestamp=on", "-D", log,
-		"-trace", "enable=fw_cfg_add_file", "-trace", "enable=fw_cfg_select", "-trace", "enable=pci_cfg_read", "-trace", "enable=pci_cfg_write",
-		"-trace", "enable=kvm_run_exit")
+	full := append(slices.Clone(args[1:]), "-msg", "timestamp=on", "-D", log)
+	for _, ev := range []string{
+		"fw_cfg_select", "pci_cfg_read", "pci_cfg_write", "kvm_run_exit",
+		// QEMU's start: what it allocates, creates and maps, then each ROM it copies at reset.
+		"fw_cfg_add_file", "qemu_anon_ram_alloc", "kvm_init_vcpu", "kvm_set_user_memory", "cpu_reset",
+		"loader_write_rom", "runstate_set",
+	} {
+		full = append(full, "-trace", "enable="+ev)
+	}
 	cmd := exec.Command(args[0], full...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	r, w, err := os.Pipe()
@@ -130,7 +137,7 @@ func traceOneBoot(t *testing.T, args []string) (map[string]stage, map[string]flo
 		lines := strings.SplitN(string(raw), "\n", 21)
 		t.Fatalf("the trace names no firmware step; its first lines:\n%s", strings.Join(lines[:min(len(lines), 20)], "\n"))
 	}
-	return st, waits(evs)
+	return st, waits(evs), startWaits(evs, exec0)
 }
 
 // "2026-09-30T01:52:04.431886Z fw_cfg_select 0x7c8f2b993390 key 0x0019 'file_dir', ret: 1": QEMU's
@@ -170,8 +177,10 @@ func parseTrace(trace string) []event {
 		case "fw_cfg_add_file":
 			if f := reAddFile.FindStringSubmatch(m[3]); f != nil {
 				files = append(files, f[1])
+				ev.what = f[1]
 			}
-			continue
+		case "loader_write_rom":
+			ev.what = m[3]
 		case "fw_cfg_select":
 			s := reSelect.FindStringSubmatch(m[3])
 			if s == nil {
@@ -293,7 +302,14 @@ func stages(evs []event, exec0, ready time.Time) map[string]stage {
 // after the entry's callback has run, so the time before one is the callback's - the ACPI tables
 // are built again on the first read of the loader. Any other interval is the firmware's own code,
 // or an exit the trace does not name.
-func waits(evs []event) map[string]float64 {
+func waits(all []event) map[string]float64 {
+	var evs []event
+	for _, ev := range all {
+		switch ev.kind {
+		case "kvm_run_exit", "pci_cfg_read", "pci_cfg_write", "fw_cfg_select":
+			evs = append(evs, ev)
+		}
+	}
 	first, last := -1, -1
 	for i, ev := range evs {
 		if ev.kind == "kvm_run_exit" && first < 0 {
@@ -323,6 +339,36 @@ func waits(evs []event) map[string]float64 {
 	return out
 }
 
+// startWaits is QEMU's start, from the exec to the firmware's first exit, by what each interval
+// ended in. QEMU traces a ROM's copy into guest memory after the copy, and a file's registration
+// after what it registers is built, so an interval is named for the event that closes it. The
+// first is the process's own start: loading, and parsing the command line, before tracing runs.
+func startWaits(evs []event, exec0 time.Time) map[string]float64 {
+	out := map[string]float64{}
+	prev := exec0
+	for i, ev := range evs {
+		if ev.kind == "kvm_run_exit" {
+			out["the vCPU's first entry"] += float64(ev.at.Sub(prev).Microseconds()) / 1000
+			break
+		}
+		var on string
+		switch {
+		case i == 0:
+			on = "process start, until tracing"
+		case ev.kind == "loader_write_rom":
+			rom, _, _ := strings.Cut(ev.what, ":")
+			on = "copying " + filepath.Base(rom)
+		case ev.kind == "fw_cfg_add_file":
+			on = "building " + ev.what
+		default:
+			on = "QEMU, then " + ev.kind
+		}
+		out[on] += float64(ev.at.Sub(prev).Microseconds()) / 1000
+		prev = ev.at
+	}
+	return out
+}
+
 // stageTable is the p50 of each step over the boots, in the order a boot takes them.
 func stageTable(runs []map[string]stage) string {
 	order := []string{"QEMU start", "firmware start", "PCI walk", "fw_cfg directory", "ACPI tables", "e820",
@@ -347,7 +393,7 @@ func stageTable(runs []map[string]stage) string {
 }
 
 // waitTable is the p50 of the largest waits, longest first.
-func waitTable(runs []map[string]float64, top int) string {
+func waitTable(title string, runs []map[string]float64, top int) string {
 	all := map[string][]float64{}
 	for _, r := range runs {
 		for k, v := range r {
@@ -367,7 +413,7 @@ func waitTable(runs []map[string]float64, top int) string {
 	}
 	slices.SortFunc(rows, func(a, b row) int { return cmp.Compare(b.ms, a.ms) })
 	var b strings.Builder
-	fmt.Fprintf(&b, "\nthe firmware's largest waits, p50 over %d traced boots\n\n", len(runs))
+	fmt.Fprintf(&b, "\n%s, p50 over %d traced boots\n\n", title, len(runs))
 	fmt.Fprintf(&b, "%-60s %8s\n", "SPENT ON", "MS")
 	for _, r := range rows[:min(top, len(rows))] {
 		fmt.Fprintf(&b, "%-60s %8.3f\n", r.on, r.ms)
@@ -427,6 +473,27 @@ func TestTheFirmwareTraceIsSplitIntoItsSteps(t *testing.T) {
 	} {
 		if d := w[on] - ms; d > 1e-6 || d < -1e-6 {
 			t.Errorf("waits[%q] = %v, want %v (all: %v)", on, w[on], ms, w)
+		}
+	}
+}
+
+func TestQEMUsStartIsNamedByWhatEndsEachInterval(t *testing.T) {
+	trace := `1970-01-01T00:16:40.010000Z qemu_anon_ram_alloc size 536870912 ptr 0x7b
+1970-01-01T00:16:40.012000Z fw_cfg_add_file 0x55 #0: etc/acpi/tables (131072 bytes)
+1970-01-01T00:16:40.020000Z loader_write_rom /usr/share/spin-stack/kernel/vmlinux ELF program header segment 0: @0x1000000 size=0x18f3a84 ROM=0
+1970-01-01T00:16:40.021000Z loader_write_rom qboot.bin: @0xffff0000 size=0x10000 ROM=1
+1970-01-01T00:16:40.021500Z kvm_run_exit cpu_index 0, reason 2
+`
+	got := startWaits(parseTrace(trace), time.Unix(1000, 0))
+	for on, ms := range map[string]float64{
+		"process start, until tracing":                 10,
+		"building etc/acpi/tables":                     2,
+		"copying vmlinux ELF program header segment 0": 8,
+		"copying qboot.bin":                            1,
+		"the vCPU's first entry":                       0.5,
+	} {
+		if d := got[on] - ms; d > 1e-6 || d < -1e-6 {
+			t.Errorf("%q = %v, want %v (all: %v)", on, got[on], ms, got)
 		}
 	}
 }
