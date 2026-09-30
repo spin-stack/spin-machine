@@ -172,6 +172,14 @@ jobs:
         if: inputs.kernel_run != '' && contains(inputs.vars, 'SPIN_LAB_KERNEL_B_EVERYWHERE=1')
         run: echo "FLAGS=${FLAGS:+$FLAGS }--kernel $SPIN_KERNEL_B" >> "$GITHUB_ENV"
 
+      # SPIN_LAB_QEMU_B_EVERYWHERE=1: every boot on qemu_run's QEMU and firmware rather than
+      # beside them - for report and boot:firmware, which check what a change to either breaks.
+      - name: Every boot on QEMU B
+        if: inputs.qemu_run != '' && contains(inputs.vars, 'SPIN_LAB_QEMU_B_EVERYWHERE=1')
+        run: |
+          echo "SPIN_MACHINE_OUTPUT=$SPIN_MACHINE_OUTPUT_B" >> "$GITHUB_ENV"
+          echo "SPIN_MACHINE_OUTPUT_B=" >> "$GITHUB_ENV"
+
       - name: What this run is
         run: |
           {
