@@ -19,13 +19,15 @@ import (
 // guest, for each way the guest can online the memory virtio-mem plugs.
 //
 // The VM grows to its ceiling, and a script in the guest fills most of it: a large tmpfs file,
-// which it then deletes, and 200 000 small files it keeps, whose inodes and dentries are kernel
-// memory that cannot be moved. The VM is then asked to give everything back. What was plugged
-// when it stopped, how long that took and whether the kernel killed anything for memory while
-// it tried is the answer, per variant:
+// which it then deletes, and 200 000 small files on its disk, whose inodes and dentries are
+// kernel memory that cannot be moved, only reclaimed. The VM is then asked to give everything
+// back. What was plugged when it stopped, how long that took and whether the kernel killed
+// anything for memory while it tried is the answer, per variant:
 //
 //	online                  memhp_default_state=online as the machine sets it: the zone the
 //	                        kernel picks, ZONE_NORMAL for memory beside the boot memory
+//	online, reclaimed       the same, with the guest dropping its reclaimable slab first
+//	                        (vm.drop_caches=2), as an agent would before it is shrunk
 //	auto-movable            memory_hotplug.online_policy=auto-movable: ZONE_MOVABLE while it
 //	                        stays under auto_movable_ratio (301%) of the kernel's memory
 //	auto-movable, 1500%     the ratio a 512 MiB machine growing to 8 GiB needs for all of it
@@ -33,6 +35,11 @@ import (
 // Memory in ZONE_MOVABLE can always be offlined; memory in ZONE_NORMAL only if nothing the kernel
 // cannot move landed in it. The price of ZONE_MOVABLE is that the kernel's own allocations -
 // page tables, slab, the memmap of the plugged memory itself - come out of the boot memory alone.
+//
+// With the 200 000 files kept in tmpfs, where nothing can reclaim them (2026-09-30, 3 boots,
+// v20260930.01), none of the policies gave it all back in 30 s: online left 196-202 MiB,
+// auto-movable 190-194, auto-movable at 1500% 124, and no variant killed anything. The policy
+// moves tens of MiB; what stays is the kernel's slab.
 //
 //	SPIN_MEMORY_UNPLUG=1   run at all
 //	REPS=<n>               boots per variant (default 3)
@@ -48,17 +55,21 @@ func TestMemoryUnplug(t *testing.T) {
 	flags := strings.Fields(orElse("--memory 512 --max-memory 8192 --cpus 2", os.Getenv("FLAGS")))
 	grow := unplugGrowth(t, flags)
 
-	variants := []struct{ name, append string }{
-		{"online", ""},
-		{"auto-movable", "memory_hotplug.online_policy=auto-movable"},
-		{"auto-movable, 1500%", "memory_hotplug.online_policy=auto-movable memory_hotplug.auto_movable_ratio=1500"},
+	variants := []struct {
+		name, append string
+		reclaim      bool
+	}{
+		{"online", "", false},
+		{"online, reclaimed", "", true},
+		{"auto-movable", "memory_hotplug.online_policy=auto-movable", false},
+		{"auto-movable, 1500%", "memory_hotplug.online_policy=auto-movable memory_hotplug.auto_movable_ratio=1500", false},
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "\ngrown by %d MiB, filled, then asked to give it all back; %d boots per variant\n\n", grow, reps)
 	fmt.Fprintf(&b, "%-22s %14s %10s %10s %8s\n", "VARIANT", "LEFT (MiB)", "MS", "OOM KILLS", "ALIVE")
 	for range reps {
 		for _, v := range variants {
-			r := unplugOnce(t, out, flags, v.append, grow)
+			r := unplugOnce(t, out, flags, v.append, grow, v.reclaim)
 			fmt.Fprintf(&b, "%-22s %14d %10d %10d %8v\n", v.name, r.left, r.ms, r.oomKills, r.alive)
 		}
 	}
@@ -100,28 +111,32 @@ var (
 const unplugScript = `#!/bin/sh
 want=$(( $1 * 1024 ))
 until [ "$(awk '/MemTotal/ {print $2}' /proc/meminfo)" -ge "$want" ]; do sleep 0.2; done
-mkdir -p /run/unplug
+mkdir -p /run/unplug /var/tmp/unplug
 mount -t tmpfs -o size=100% tmpfs /run/unplug
-mkdir /run/unplug/files
 free=$(awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo)
 dd if=/dev/zero of=/run/unplug/big bs=1M count=$(( free * 6 / 10 )) status=none
 i=0
-while [ $i -lt 200000 ]; do : > /run/unplug/files/$i; i=$((i + 1)); done
+while [ $i -lt 200000 ]; do : > /var/tmp/unplug/$i; i=$((i + 1)); done
 rm -f /run/unplug/big
 sync
+[ "$2" = reclaim ] && echo 2 > /proc/sys/vm/drop_caches
 echo UNPLUG-READY > /dev/console
 sleep 45
 echo "UNPLUG-ALIVE oom=$(dmesg | grep -c 'Out of memory')" > /dev/console
 `
 
 // unplugOnce boots one VM, grows it by grow MiB, lets the guest fill it and asks for it all back.
-func unplugOnce(t *testing.T, out string, flags []string, extra string, grow int) unplugResult {
+func unplugOnce(t *testing.T, out string, flags []string, extra string, grow int, reclaim bool) unplugResult {
 	t.Helper()
 	root := newRawRoot(t, out, filepath.Join(out, "image/rootfs.qcow2"))
 	root.write("/unplug.sh", unplugScript)
+	then := "keep"
+	if reclaim {
+		then = "reclaim"
+	}
 	root.write("/etc/systemd/system/unplug.service", fmt.Sprintf("[Unit]\nAfter=multi-user.target\n[Service]\n"+
-		"Type=oneshot\nExecStart=/bin/sh /unplug.sh %d\nStandardOutput=journal+console\nStandardError=journal+console\n",
-		grow))
+		"Type=oneshot\nExecStart=/bin/sh /unplug.sh %d %s\nStandardOutput=journal+console\nStandardError=journal+console\n",
+		grow, then))
 	root.link("/etc/systemd/system/multi-user.target.wants/unplug.service", "/etc/systemd/system/unplug.service")
 
 	dir := shortDir(t)
