@@ -20,11 +20,8 @@ workflow that produced it.
 CI calls the same targets a developer calls. A second definition of what the gate is, kept
 in a workflow file, goes out of step with the first exactly when a check is added.
 
-`verify:consumer` is the end-to-end check and is opt-in, because this repository ships no
-runtime to boot with: pass `CONSUMER_RUNTIME` and `CONSUMER_INITRD` and it unpacks the
-tarball and asks three questions of **the image inside it** — does a write reach the disk
-and come back, is that write invisible to the next VM, and is the base byte-identical
-afterwards. "It printed something" answers none of the three.
+`task report` is the end-to-end check, and `report.yml` runs it on every release: every
+combination of the machine's features, booted from the published tarball to a login.
 
 ## Releases
 

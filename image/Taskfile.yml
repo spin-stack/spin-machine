@@ -25,6 +25,8 @@ tasks:
 
   builder:
     desc: Build the container that builds the base image (mkosi, qemu-utils).
+    # A step of build, not a thing to run on its own.
+    internal: true
     cmds:
       - |
         docker buildx build \
@@ -36,77 +38,3 @@ tasks:
           --tag {{.IMAGE_BUILDER_TAG}} \
           --load \
           .
-
-  shell:
-    desc: >-
-      Boot this machine and get a shell inside the base image. INIT=/sbin/init boots systemd
-      instead; MEMORY and CPUS override the defaults.
-    interactive: true
-    deps: [':tools']
-    vars:
-      # systemd, because that is what this image is: a userland whose first process is
-      # /sbin/init. Booting a bare shell instead answers a different question than the one
-      # `task shell` is for — `systemd-analyze` in it replies "System has not been booted
-      # with systemd as init system (PID 1)", which is true and useless. INIT=/bin/bash is
-      # still there for when systemd is the thing that is broken.
-      INIT: '{{.INIT | default "/sbin/init"}}'
-      MEMORY: '{{.MEMORY | default "2048"}}'
-      CPUS: '{{.CPUS | default "2"}}'
-    cmds:
-      # Booted through _output/bin/spin-machine, which builds its command line from the
-      # machine package next door. That is the point of running it this way rather than
-      # writing the QEMU line here: the definition of the machine is executed by this
-      # repository, so a slot map or a kernel argument that stopped working stops working
-      # here first.
-      - |
-        set -euo pipefail
-        out={{.OUTPUT_ABS}}
-        for f in "$out/bin/spin-machine" "$out/bin/qemu-system-x86_64" "$out/kernel/vmlinux" \
-                 "$out/image/rootfs.qcow2"; do
-          test -f "$f" || { echo "missing $f — run: task build" >&2; exit 1; }
-        done
-
-        # No --disk: spin-machine boots the base under a throwaway overlay (QEMU's
-        # -snapshot), so everything typed in this shell is written where a container's
-        # writes would go, and the base — which every VM maps read-only, many at once —
-        # cannot be touched. The hash around the session checks that rather than trusts it.
-        before=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)
-
-        echo "booting {{.INIT}} in the base image — {{.MEMORY}} MiB, {{.CPUS}} vCPU"
-        echo "  writes go to a throwaway overlay; the base is read-only and checked after"
-        case "{{.INIT}}" in
-          */init) echo "  systemd; the console autologins as root (the image carries no password)" ;;
-        esac
-        echo "  leave with: 'poweroff -f', or Ctrl-A then X"
-        echo
-
-        # Root is /dev/vda straight into the image (the CLI's default), with no initrd at
-        # all. The kernel has virtio-blk and ext4 built in and build.sh writes a
-        # partitionless filesystem, so there is nothing for one to do: mounting root is the kernel's job here and
-        # systemd mounts the rest.
-        #
-        # Booting a debug initramfs here is a second init, and the two reasons for one are
-        # both gone. It mounted /proc, /sys, devtmpfs and devpts, which systemd does itself
-        # and only a bare `init=/bin/sh` ever needed. And it wrote a symlink enabling a
-        # serial login, which was needed while this image masked systemd-udevd: no
-        # dev-ttyS0.device unit existed and serial-getty@ttyS0's BindsTo could never be
-        # satisfied. udev runs; the getty starts on its own. Measured 2026-09-10: 207ms to a login
-        # prompt this way, against 163ms through the initramfs — 44ms for a second init
-        # doing what the first one does.
-        #
-        # accel=kvm with no fallback, from the machine package: the binary in _output/bin
-        # cannot emulate, on purpose. A host with no /dev/kvm gets an error here rather
-        # than a guest at a tenth of the speed.
-        "$out/bin/spin-machine" boot \
-          --release "$out" \
-          --memory {{.MEMORY}} --cpus {{.CPUS}} \
-          --init {{.INIT}} || true
-
-        echo
-        after=$(sha256sum "$out/image/rootfs.qcow2" | cut -d' ' -f1)
-        if [ "$before" != "$after" ]; then
-          echo "👹 the base image changed during that session: $before -> $after" >&2
-          echo "   every overlay in existence is now built on a file that moved." >&2
-          exit 1
-        fi
-        echo "rootfs.qcow2 unchanged; the overlay's writes are gone"

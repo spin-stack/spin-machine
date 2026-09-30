@@ -24,6 +24,8 @@ tasks:
 
   verify:
     desc: Assert the extracted tools are the pinned version and run on this host.
+    # A step of build, not a thing to run on its own.
+    internal: true
     cmds:
       - |
         set -euo pipefail

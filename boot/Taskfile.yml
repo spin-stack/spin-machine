@@ -1,0 +1,138 @@
+# The probes: what a boot of this machine costs and where, and whether its firmware runs it.
+# They boot VMs, need /dev/kvm and a built release, and print what they found; `go test ./...`
+# skips every one of them unless its SPIN_* switch is set, which is what these targets do.
+#
+# Each one's question, and what it answered, is in its test file's doc comment. They run on
+# the lab runner through .github/workflows/lab.yml, against a published release and optionally
+# a kernel or QEMU built from a branch; a laptop is not a quiet enough host to compare boots.
+#
+# Every probe boots the release tree OUTPUT_DIR names (the lab points it at the release it
+# unpacked), with the spin-machine this checkout builds.
+
+version: '3'
+
+env:
+  SPIN_MACHINE_OUTPUT: '{{.OUTPUT_ABS}}'
+
+tasks:
+  bench:
+    desc: >-
+      What a boot costs, measured from the host and repeated enough to believe. Needs
+      /dev/kvm, a built release, and sudo — variants that mask a unit write into a throwaway
+      overlay through qemu-nbd. REPS= to change the count, DEBUG=1 for kernel and systemd
+      logging (which inflates what it measures, equally in every variant).
+    deps: [':tools']
+    cmds:
+      - SPIN_BOOT_BENCH=1 go test ./boot/ -run TestBootCost -v -timeout 60m
+
+  restore:
+    desc: >-
+      What a restored template takes to do its first piece of work, with the template in the
+      host's page cache, evicted before the restore, and reclaimed from the VM's cgroup while
+      it idled. Needs /dev/kvm, a built release and a systemd user manager; no sudo. REPS=,
+      WS_MIB= (the guest's working set), MEMORY_MIB=.
+    deps: [':tools']
+    cmds:
+      - SPIN_RESTORE_BENCH=1 go test ./boot/ -run TestRestoreFirstRequest -count=1 -v -timeout 30m
+
+  ssh-load:
+    desc: >-
+      SSH logins into a guest under load: idle, every vCPU busy from a service and from a login
+      session, and memory down to 64 and 16 MiB available, with what the guest was under (PSI)
+      beside each. Needs /dev/kvm and a built release; no sudo. REPS= boots.
+    deps: [':tools']
+    cmds:
+      - SPIN_SSH_LOAD=1 go test ./boot/ -run '^TestSSHUnderLoad$' -count=1 -v -timeout 30m
+
+  memory-policy:
+    desc: >-
+      A process that takes memory until something stops it, in a login session of a 1 GiB
+      guest: logins while it grows, how long until it is gone and what killed it, with the image
+      as built and without MGLRU's min_ttl_ms. Needs /dev/kvm and a built release; no sudo.
+      REPS= boots per variant.
+    deps: [':tools']
+    cmds:
+      - SPIN_MEMORY_POLICY=1 go test ./boot/ -run '^TestMemoryPolicy$' -count=1 -v -timeout 90m
+
+  logind:
+    desc: >-
+      Check first SSH login, reconnect, user services and logout in a disposable guest.
+      Needs a built release; uses KVM when available, otherwise TCG.
+      The image does not start logind at boot, so this checks the thing that makes that
+      safe: that the first login activates it and gets a real session. SPIN_LOGIND_NO_SEATS=1
+      removes the drop-in that allows it and is expected to fail, not to measure anything.
+    deps: [':tools']
+    cmds:
+      - SPIN_LOGIND_TEST=1 go test ./boot/ -run '^TestLogindSessions$' -count=1 -v -timeout 5m
+
+  initcalls:
+    desc: >-
+      Where the kernel's own boot goes, initcall by initcall, as a p50 over REPS boots.
+      Needs KVM, a built release and sudo. It boots with the console silent and reads the
+      ring buffer afterwards, because initcall_debug on a serial console puts a VM exit
+      inside every interval it reports. TOP= how many rows, REPS= how many boots.
+    deps: [':tools']
+    cmds:
+      - SPIN_INITCALL_PROBE=1 go test ./boot/ -run TestKernelInitcalls -count=1 -v -timeout 30m
+
+  unitload:
+    desc: >-
+      What systemd spends loading units and building the initial transaction, from its own
+      instrumentation: `systemd --test` reports it at LOG_INFO where a real boot logs it at
+      LOG_DEBUG. Many runs inside one boot, so there is no boot-to-boot noise, and it
+      measures the generators by masking two that cannot do anything on this machine. Needs
+      KVM, a built release and sudo.
+    deps: [':tools']
+    cmds:
+      - SPIN_UNITLOAD_PROBE=1 go test ./boot/ -run TestUnitLoadCost -count=1 -v -timeout 15m
+
+  userspace:
+    desc: >-
+      systemd's own account of the boot: its kernel/userspace split, `blame` and the
+      critical chain, read after the boot rather than during it. Needs KVM, a built release
+      and sudo. Read a critical chain as what finished last, never as what was blocking —
+      see the logind rows in boot/bench_test.go for what removing the tail gave back.
+    deps: [':tools']
+    cmds:
+      - SPIN_USERSPACE_PROBE=1 go test ./boot/ -run TestUserspaceCost -count=1 -v -timeout 15m
+
+  systemd:
+    desc: >-
+      Inside early userspace, in systemd's own words: debug logging to the journal, read
+      afterwards, ranked by the gaps in it. Needs KVM, a built release and sudo. It inflates
+      the phase it measures, so the absolute numbers are not `task boot:bench`'s — the shape
+      is what it is for. GAP= the floor in ms, TOP= how many gaps.
+    deps: [':tools']
+    cmds:
+      - SPIN_SYSTEMD_DEBUG=1 go test ./boot/ -run TestSystemdDebug -count=1 -v -timeout 15m
+
+  firmware-stages:
+    desc: >-
+      Where the time before the kernel goes on the machine a workspace boots: QEMU's start and
+      each of the firmware's steps (PCI walk, fw_cfg directory, ACPI, e820, SMBIOS, command
+      line, initrd), from QEMU's own trace of the firmware's fw_cfg selects and exits. Needs
+      KVM and a built release; no sudo. REPS= boots, FLAGS= the machine's spin-machine flags.
+    deps: [':tools']
+    cmds:
+      - SPIN_FIRMWARE_STAGES=1 go test ./boot/ -run '^TestFirmwareStages$' -count=1 -v -timeout 20m
+
+  firmware:
+    desc: >-
+      Whether the machine's firmware runs it: qboot boots, publishes vmgenid's table and
+      survives a restore with the guest reseeding - a firmware with no WRITE_POINTER loses
+      vmgenid, and a lost vmgenid has no symptom - and SeaBIOS, the fallback, still boots.
+      Needs KVM and a built release; SPIN_PROBE_INITRD= names a diagnostic initrd, and
+      without it boot/probeinit is built into one.
+    deps: [':tools']
+    cmds:
+      - SPIN_FIRMWARE_PROBE=1 go test ./boot/ -run '^TestFirmwareRuns$' -count=1 -v -timeout 20m
+
+  trace:
+    desc: >-
+      One boot's console printed against the host's clock, for finding a gap that belongs to
+      neither systemd nor the kernel. SPIN_GETTY_EXEC= replaces agetty to tell its own delays
+      apart from the tty's.
+    deps: [':tools']
+    cmds:
+      - SPIN_BOOT_TRACE=1 go test ./boot/ -run TestBootTrace -v -timeout 10m
+
