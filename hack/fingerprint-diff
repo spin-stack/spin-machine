@@ -2,8 +2,8 @@
 #
 # Whether this build is still the machine the fleet's templates were taken against.
 #
-# `machine.Spec.Fingerprint` hashes the QEMU binary, the kernel and the initrd by content,
-# together with the machine's shape. Two of those five inputs are not this repository's:
+# `machine.Spec.Fingerprint` hashes the QEMU binary, the kernel, the initrd and the firmware the
+# guest runs (the BIOS, qboot.bin, and pvh.bin) by content, together with the machine's shape. Two of those five inputs are not this repository's:
 # the initrd is brought by whoever runs guests, and the shape is decided per VM. Both are
 # the same on either side of the comparison made here, so between two releases the question
 # collapses to two numbers — **templates carry over if and only if qemu_sha256 and
@@ -53,7 +53,7 @@ fi
 # bear on whether a template matches.
 bears_on_fingerprint() {
   case "$1" in
-    qemu_sha256 | kernel_sha256) return 0 ;;
+    qemu_sha256 | kernel_sha256 | bios_sha256 | pvh_sha256) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -133,7 +133,7 @@ done
 # Whatever bears on the fingerprint and was never passed in. A caller that builds one
 # artefact — the kernel workflow builds a kernel and no QEMU — can only speak for that one,
 # and a verdict that reads as if it covered both would be worse than no verdict.
-for k in qemu_sha256 kernel_sha256; do
+for k in qemu_sha256 kernel_sha256 bios_sha256 pvh_sha256; do
   [ -n "${NEW[${k}]:-}" ] || unchecked_fp+=("${k}")
 done
 
@@ -159,7 +159,7 @@ if [ "${#moved_fp[@]}" -gt 0 ]; then
 elif [ "${#unchecked_fp[@]}" -eq 0 ]; then
   say "### Templates taken against \`${reference}\` still match this machine"
   say
-  say "\`qemu_sha256\` and \`kernel_sha256\` are unchanged, and they are the whole of what"
+  say "\`qemu_sha256\`, \`kernel_sha256\`, \`bios_sha256\` and \`pvh_sha256\` are unchanged, and they are the whole of what"
   say "this repository contributes to the fingerprint — the initrd and the machine's shape"
   say "come from whoever runs the guests and are untouched by a release."
 else

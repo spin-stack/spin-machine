@@ -11,11 +11,11 @@
 // detail of whoever launches a VM; it is part of what a release *is*, and it has
 // to move with the binary and the kernel it was written for.
 //
-// The rule that follows: Fingerprint hashes the QEMU binary, the kernel and the
-// initrd by content, together with the five arguments that decide the machine's
-// shape. Two machines with the same fingerprint can exchange templates. Two with
-// different fingerprints cannot, and a release in which any of the three files
-// moved has a different fingerprint by construction.
+// The rule that follows: Fingerprint hashes the QEMU binary, the kernel, the initrd
+// and the firmware the guest runs by content, together with the five arguments that
+// decide the machine's shape. Two machines with the same fingerprint can exchange
+// templates. Two with different fingerprints cannot, and a release in which any of
+// those files moved has a different fingerprint by construction.
 //
 // What is here is what a machine is. What is not here is everything about
 // running one: allocating a vsock context id, opening a TAP file descriptor,
@@ -33,6 +33,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -467,7 +468,7 @@ func (m Monitor) validate() error {
 
 // Spec is one virtual machine.
 type Spec struct {
-	// The three files whose contents define the machine.
+	// The files whose contents define the machine, with the firmware below (BIOS).
 	QEMU   string
 	Kernel string
 	Initrd string
@@ -476,6 +477,12 @@ type Spec struct {
 	// is the `qemu/` directory of a release; without it the machine cannot find
 	// pvh.bin, which is the only way into this kernel.
 	Firmware string
+
+	// BIOS is the firmware the machine runs, a file in Firmware: DefaultBIOS when
+	// empty. Part of the machine, so its contents are in the fingerprint - it runs
+	// in the guest, and its size is the size of the ROM a saved machine carries.
+	// SeaBIOS (bios-256k.bin) is beside it, for comparing the two.
+	BIOS string
 
 	BootCPUs int
 
@@ -877,6 +884,10 @@ func (s Spec) validate() error {
 		// QEMU finds under this directory. Without it the failure is a rom-open
 		// error that reads like something else entirely.
 		return errors.New("no firmware directory: QEMU has no pvh.bin to enter the kernel through")
+	case strings.ContainsRune(s.BIOS, '/'):
+		// A name QEMU looks up in Firmware, and the file the fingerprint hashes there:
+		// a path would be looked up elsewhere and hashed here.
+		return fmt.Errorf("BIOS %q is a path: it names a file in the firmware directory", s.BIOS)
 	case s.Accel != "" && s.Accel != "kvm" && s.Accel != "tcg":
 		return fmt.Errorf("accelerator %q: this machine runs under kvm or tcg", s.Accel)
 	// A model name, and only that. The options after it are the machine's (Shape), and a
@@ -1031,6 +1042,7 @@ func (s Spec) Args() ([]string, error) {
 	args := make([]string, 0, 64)
 	args = append(args,
 		"-L", s.Firmware,
+		"-bios", s.bios(),
 
 		// Every device this machine has is named below. Without -nodefaults QEMU
 		// adds a NIC, a display, a serial port and a floppy controller of its
@@ -1317,15 +1329,29 @@ func (s Spec) appendIncoming(args []string) []string {
 	return args
 }
 
+// DefaultBIOS is the firmware a machine runs when Spec.BIOS names none: qboot with
+// WRITE_POINTER, built beside QEMU (qemu/qboot/). 7.14 ms faster than SeaBIOS to a guest's init
+// on the lab runner (2026-09-29, 20 boots interleaved), with vmgenid's table published and a
+// restored guest reseeded, and report's whole matrix booting on it.
+const DefaultBIOS = "qboot.bin"
+
+func (s Spec) bios() string {
+	if s.BIOS == "" {
+		return DefaultBIOS
+	}
+	return s.BIOS
+}
+
 // Fingerprint identifies the machine this spec describes, by content.
 //
-// It hashes the QEMU binary, the kernel and the initrd — the files, not their
-// paths — together with the five arguments that decide the machine's shape. Two
+// It hashes the QEMU binary, the kernel, the initrd and the firmware the guest
+// runs (the BIOS and pvh.bin) — the files, not their paths — together with the
+// five arguments that decide the machine's shape. Two
 // machines with the same fingerprint present the same thing to a guest and can
 // exchange templates; two with different fingerprints cannot, and a restore
 // across them is undefined rather than an error.
 //
-// The consequence is deliberate: a release in which any of the three files moved
+// The consequence is deliberate: a release in which any of those files moved
 // has a different fingerprint, so every template taken against the previous one
 // stops matching and is rebuilt. That is the design. A template restored into a
 // machine of another shape is memory and device state loaded into hardware that
@@ -1359,6 +1385,10 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 		{"qemu", s.QEMU},
 		{"kernel", s.Kernel},
 		{"initrd", s.Initrd},
+		// The firmware the guest runs: the BIOS, and pvh.bin, the option ROM that enters
+		// the kernel. Both are ROM a saved machine carries, sized and filled by them.
+		{"bios", filepath.Join(s.Firmware, s.bios())},
+		{"pvh", filepath.Join(s.Firmware, "pvh.bin")},
 	} {
 		if f.path == "" {
 			// An absent initrd is part of the identity too: a machine that boots

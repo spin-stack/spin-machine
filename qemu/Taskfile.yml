@@ -59,10 +59,14 @@ tasks:
         # pvh.bin is how -kernel enters a PVH ELF kernel, which is the only boot path here.
         # efi-virtio.rom is the option ROM of the one NIC this build keeps; a VM given a
         # virtio-net-pci without it does not start.
-        for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
+        # qboot.bin is the BIOS the machine boots with (machine.DefaultBIOS), built beside QEMU
+        # from qemu/qboot/; 64 KiB is the ROM window it is linked for.
+        for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom qboot.bin; do
           test -f {{.OUTPUT_ABS}}/qemu/$f || {
             echo "missing firmware $f — run: task qemu:build" >&2; exit 1; }
         done
+        test "$(stat -c%s {{.OUTPUT_ABS}}/qemu/qboot.bin)" -eq 65536 || {
+          echo "qboot.bin is not 64 KiB" >&2; exit 1; }
         # Run, not just present. A binary that cannot start on the host that extracted it
         # is the failure static linking exists to remove, and it costs one exec to notice.
         for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do
@@ -78,7 +82,7 @@ tasks:
         {{.OUTPUT_ABS}}/bin/qemu-system-x86_64-tcg -accel help | grep -qx tcg || {
           echo "qemu-system-x86_64-tcg cannot emulate, so a runner without /dev/kvm has nothing to boot with" >&2
           exit 1; }
-        echo "OK: both qemu-system binaries run here, qemu-img runs, five firmware files,"
+        echo "OK: both qemu-system binaries run here, qemu-img runs, six firmware files,"
         echo "    and only the CI binary can emulate"
 
   fetch:

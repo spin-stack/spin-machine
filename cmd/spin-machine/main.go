@@ -167,6 +167,7 @@ type machineFlags struct {
 	kernel   string
 	initrd   string
 	firmware string
+	bios     string
 
 	disk       string
 	diskFormat string
@@ -203,6 +204,7 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.kernel, "kernel", "", "kernel image (default: <release>/kernel/vmlinux)")
 	fs.StringVar(&o.initrd, "initrd", "", "initrd (default: none)")
 	fs.StringVar(&o.firmware, "firmware", "", "firmware directory (default: <release>/qemu)")
+	fs.StringVar(&o.bios, "bios", "", "the BIOS, a file in the firmware directory (default: "+machine.DefaultBIOS+"; bios-256k.bin is SeaBIOS)")
 
 	fs.StringVar(&o.disk, "disk", "", "disk image, opened as given (default: the base image under a throwaway overlay; - for no disk)")
 	fs.StringVar(&o.diskFormat, "disk-format", "qcow2", "format of the disk image; never guessed")
@@ -270,6 +272,7 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 	s.QEMU = or(o.qemu, s.QEMU)
 	s.Kernel = or(o.kernel, s.Kernel)
 	s.Firmware = or(o.firmware, s.Firmware)
+	s.BIOS = o.bios
 	s.Initrd = o.initrd
 	s.CPU = o.cpuModel
 	s.BootCPUs = o.cpus

@@ -4,7 +4,8 @@
 # The four are one thing. A VM restored from a template loads device and CPU state into a
 # machine that has to be the same shape as the one the template was frozen from, and
 # nothing checks that at run time. So `machine.Spec.Fingerprint` hashes the QEMU binary,
-# the kernel and the initrd by content together with the machine's shape, and a release in
+# the kernel, the initrd and the guest's firmware by content together with the machine's
+# shape, and a release in
 # which any of them moved has a different fingerprint by construction. That is why they
 # ship as one tarball with one version: shipped separately, two could drift and leave the
 # third to notice.
@@ -450,8 +451,9 @@ tasks:
 
   fingerprint:
     desc: >-
-      Print this machine's identity: the hash of the QEMU binary, the kernel and the initrd
-      by content, together with the four arguments that decide the machine's shape. Two
+      Print this machine's identity: the hash of the QEMU binary, the kernel, the initrd and
+      the guest's firmware (the BIOS and pvh.bin) by content, together with the arguments
+      that decide the machine's shape. Two
       machines with the same fingerprint can exchange templates.
     deps: [tools]
     cmds:

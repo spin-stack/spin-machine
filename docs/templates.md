@@ -191,7 +191,7 @@ agree on how big their disks are — only on how many.
 - **The capability must be set on both sides.** Freezing with it and restoring without gives
   `Capability x-ignore-shared is off, but received capability is on`, and QEMU exits.
 - **The fingerprints must match.** `machine.Spec.Fingerprint` hashes the QEMU binary, the
-  kernel and the initrd by content together with the machine's shape. A restore across two
+  kernel, the initrd and the guest's firmware by content together with the machine's shape. A restore across two
   different fingerprints is undefined rather than an error. See [migration.md](migration.md)
   on `Spec.CPU`, which is what decides whether a machine can be restored on another host at
   all.

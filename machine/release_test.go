@@ -25,7 +25,7 @@ func tree(t *testing.T, files ...string) string {
 	return dir
 }
 
-var whole = []string{qemuName, qemuImgName, kernelName, filepath.Join(firmwareDir, "pvh.bin")}
+var whole = []string{qemuName, qemuImgName, kernelName, filepath.Join(firmwareDir, "pvh.bin"), filepath.Join(firmwareDir, DefaultBIOS)}
 
 func TestOpenReleaseNamesWhatIsMissing(t *testing.T) {
 	// One file at a time, because a release with a hole in it is the failure

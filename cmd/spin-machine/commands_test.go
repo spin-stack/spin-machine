@@ -200,7 +200,7 @@ func TestSaveAndRestoreSayWhatQEMUNeeds(t *testing.T) {
 func release(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, f := range []string{"bin/qemu-system-x86_64", "bin/qemu-system-x86_64-tcg", "bin/qemu-img", "kernel/vmlinux", "qemu/pvh.bin", "image/rootfs.qcow2"} {
+	for _, f := range []string{"bin/qemu-system-x86_64", "bin/qemu-system-x86_64-tcg", "bin/qemu-img", "kernel/vmlinux", "qemu/pvh.bin", "qemu/qboot.bin", "image/rootfs.qcow2"} {
 		p := filepath.Join(dir, f)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)

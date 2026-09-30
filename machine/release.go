@@ -63,7 +63,7 @@ func OpenRelease(dir string) (*Release, error) {
 	}
 
 	r := &Release{dir: abs}
-	for _, want := range []string{qemuName, qemuImgName, kernelName, filepath.Join(firmwareDir, "pvh.bin")} {
+	for _, want := range []string{qemuName, qemuImgName, kernelName, filepath.Join(firmwareDir, "pvh.bin"), filepath.Join(firmwareDir, DefaultBIOS)} {
 		p := filepath.Join(abs, want)
 		if _, err := os.Stat(p); err != nil {
 			return nil, fmt.Errorf("%s is not a whole machine: %w", abs, err)
