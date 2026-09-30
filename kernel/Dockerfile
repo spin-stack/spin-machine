@@ -273,7 +273,8 @@ RUN <<EOT
     # take back 20.5 - the boot-time NOP rewrite of every fentry site and the kallsyms scan of
     # every record for weak functions. Tetragon, Cilium and bpftrace need the tracer itself.
     # patches/0003 takes another 9.0 ms from event tracing, which BPF_EVENTS needs: the eval map
-    # rewrite of every event format, now done on first use. All three: 109.9 -> 78.5 ms.
+    # rewrite of every event format, now done on first use. All three: 109.9 -> 78.5 ms; with
+    # patches/0004 (PCI configuration through ECAM, one trap an access), 73.7.
     # BPF_LSM is deliberately NOT enabled, and this is where the decision is written down
     # so it is not made again by accident. It depends on CONFIG_SECURITY, which is off here
     # and would put LSM hooks on paths this kernel is tuned for boot time on — and what it
