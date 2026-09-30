@@ -571,6 +571,10 @@ func TestFingerprint(t *testing.T) {
 func TestCmdline(t *testing.T) {
 	withInit := DefaultCmdline()
 	withInit.Init = "/sbin/custom-init"
+	withRoot := DefaultCmdline()
+	withRoot.Root = "/dev/vda"
+	noConsole := DefaultCmdline()
+	noConsole.Console = ""
 
 	for _, tc := range []struct {
 		name   string
@@ -592,7 +596,18 @@ func TestCmdline(t *testing.T) {
 			// a terminal preference, so it is what gets dropped while tidying; nothing
 			// fails if it goes, the machine just takes five times as long.
 			"TERM=dumb",
+			"console=ttyS0",
 		},
+		// No root named, no root= at all: an empty one would be a kernel looking for "".
+		absent: []string{"root="},
+	}, {
+		name: "root",
+		c:    withRoot,
+		want: []string{"root=/dev/vda rw"},
+	}, {
+		name:   "no console",
+		c:      noConsole,
+		absent: []string{"console="},
 	}, {
 		name:   "init",
 		c:      withInit,
