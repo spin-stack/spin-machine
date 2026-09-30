@@ -186,8 +186,9 @@ jobs:
             echo "### $EXPERIMENT on $RUNNER_NAME"
             echo
             echo "- release: $RELEASE"
-            echo "- kernel B: ${SPIN_KERNEL_B:+run $KERNEL_RUN}${SPIN_KERNEL_B:-none}"
-            echo "- QEMU B: ${QEMU_RUN:+run $QEMU_RUN}${QEMU_RUN:-none}"
+            echo "- kernel B: ${KERNEL_RUN:+run }${KERNEL_RUN:-none}"
+            echo "- kernel C: ${KERNEL_RUN_C:+run }${KERNEL_RUN_C:-none}"
+            echo "- QEMU B: ${QEMU_RUN:+run }${QEMU_RUN:-none}"
             echo "- vars: ${VARS:-none}"
             echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
             echo "- load: $(cut -d' ' -f1-3 /proc/loadavg)"
