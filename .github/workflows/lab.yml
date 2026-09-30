@@ -208,6 +208,17 @@ jobs:
       - name: Build spin-machine into the release tree
         run: task tools OUTPUT_DIR="$SPIN_MACHINE_OUTPUT"
 
+      # The probes that edit a root filesystem (rawRoot) do it with the release's own debugfs,
+      # and a release ships mkfs.ext4 alone: built from the same pin beside the tree, and only
+      # the three tools the release does not carry copied in, so its mkfs.ext4 stays its own.
+      - name: Build the e2fsprogs tools the release does not carry
+        run: |
+          set -euo pipefail
+          task e2fsprogs:build OUTPUT_DIR="$PWD/_output/lab/e2fsprogs"
+          for b in debugfs e2fsck dumpe2fs; do
+            install -m 0755 "_output/lab/e2fsprogs/bin/$b" "$SPIN_MACHINE_OUTPUT/bin/$b"
+          done
+
       # report writes its JSON where OUT says; the others print their tables through t.Log.
       # A skipped test exits 0, and a green run that measured nothing reads as a result, so a
       # skip fails the run with the test's reason.
