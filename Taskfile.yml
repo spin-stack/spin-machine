@@ -128,13 +128,9 @@ vars:
   QEMU_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qemu,mode=max,compression=zstd{{end}}'
   KERNEL_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kernel{{end}}'
   KERNEL_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kernel,mode=max,compression=zstd{{end}}'
-  # The firmware experiment. Its own scope like everything else, and it is never built by
-  # `task build`: nothing in a release comes from it.
-  # The floor-kernel experiment, like QBOOT_ above: never built by `task build`.
+  # The floor-kernel experiment: never built by `task build`.
   KMIN_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kmin{{end}}'
   KMIN_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kmin,mode=max,compression=zstd{{end}}'
-  QBOOT_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qboot{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/qboot{{end}}'
-  QBOOT_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qboot,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qboot,mode=max,compression=zstd{{end}}'
   E2FSPROGS_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/e2fsprogs{{end}}'
   E2FSPROGS_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/e2fsprogs,mode=max,compression=zstd{{end}}'
   # The container that builds the base image. Small — mkosi, qemu-utils — and cached like
@@ -309,12 +305,12 @@ tasks:
 
   boot:firmware:
     desc: >-
-      Compare firmware for this machine: SeaBIOS against the qboot build in qemu/qboot/.
-      Needs KVM, a built release and `task qemu:qboot`; SPIN_PROBE_INITRD= names a diagnostic
-      initrd, and without it boot/probeinit is built into one. Without the firmware it says
-      so and skips: qboot is not an artefact a release carries. It asserts a firmware can run this
-      machine at all before it times one, because a firmware with no WRITE_POINTER loses
-      vmgenid and a lost vmgenid has no symptom.
+      Compare the machine's firmware, qboot, with the SeaBIOS QEMU ships beside it: both are
+      in a release's qemu/. Needs KVM and a built release; SPIN_PROBE_INITRD= names a
+      diagnostic initrd, and without it boot/probeinit is built into one. It asserts qboot
+      runs this machine - vmgenid's table published, a restored guest reseeded - before it
+      times one, because a firmware with no WRITE_POINTER loses vmgenid and a lost vmgenid
+      has no symptom.
     cmds:
       - SPIN_FIRMWARE_PROBE=1 go test ./boot/ -run TestFirmwareCost -count=1 -v -timeout 20m
 

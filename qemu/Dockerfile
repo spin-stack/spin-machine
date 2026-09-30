@@ -58,6 +58,8 @@
 # versions.yaml's, handed in by qemu/Taskfile.yml. None has a default here: a build that was not
 # handed one fails rather than building something the file does not say.
 ARG ALPINE_IMAGE
+# qboot's toolchain: see the qboot stage.
+ARG DEBIAN_IMAGE
 
 FROM ${ALPINE_IMAGE} AS builder
 
@@ -394,12 +396,97 @@ RUN for b in /opt/qemu/bin/qemu-system-x86_64 /opt/qemu/bin/qemu-img \
 # linking makes here. An Ubuntu base with a hand-written apt list would have to be kept in
 # step with what the builder links against, and the way that is found to be wrong is a CI
 # run.
+# ============================================
+# qboot: the BIOS this machine boots with
+# ============================================
+#
+# QEMU's SeaBIOS is built for every guest a PC can run; this machine boots one Linux kernel
+# through PVH and nothing else, and qboot is a firmware for exactly that. Measured on the lab
+# runner, 20 boots interleaved (2026-09-29): 121.9 -> 114.8 ms p50 to a diagnostic init, and
+# report's whole matrix boots on it. Stock qboot cannot run this machine: its ACPI linker
+# loader stops on WRITE_POINTER, which vmgenid needs, and the guest halts with nothing on the
+# console. qboot/write-pointer.patch adds the command; qboot/README.md says what it does.
+#
+# Built here and not by a Dockerfile of its own, because it ships beside the SeaBIOS blobs it
+# replaces: everything that reads this build's qemu/ directory - a release, `task qemu:fetch`,
+# CI - has the firmware the machine boots.
+#
+# Debian and not the Alpine above: the compiler is part of the firmware. The toolchain once
+# moved its measured saving from 6.3 to 3.9 ms (qboot/README.md), so it is pinned the way the
+# kernel's is - the same Debian by digest and its archive by snapshot date - and it needs
+# gcc -m32 -ffreestanding, which is 32-bit code generation compiled into the compiler.
+FROM ${DEBIAN_IMAGE} AS qboot
+
+ARG DEBIAN_SNAPSHOT
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# The archive as it stood on DEBIAN_SNAPSHOT, so the compiler is the same one next month.
+# Valid-Until is off because a snapshot's Release files expire by design; the signatures are
+# still checked, and they are what makes plain http enough - the image carries no CA
+# certificates until ca-certificates is installed from this very archive.
+RUN rm -f /etc/apt/sources.list.d/debian.sources && printf '%s\n' \
+        'Types: deb' \
+        "URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" \
+        'Suites: trixie trixie-updates' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        'Check-Valid-Until: no' \
+        > /etc/apt/sources.list.d/snapshot.sources
+
+RUN --mount=type=cache,sharing=locked,id=qboot-aptlib,target=/var/lib/apt \
+    --mount=type=cache,sharing=locked,id=qboot-aptcache,target=/var/cache/apt \
+    apt-get update && apt-get install -y --no-install-recommends \
+        gcc binutils patch git ca-certificates
+
+# The commit and the SHA-256 of the tar `git archive` writes for it: versions.yaml's `qboot`.
+# git verifies the tree is the one the commit names; the checksum verifies the bytes handed to
+# the compiler are the ones measured, and is stable only because this image's git is pinned.
+ARG QBOOT_VERSION
+ARG QBOOT_COMMIT
+ARG QBOOT_ARCHIVE_SHA256
+
+WORKDIR /build
+RUN git clone --quiet --branch "${QBOOT_VERSION}" https://github.com/bonzini/qboot.git upstream && \
+    git -C upstream archive "${QBOOT_COMMIT}" > upstream.tar && \
+    echo "${QBOOT_ARCHIVE_SHA256}  upstream.tar" | sha256sum -c -
+
+COPY qemu/qboot/write-pointer.patch /build/write-pointer.patch
+
+# Upstream's meson.build flags, with -Os fixed rather than taken from a build type.
+RUN set -eux; \
+    mkdir -p src out; \
+    tar -xf upstream.tar -C src; \
+    patch -p1 --fuzz=0 -d src < write-pointer.patch; \
+    cd src; \
+    for f in *.c *.S; do \
+        gcc -Os -m32 -march=i386 -mregparm=3 -fno-stack-protector \
+            -fno-delete-null-pointer-checks -ffreestanding \
+            -mstringop-strategy=rep_byte -minline-all-stringops -fno-pic \
+            -Iinclude -c "$f" -o "/build/out/${f%.*}.o"; \
+    done; \
+    gcc -nostdlib -m32 -no-pie -Wl,--build-id=none -Wl,-Tflat.lds \
+        /build/out/*.o -o /build/out/qboot.elf; \
+    objcopy -O binary /build/out/qboot.elf /build/qboot.bin
+
+# Asserted on what came out. A firmware that is not the size the ROM window expects does not
+# fail here - it fails as a guest that prints nothing - so the size is checked; and the patch,
+# because a patch that applied to nothing still leaves a tree that compiles, and the firmware
+# built from it hangs every machine that has vmgenid.
+RUN set -eux; \
+    size=$(stat -c%s /build/qboot.bin); \
+    test "$size" -eq 65536 || { echo "qboot.bin is $size bytes, not 65536" >&2; exit 1; }; \
+    grep -q 'CMD_WRITE_PTR' src/tables.c && grep -q 'fw_cfg_write_file' src/fw_cfg.c || { echo "the WRITE_POINTER patch is not in the tree that was compiled" >&2; exit 1; }; \
+    sha256sum /build/qboot.bin
+
 FROM ${ALPINE_IMAGE} AS runtime
 
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu-tcg/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64-tcg
 COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
 COPY --from=builder /build/pc-bios/ /usr/share/spin-stack/qemu/
+COPY --from=qboot /build/qboot.bin /usr/share/spin-stack/qemu/qboot.bin
 
 # The binaries are static, so this proves rather more than it looks: it is the same check a
 # consumer's host performs when it runs them, on a base that shares nothing with the one
@@ -417,3 +504,4 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu-tcg/bin/qemu-system-x86_64 /bin/qemu-system-x86_64-tcg
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 COPY --from=builder /build/pc-bios/ /qemu/
+COPY --from=qboot /build/qboot.bin /qemu/qboot.bin

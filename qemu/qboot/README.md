@@ -1,4 +1,4 @@
-# qboot WRITE_POINTER experiment
+# qboot, with WRITE_POINTER
 
 qboot at `8ca302e86d685fa05b16e2b208888243da319941` stops in its ACPI loader when
 q35 supplies the WRITE_POINTER command needed by vmgenid. The patch adds that
@@ -13,50 +13,34 @@ Protocol references:
 [the ACPI linker loader](https://github.com/qemu/qemu/blob/master/hw/acpi/bios-linker-loader.c).
 The patch is GPL-2.0, like upstream; see COPYING and the repository NOTICE.
 
-## Reproduce
+## Build
 
-```sh
-task qemu:qboot
-```
+`task qemu:build` builds it, in the `qboot` stage of `qemu/Dockerfile`, and it lands beside
+the SeaBIOS blobs as `_output/qemu/qboot.bin`, where a release, `task qemu:fetch` and CI all
+find it. The stage clones the pinned commit, verifies the SHA-256 of the tar `git archive`
+writes for it, applies `write-pointer.patch` with no fuzz, and compiles with upstream's
+meson.build flags plus `-Os`. It asserts on what came out: 65536 bytes, the ROM window it is
+linked for, and the patch's code in the tree that was compiled.
 
-Both variants land in `_output/qboot/{stock,patched}/bios.bin`. The build is
-`qemu/qboot/Dockerfile`, which clones the pinned commit, verifies the SHA-256 of the
-tar `git archive` writes for it, and compiles both variants with one compiler and
-upstream's meson.build flags plus `-Os`. It asserts on what came out — both 65536
-bytes, and not byte-identical to each other, since a patch that applied to nothing
-still leaves a tree that compiles. It does not rebuild QEMU or touch a release tree,
-and nothing in a release comes from it.
+It is built with the kernel's pinned Debian and not QEMU's Alpine, because the compiler is
+part of the firmware - see the toolchain note below.
 
-It is a container for the same reason `kernel/Dockerfile` is: the compiler is part of
-the measurement. That is not a hypothetical here — see the toolchain note below.
+## Probe
 
-The probe is `TestFirmwareCost` in `boot/firmware_test.go`, beside the rest of the
-boot measurement harness and sharing its release discovery, its percentiles and its
-interleaving. It requires KVM and a caller-supplied diagnostic initrd. That `/init`
-must mount proc, print dmesg lines containing `vmgenid` and then `SPIN-READY`, stay
-alive, and keep printing new dmesg output so the host sees the reseed after restore.
-The initrd is diagnostic input, not an artifact built or shipped by this repository:
-what runs as PID 1 is the caller's business. Use the same initrd for both firmware
-variants — its own CPU and memory work lands in every number.
+`task boot:firmware` (`TestFirmwareCost` in `boot/firmware_test.go`) boots qboot with vmgenid
+off, then with it on: the table published, the guest saved, restored into a new QEMU with
+`guid=auto`, and `crng reseeded due to virtual machine fork` required in the restored guest's
+log. Then it interleaves SeaBIOS and qboot boots and prints p50, p95 and the difference.
+`SPIN_QBOOT=` names another qboot to try.
 
-```sh
-task boot:firmware \
-  SPIN_QBOOT_STOCK=/tmp/qboot-build/stock/bios.bin \
-  SPIN_QBOOT_PATCHED=/tmp/qboot-build/patched/bios.bin \
-  SPIN_PROBE_INITRD=/path/to/diagnostic.cpio
-```
+The initrd is `boot/probeinit`, built by the test, or `SPIN_PROBE_INITRD=`. Its `/init` must
+mount proc, print dmesg lines containing `vmgenid` and then `SPIN-READY`, stay alive, and keep
+printing new dmesg output so the host sees the reseed after restore. The same initrd serves
+both firmwares, so its own work cancels out.
 
-SeaBIOS, QEMU and the kernel come from `_output/`, so there are three paths to pass
-rather than eight. With any of the three unset the test says which and skips: none of
-them is an artefact a release carries.
-
-The probe checks the control boot without vmgenid, the stock timeout with vmgenid,
-and the patched boot. The stock hang is asserted rather than tolerated: a stock qboot
-that booted with vmgenid would mean the WRITE_POINTER story is wrong and every timing
-after it measures something else. It saves the patched guest, restores into a new QEMU
-with `guid=auto`, waits for incoming migration to finish before `cont`, and requires
-`crng reseeded due to virtual machine fork` in the restored guest's log. Then it
-interleaves SeaBIOS and patched boots and prints p50, p95 and the difference.
+Measured on the lab runner (AMD Ryzen 9 5900X, run 36650049960, 2026-09-29), 20 boots
+interleaved: SeaBIOS 121.89 ms p50, qboot 114.76, 7.14 ms saved; and `report`'s whole matrix,
+106 rows, boots on qboot (run 36650559189).
 
 ## Measurements, 2026-09-21
 
