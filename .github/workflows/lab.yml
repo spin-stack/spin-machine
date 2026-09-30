@@ -187,7 +187,7 @@ jobs:
             echo
             echo "- release: $RELEASE"
             echo "- kernel B: ${SPIN_KERNEL_B:+run $KERNEL_RUN}${SPIN_KERNEL_B:-none}"
-            echo "- QEMU B: ${SPIN_MACHINE_OUTPUT_B:+run $QEMU_RUN}${SPIN_MACHINE_OUTPUT_B:-none}"
+            echo "- QEMU B: ${QEMU_RUN:+run $QEMU_RUN}${QEMU_RUN:-none}"
             echo "- vars: ${VARS:-none}"
             echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
             echo "- load: $(cut -d' ' -f1-3 /proc/loadavg)"
