@@ -242,7 +242,7 @@ RUN <<EOT
     # does not depend on it, so ssh keeps its ptys.
     #
     # It is off because it is dead, not because it is slow. Together with the erofs removal it
-    # measures 0.31 ms at `task boot:floor` over 40 interleaved boots on an idle host
+    # measures 0.31 ms against a tinyconfig floor kernel over 40 interleaved boots on an idle host
     # (2026-09-26), which is nothing. An earlier 20-boot run on a host that was building a
     # kernel at the time read 2.09 ms for this symbol alone and does not reproduce — at this
     # size a single run of this probe is a guess, and 40 on a quiet host is the smallest thing
@@ -323,13 +323,13 @@ RUN <<EOT
     # not one. `task boot:initcalls` reports ksm_init at 2.00 ms, hugepage_init at 2.00 and
     # kcompactd_init at 2.00 — and a kernel built with CONFIG_KSM and
     # CONFIG_TRANSPARENT_HUGEPAGE off, together with the erofs removal, measures -0.50 ms
-    # against this one at `task boot:floor`: nothing. Those round 2.00 values are what
+    # against this one, both beside a tinyconfig floor kernel: nothing. Those round 2.00 values are what
     # initcall_debug can resolve at CONFIG_HZ=1000, not what the initcalls cost.
     #
     # Nothing in this config has been found to be worth more than about half a millisecond,
-    # CONFIG_VT included — see the note beside its assertion. The 45.6 ms that separates this
-    # kernel from the floor one in kernel/minimal/ is BTF, ACPI and ftrace, and BPF and
-    # hotplug need all three.
+    # CONFIG_VT included — see the note beside its assertion. The 45.6 ms that separated this
+    # kernel from a tinyconfig floor one that reaches the same marker (2026-09-26) is BTF, ACPI
+    # and ftrace, and BPF and hotplug need all three.
     #
     # COMPACTION is not available at all: CONFIG_VIRTIO_MEM depends on CONTIG_ALLOC, which is
     # def_bool (MEMORY_ISOLATION && COMPACTION) || CMA, so compaction is what this machine's

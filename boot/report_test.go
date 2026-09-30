@@ -54,13 +54,6 @@ var axes = []axis{
 	}},
 	{"vsock", []choice{{"off", nil}, {"on", []string{"--vsock-cid", "1000"}}}},
 	{"hotplug", []choice{{"off", nil}, {"on", []string{"--hotplug-disks", "4"}}}},
-	// How the host caches the root disk: QEMU's default, O_DIRECT for the whole chain, and
-	// O_DIRECT for the overlay only with the shared base on the page cache.
-	{"disk", []choice{
-		{"default", nil},
-		{"cache-none", []string{"--disk-cache", "none"}},
-		{"direct-over-backing", []string{"--disk-direct-over-backing"}},
-	}},
 }
 
 // combinations is the product of the axes, in a fixed order.

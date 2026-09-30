@@ -127,38 +127,6 @@ func without(units ...string) variant {
 
 func labelled(l string, v variant) variant { v.label = l; return v }
 
-// withDropin appends to the console unit's drop-in the swap already writes, so a row can vary
-// one directive without restating the configuration.
-func withDropin(v variant, body string) variant {
-	const path = "/etc/systemd/system/spin-machine-console.service.d/zz-bench.conf"
-	files := map[string]string{}
-	for k, val := range v.files {
-		files[k] = val
-	}
-	files[path] = files[path] + body
-	v.files = files
-	return v
-}
-
-// consoleSwap is the configuration behind the "console no dev" row: serial-getty@ttyS0
-// masked and the image's own device-independent console unit enabled in its place, with the
-// same cheap ExecStart the baseline uses so what differs is the unit and its ordering rather
-// than agetty.
-//
-// A function rather than a literal in the row because `task boot:systemd` measures the same
-// configuration to find out where its 340 ms goes, and two copies of it would be two things
-// to keep in step.
-func consoleSwap() variant {
-	return variant{cpus: "2", memory: "2048",
-		mask: []string{"serial-getty@ttyS0.service"},
-		files: map[string]string{
-			"/etc/systemd/system/spin-machine-console.service.d/zz-bench.conf": "[Service]\n" + gettyEcho,
-		},
-		links: map[string]string{
-			"/etc/systemd/system/multi-user.target.wants/spin-machine-console.service": "/usr/lib/systemd/system/spin-machine-console.service",
-		}}
-}
-
 func withFile(m map[string]string, path, content string) map[string]string {
 	m[path] = content
 	return m
@@ -247,27 +215,6 @@ var variants = []variant{
 	// of Type=simple was run against a real agetty whose sleep(1) buried it.
 	{label: "getty no idle", cpus: "2", memory: "2048",
 		files: gettyDropin("Type=simple\n" + gettyEcho)},
-	// The login prompt's own dependency on udev, which every row above pays including the
-	// baseline: the drop-in they use sits on serial-getty@ttyS0, and that unit carries
-	// `BindsTo=dev-ttyS0.device`. systemd-getty-generator instantiates it from console=ttyS0,
-	// so nothing has to enable it for it to be on the critical path.
-	//
-	// Swapping it for spin-machine-console.service, which the image carries and which has no
-	// device dependency, costs nothing: 221/233 against the baseline's 227/236 over 12 boots,
-	// 2026-09-26. So the hole that unit's own comment describes can be closed after all.
-	//
-	// It did not look that way. Without TERM=dumb the same swap is 558/572, and three
-	// explanations were measured and wrong before the console named the fourth itself — the
-	// device dependency the swap removes, the unit's Type=idle, and its TTYReset/TTYVHangup,
-	// which both units carry anyway and so could never have been a difference between them.
-	// What it is: systemd sets TERM for a service declaring its own TTYPath rather than
-	// passing its own down, so machine/cmdline.go's TERM=dumb does not reach this unit, and
-	// the tty setup waits out the 334 ms terminfo timeout asking a serial port with a file
-	// behind it what it can do.
-	//
-	// The drop-in mirrors the Environment=TERM=dumb now in image/, and goes when an image
-	// carrying it is what _output holds.
-	labelled("console no dev", withDropin(consoleSwap(), "Environment=TERM=dumb\n")),
 	// Devices udev does not have to walk. udev coldplugs 266 of them on this machine, and
 	// three families are for hardware it does not have: 64 virtual consoles (CONFIG_VT, on a
 	// machine whose QEMU ships no VGA), 8 unused loop devices, and three of the four 16550s.
@@ -279,10 +226,10 @@ var variants = []variant{
 	// userspace is not a list of savings either.
 	//
 	// "Not at a login prompt" is the whole claim, and it is not the same as "not at all":
-	// `task boot:floor` puts CONFIG_VT=n at 2.09 ms of the kernel phase. This harness cannot
-	// see that, because it measures through ~139 ms of userspace whose own spread is wider.
-	// A kernel-config change belongs in boot:floor first, and only here once it is large
-	// enough that a login prompt could show it.
+	// the kernel phase can move by a couple of milliseconds that this harness cannot see,
+	// because it measures through ~139 ms of userspace whose own spread is wider. A
+	// kernel-config change belongs in `task boot:initcalls` first, and only here once it is
+	// large enough that a login prompt could show it.
 	labelled("fewer devices", variant{cpus: "2", memory: "2048",
 		files: gettyDropin(gettyEcho),
 		extra: "loop.max_loop=0 8250.nr_uarts=1"}),
@@ -869,4 +816,11 @@ func tail(b []byte, n int) string {
 		b = b[len(b)-n:]
 	}
 	return string(b)
+}
+
+// spread is min / median / max of a column.
+func spread(v []int, unit string) string {
+	s := append([]int(nil), v...)
+	sort.Ints(s)
+	return fmt.Sprintf("min %d %s, median %d %s, max %d %s", s[0], unit, s[len(s)/2], unit, s[len(s)-1], unit)
 }

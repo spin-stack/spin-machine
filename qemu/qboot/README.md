@@ -37,16 +37,15 @@ part of the firmware - see the toolchain note below.
 
 ## Probe
 
-`task boot:firmware` (`TestFirmwareCost` in `boot/firmware_test.go`) boots qboot with vmgenid
-off, then with it on: the table published, the guest saved, restored into a new QEMU with
-`guid=auto`, and `crng reseeded due to virtual machine fork` required in the restored guest's
-log. Then it interleaves SeaBIOS and qboot boots and prints p50, p95 and the difference.
-`SPIN_QBOOT=` names another qboot to try.
+`task boot:firmware` (`TestFirmwareRunsTheMachine` in `boot/firmware_test.go`) boots qboot
+with vmgenid off, then with it on: the table published, the guest saved, restored into a new
+QEMU with `guid=auto`, and `crng reseeded due to virtual machine fork` required in the
+restored guest's log. Then it boots SeaBIOS, the fallback. `SPIN_QBOOT=` names another qboot
+to try. `task boot:firmware-stages` says where qboot's time goes.
 
 The initrd is `boot/probeinit`, built by the test, or `SPIN_PROBE_INITRD=`. Its `/init` must
 mount proc, print dmesg lines containing `vmgenid` and then `SPIN-READY`, stay alive, and keep
-printing new dmesg output so the host sees the reseed after restore. The same initrd serves
-both firmwares, so its own work cancels out.
+printing new dmesg output so the host sees the reseed after restore.
 
 Measured on the lab runner (AMD Ryzen 9 5900X, run 36650049960, 2026-09-29), 20 boots
 interleaved: SeaBIOS 121.89 ms p50, qboot 114.76, 7.14 ms saved; and `report`'s whole matrix,

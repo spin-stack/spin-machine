@@ -34,9 +34,7 @@ on:
           - boot:unitload
           - boot:restore
           - boot:ssh-load
-          - boot:kernel-pages
           - boot:memory-policy
-          - boot:memory-unplug
           - boot:firmware
           - boot:firmware-stages
           - report
@@ -107,7 +105,7 @@ jobs:
           {
             echo "RELEASE=$RELEASE"
             echo "SPIN_MACHINE_OUTPUT=$PWD/_output/lab/spin-machine-${RELEASE}-linux-x86_64/usr/share/spin-stack"
-            # On disk: the overlays go here, and cache=none is O_DIRECT, which tmpfs refuses.
+            # On disk: the overlays and memory files go here, gigabytes a tmpfs /tmp holds in RAM.
             echo "TMPDIR=$PWD/_output/lab/tmp"
           } >> "$GITHUB_ENV"
 

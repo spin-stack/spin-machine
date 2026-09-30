@@ -137,9 +137,6 @@ vars:
   QEMU_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qemu,mode=max,compression=zstd{{end}}{{end}}'
   KERNEL_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kernel{{end}}'
   KERNEL_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kernel,mode=max,compression=zstd{{end}}{{end}}'
-  # The floor-kernel experiment: never built by `task build`.
-  KMIN_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kmin{{end}}'
-  KMIN_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kmin,mode=max,compression=zstd{{end}}{{end}}'
   E2FSPROGS_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/e2fsprogs{{end}}'
   E2FSPROGS_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/e2fsprogs,mode=max,compression=zstd{{end}}{{end}}'
   # The container that builds the base image. Small — mkosi, qemu-utils — and cached like
@@ -212,8 +209,8 @@ tasks:
       OUT: '{{.OUT | default (printf "%s/report.json" .OUTPUT_ABS)}}'
       REPS: '{{.REPS | default "3"}}'
     cmds:
-      # TMPDIR on disk, because the overlays go there and cache=none is O_DIRECT, which
-      # tmpfs refuses: a /tmp on tmpfs would report every cache-none row as one QEMU refuses.
+      # TMPDIR on disk, because the overlays and memory files go there: gigabytes a tmpfs
+      # /tmp holds in RAM.
       - mkdir -p {{.OUTPUT_ABS}}/report-tmp
       - >-
         TMPDIR={{.OUTPUT_ABS}}/report-tmp SPIN_MACHINE_OUTPUT={{.OUTPUT_ABS}} SPIN_REPORT={{.OUT}}
@@ -246,15 +243,6 @@ tasks:
     cmds:
       - SPIN_SSH_LOAD=1 go test ./boot/ -run '^TestSSHUnderLoad$' -count=1 -v -timeout 30m
 
-  boot:kernel-pages:
-    desc: >-
-      What a guest writes of the kernel image QEMU loads into its memory, page by page and by
-      section, once it is at a login prompt: whether mapping the kernel could replace QEMU's copy
-      of it. Needs /dev/kvm and a built release; no sudo. FLAGS= the machine.
-    deps: [tools]
-    cmds:
-      - SPIN_KERNEL_PAGES=1 go test ./boot/ -run '^TestKernelPagesWritten$' -count=1 -v -timeout 10m
-
   boot:memory-policy:
     desc: >-
       A process that takes memory until something stops it, in a login session of a 1 GiB
@@ -263,17 +251,6 @@ tasks:
       REPS= boots per variant.
     cmds:
       - SPIN_MEMORY_POLICY=1 go test ./boot/ -run '^TestMemoryPolicy$' -count=1 -v -timeout 90m
-
-  boot:memory-unplug:
-    desc: >-
-      How much of what a VM grew by through virtio-mem it gives back once filled, for each way
-      the guest can online that memory (the zone the kernel picks, auto-movable, auto-movable at
-      the ratio a 512 MiB machine growing to 8 GiB needs), and whether the kernel killed
-      anything for memory while it tried. Needs /dev/kvm and a built release; no sudo. REPS=
-      boots per variant, FLAGS= the machine.
-    deps: [tools]
-    cmds:
-      - SPIN_MEMORY_UNPLUG=1 go test ./boot/ -run '^TestMemoryUnplug$' -count=1 -v -timeout 90m
 
   boot:logind:
     desc: >-
@@ -322,16 +299,6 @@ tasks:
     cmds:
       - SPIN_SYSTEMD_DEBUG=1 go test ./boot/ -run TestSystemdDebug -count=1 -v -timeout 15m
 
-  boot:floor:
-    desc: >-
-      What a kernel costs before anything is configured into it: the release kernel against
-      the one `task kernel:minimal` builds, interleaved, on a marker both can reach. Needs
-      KVM, a built release and `task kernel:minimal`; SPIN_PROBE_INITRD= names a diagnostic
-      initrd, and without it boot/probeinit is built into one. The answer bounds every
-      kernel-config change that could follow.
-    cmds:
-      - SPIN_FLOOR_PROBE=1 go test ./boot/ -run TestKernelFloor -count=1 -v -timeout 20m
-
   boot:firmware-stages:
     desc: >-
       Where the time before the kernel goes on the machine a workspace boots: QEMU's start and
@@ -343,14 +310,13 @@ tasks:
 
   boot:firmware:
     desc: >-
-      Compare the machine's firmware, qboot, with the SeaBIOS QEMU ships beside it: both are
-      in a release's qemu/. Needs KVM and a built release; SPIN_PROBE_INITRD= names a
-      diagnostic initrd, and without it boot/probeinit is built into one. It asserts qboot
-      runs this machine - vmgenid's table published, a restored guest reseeded - before it
-      times one, because a firmware with no WRITE_POINTER loses vmgenid and a lost vmgenid
-      has no symptom.
+      Whether the machine's firmware runs it: qboot boots, publishes vmgenid's table and
+      survives a restore with the guest reseeding - a firmware with no WRITE_POINTER loses
+      vmgenid, and a lost vmgenid has no symptom - and SeaBIOS, the fallback, still boots.
+      Needs KVM and a built release; SPIN_PROBE_INITRD= names a diagnostic initrd, and
+      without it boot/probeinit is built into one.
     cmds:
-      - SPIN_FIRMWARE_PROBE=1 go test ./boot/ -run TestFirmwareCost -count=1 -v -timeout 20m
+      - SPIN_FIRMWARE_PROBE=1 go test ./boot/ -run '^TestFirmwareRunsTheMachine$' -count=1 -v -timeout 20m
 
   boot:trace:
     desc: >-

@@ -40,12 +40,6 @@ import (
 //	SPIN_SYSTEMD_DEBUG=1  run at all
 //	TOP=<n>               how many gaps to print (default 25)
 //	GAP=<ms>              ignore gaps under this (default 2)
-//	SPIN_SYSTEMD_VARIANT=console-swap
-//	                      measure the "console no dev" configuration instead of the default
-//	                      one, which is the only open question about it: the swap costs
-//	                      340 ms and a static diff of the two units does not explain it.
-//	                      Both units carry TTYReset and TTYVHangup, so the terminal-reset
-//	                      timeout cannot be a difference between them.
 func TestSystemdDebug(t *testing.T) {
 	if os.Getenv("SPIN_SYSTEMD_DEBUG") == "" {
 		t.Skip("set SPIN_SYSTEMD_DEBUG=1: boots a VM and needs sudo to write into its overlay")
@@ -87,18 +81,6 @@ WantedBy=multi-user.target
 		links: map[string]string{
 			"/etc/systemd/system/multi-user.target.wants/spin-dmesg.service": "/etc/systemd/system/spin-dmesg.service",
 		},
-	}
-
-	if os.Getenv("SPIN_SYSTEMD_VARIANT") == "console-swap" {
-		sw := consoleSwap()
-		v.mask = sw.mask
-		for k, val := range sw.files {
-			v.files[k] = val
-		}
-		for k, val := range sw.links {
-			v.links[k] = val
-		}
-		v.label += " + console swap"
 	}
 	console := bootUntil(t, out, v, "", "SPIN-DMESG-END", 120*time.Second)
 	if f := os.Getenv("SPIN_CONSOLE_OUT"); f != "" {

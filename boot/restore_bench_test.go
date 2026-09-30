@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // TestRestoreFirstRequest measures what a restored template takes to do its first piece of
@@ -455,3 +456,31 @@ func p50p95(v []float64) string {
 }
 
 func fmtMiB(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
+
+// residentMiB is how much of a file is in the host's page cache: the one number that says
+// whether a file is shared by the machines reading it.
+//
+// cachestat(2), on a file this process owns. The kernel hides page cache state for a file
+// the caller can neither write nor owns, so as not to leak another user's: mincore(2) then
+// reports every page resident — 829 MiB of the release's 829 MiB base right after
+// drop_caches, when a read of it then took 0.58 s from the disk and 0.07 s the second time
+// — and cachestat refuses with EPERM. Hence the benchmark's own copy of the base.
+func residentMiB(t *testing.T, path string) float64 {
+	t.Helper()
+	f, err := os.Open(path) // #nosec G304 -- a file this test made or the release's own
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	// struct cachestat_range { __u64 off, len; }, len 0 meaning to the end of the file, and
+	// struct cachestat { __u64 nr_cache, nr_dirty, nr_writeback, nr_evicted,
+	// nr_recently_evicted; } — both from include/uapi/linux/mman.h.
+	const sysCachestat = 451
+	var rng [2]uint64
+	var st [5]uint64
+	if _, _, e := syscall.Syscall6(sysCachestat, f.Fd(), uintptr(unsafe.Pointer(&rng)),
+		uintptr(unsafe.Pointer(&st)), 0, 0, 0); e != 0 {
+		t.Fatalf("cachestat %s: %v", path, e)
+	}
+	return float64(st[0]*uint64(os.Getpagesize())) / (1 << 20)
+}

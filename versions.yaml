@@ -65,7 +65,7 @@
   pin: 382d6aa48640351df7da6321e156c39155b4a99b0985d4370f7e608729987453
   track: kernel-stable
   note: >-
-    kernel/Dockerfile and the floor kernel in kernel/minimal. A new machine. The configuration
+    kernel/Dockerfile. A new machine. The configuration
     is kernel/config-<version>-x86_64: rename it to the new version in the same commit, then
     `task kernel:build`, `task boot:bench`. A series that is over is a decision, not a bump.
     Pinned at 7.3's release candidates, from git.kernel.org, until 7.3.0 is out: the bump to it
