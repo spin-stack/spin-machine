@@ -246,6 +246,15 @@ tasks:
     cmds:
       - SPIN_SSH_LOAD=1 go test ./boot/ -run '^TestSSHUnderLoad$' -count=1 -v -timeout 30m
 
+  boot:kernel-pages:
+    desc: >-
+      What a guest writes of the kernel image QEMU loads into its memory, page by page and by
+      section, once it is at a login prompt: whether mapping the kernel could replace QEMU's copy
+      of it. Needs /dev/kvm and a built release; no sudo. FLAGS= the machine.
+    deps: [tools]
+    cmds:
+      - SPIN_KERNEL_PAGES=1 go test ./boot/ -run '^TestKernelPagesWritten$' -count=1 -v -timeout 10m
+
   boot:memory-policy:
     desc: >-
       A process that takes memory until something stops it, in a login session of a 1 GiB
