@@ -99,21 +99,22 @@ jobs:
       - name: Expose the Actions cache to buildx
         uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
 
-      # image/build.sh asserts what came out on the finished filesystem rather than
-      # trusting the build that made it: that there is an /sbin/init and a /bin/sh, that
-      # the directories the guest mounts over exist, that no identity is baked in, and
-      # that the units masked for measured reasons are still masked. A package upgrade
-      # that undoes one of those fails here.
-      # mkosi's own package cache is deliberately not restored between runs. It is ~1.5 GB
-      # of .debs, and saving and restoring that costs about what downloading it costs — so
-      # it would buy minutes of cache traffic in exchange for minutes of archive traffic,
-      # and a cache entry large enough to push others out of the repository's 10 GB.
       # The image is made and checked with the static e2fsprogs this repository builds, not
       # the build container's, and image/build.sh stops when it is not there.
       - name: Build e2fsprogs
         run: |
           CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task e2fsprogs:build
 
+      # image/build.sh asserts what came out on the finished filesystem rather than
+      # trusting the build that made it: that there is an /sbin/init and a /bin/sh, that
+      # the directories the guest mounts over exist, that no identity is baked in, and
+      # that the units masked for measured reasons are still masked. A package upgrade
+      # that undoes one of those fails here.
+      #
+      # mkosi's own package cache is deliberately not restored between runs. It is ~1.5 GB
+      # of .debs, and saving and restoring that costs about what downloading it costs — so
+      # it would buy minutes of cache traffic in exchange for minutes of archive traffic,
+      # and a cache entry large enough to push others out of the repository's 10 GB.
       - name: Build the base image
         run: |
           CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task image:build

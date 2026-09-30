@@ -15,9 +15,6 @@ name: CI
 # that has one open, so every push started two identical runs and the concurrency group
 # below killed one of them. That worked and cost a run each time — both started, both took
 # a runner — and left a column of `cancelled` in the run list that reads like a fault.
-#
-# It is also what the other three workflows here have always done; this one was the
-# exception.
 on:
   push:
     branches: [main]

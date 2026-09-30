@@ -9,15 +9,19 @@ name: Lab
 # the vCPU on an efficiency core. The runner is the host report.yml measures releases on, so what
 # an experiment finds compares with the releases' own reports.
 #
-# An experiment is a release plus, optionally, a kernel another workflow built: kernel_run names a
-# Kernel workflow run (kernel.yml builds any branch on dispatch and uploads vmlinux-<sha>), and that
-# kernel becomes SPIN_KERNEL_B, which boot:bench, boot:initcalls and report boot interleaved with
-# the release's own - the only comparison this runner's minute-to-minute drift leaves honest.
+# An experiment is a release plus, optionally, a build of a branch: kernel_run (and kernel_run_c)
+# names a Kernel workflow run, qemu_run a QEMU one, and `variant` says whether the build boots
+# beside the release's, interleaved - the only comparison this runner's minute-to-minute drift
+# leaves honest - or instead of it, to check what it breaks. The probes that take a B say so in
+# their test file.
 #
 # vars is `KEY=VALUE; KEY=VALUE`, each exported to the target: REPS, TOP, ONLY, FLAGS and the
-# SPIN_* switches the target's test documents. Only those names are taken, so a typo fails here
-# rather than being ignored by the target. It is not a sandbox: Task templates some of them into
-# shell commands, and whoever can dispatch this can push code that runs on the same runner.
+# SPIN_* switches the target's test documents. A target that takes FLAGS (report, the firmware
+# and initcall probes) adds them to every boot: `FLAGS=--bios bios-256k.bin` boots SeaBIOS, the
+# fallback firmware. Only those
+# names are taken, so a typo fails here rather than being ignored by the target. It is not a
+# sandbox: Task templates some of them into shell commands, and whoever can dispatch this can
+# push code that runs on the same runner.
 
 on:
   workflow_dispatch:
@@ -54,6 +58,14 @@ on:
         description: "A QEMU workflow run id whose QEMU and firmware are compared against the release's (SPIN_MACHINE_OUTPUT_B)"
         required: false
         type: string
+      variant:
+        description: "With a build to compare: boot it beside the release's, interleaved, or instead of it on every boot"
+        required: false
+        type: choice
+        default: beside
+        options:
+          - beside
+          - instead
       vars:
         description: "KEY=VALUE; KEY=VALUE for the target, e.g. REPS=20; TOP=40"
         required: false
@@ -83,11 +95,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # No Actions cache: this runner keeps Go's module and build caches on its own disk, and
+      # the cache service only stored another copy per branch, against the repository's limit.
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       - name: Set up Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
@@ -109,44 +123,59 @@ jobs:
             echo "TMPDIR=$PWD/_output/lab/tmp"
           } >> "$GITHUB_ENV"
 
-      - name: Fetch the kernel to compare
-        if: inputs.kernel_run != ''
+      # Another build to compare: a Kernel run's vmlinux (B, and C beside it) or a QEMU run's
+      # QEMU and firmware. qemu.yml and kernel.yml build any branch on dispatch.
+      - name: Fetch the builds to compare
+        if: inputs.kernel_run != '' || inputs.kernel_run_c != '' || inputs.qemu_run != ''
         run: |
           set -euo pipefail
-          [[ "$KERNEL_RUN" =~ ^[0-9]+$ ]] || { echo "::error::kernel_run is a run id, got: $KERNEL_RUN"; exit 1; }
-          gh run download "$KERNEL_RUN" -R "$GITHUB_REPOSITORY" -p 'vmlinux-*' -D _output/lab/kernel-b
-          k=$(find _output/lab/kernel-b -name vmlinux -type f | head -1)
-          [ -n "$k" ] || { echo "::error::run $KERNEL_RUN has no vmlinux artifact"; exit 1; }
-          echo "SPIN_KERNEL_B=$PWD/$k" >> "$GITHUB_ENV"
+          fetch() { # run, artifact pattern, directory
+            [[ "$1" =~ ^[0-9]+$ ]] || { echo "::error::a run id is a number, got: $1"; exit 1; }
+            gh run download "$1" -R "$GITHUB_REPOSITORY" -p "$2" -D "$3"
+          }
+          if [ -n "$KERNEL_RUN" ]; then fetch "$KERNEL_RUN" 'vmlinux-*' _output/lab/kernel-b; fi
+          if [ -n "$KERNEL_RUN_C" ]; then fetch "$KERNEL_RUN_C" 'vmlinux-*' _output/lab/kernel-c; fi
+          if [ -n "$QEMU_RUN" ]; then fetch "$QEMU_RUN" 'qemu-*-linux-amd64' _output/lab/qemu-b; fi
 
-      - name: Fetch the third kernel
-        if: inputs.kernel_run_c != ''
+      # beside: the build is booted interleaved with the release's own - SPIN_KERNEL_B and
+      # SPIN_KERNEL_C for a kernel, and for QEMU a second release tree, SPIN_MACHINE_OUTPUT_B,
+      # with the rest linked - the only comparison this runner's drift leaves honest.
+      # instead: every boot is on the build, for report and boot:firmware, which check what a
+      # change breaks rather than what it costs: the tree the experiment boots is the release
+      # with the build in it.
+      - name: Put the build where the experiment boots it
+        if: inputs.kernel_run != '' || inputs.kernel_run_c != '' || inputs.qemu_run != ''
+        env:
+          VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
-          [[ "$KERNEL_RUN_C" =~ ^[0-9]+$ ]] || { echo "::error::kernel_run_c is a run id, got: $KERNEL_RUN_C"; exit 1; }
-          gh run download "$KERNEL_RUN_C" -R "$GITHUB_REPOSITORY" -p 'vmlinux-*' -D _output/lab/kernel-c
-          k=$(find _output/lab/kernel-c -name vmlinux -type f | head -1)
-          [ -n "$k" ] || { echo "::error::run $KERNEL_RUN_C has no vmlinux artifact"; exit 1; }
-          echo "SPIN_KERNEL_C=$PWD/$k" >> "$GITHUB_ENV"
-
-      # The release with another build's QEMU and firmware - qemu.yml uploads both - as a
-      # second tree beside it: the rest is linked, so a change to QEMU or qboot is measured
-      # against the kernel and image it will ship with.
-      - name: Fetch the QEMU to compare
-        if: inputs.qemu_run != ''
-        run: |
-          set -euo pipefail
-          [[ "$QEMU_RUN" =~ ^[0-9]+$ ]] || { echo "::error::qemu_run is a run id, got: $QEMU_RUN"; exit 1; }
-          gh run download "$QEMU_RUN" -R "$GITHUB_REPOSITORY" -p 'qemu-*-linux-amd64' -D _output/lab/qemu-b
-          q=$(find _output/lab/qemu-b -path '*/bin/qemu-system-x86_64' -type f | head -1)
-          [ -n "$q" ] || { echo "::error::run $QEMU_RUN has no qemu-system-x86_64 artifact"; exit 1; }
-          art=$(dirname "$(dirname "$q")")
+          one() { # the one file under $1 whose path matches $2
+            f=$(find "$1" -path "$2" -type f | head -1)
+            [ -n "$f" ] || { echo "::error::$1 has no $2"; exit 1; }
+            echo "$PWD/$f"
+          }
           b=$PWD/_output/lab/release-b
-          cp -as "$SPIN_MACHINE_OUTPUT" "$b"
-          rm -rf "$b/bin/qemu-system-x86_64" "$b/qemu"
-          install -m 0755 "$q" "$b/bin/qemu-system-x86_64"
-          cp -r "$art/qemu" "$b/qemu"
-          echo "SPIN_MACHINE_OUTPUT_B=$b" >> "$GITHUB_ENV"
+          tree_b() { [ -d "$b" ] || cp -as "$SPIN_MACHINE_OUTPUT" "$b"; }
+          if [ -n "$KERNEL_RUN" ]; then
+            k=$(one _output/lab/kernel-b '*/vmlinux')
+            if [ "$VARIANT" = instead ]; then
+              tree_b; rm -f "$b/kernel/vmlinux"; install -m 0644 "$k" "$b/kernel/vmlinux"
+            else
+              echo "SPIN_KERNEL_B=$k" >> "$GITHUB_ENV"
+            fi
+          fi
+          if [ -n "$KERNEL_RUN_C" ]; then
+            [ "$VARIANT" = beside ] || { echo "::error::kernel_run_c is a third kernel beside the release, not one to boot instead"; exit 1; }
+            echo "SPIN_KERNEL_C=$(one _output/lab/kernel-c '*/vmlinux')" >> "$GITHUB_ENV"
+          fi
+          if [ -n "$QEMU_RUN" ]; then
+            q=$(one _output/lab/qemu-b '*/bin/qemu-system-x86_64')
+            tree_b; rm -rf "$b/bin/qemu-system-x86_64" "$b/qemu"
+            install -m 0755 "$q" "$b/bin/qemu-system-x86_64"
+            cp -r "$(dirname "$(dirname "$q")")/qemu" "$b/qemu"
+            [ "$VARIANT" = instead ] || echo "SPIN_MACHINE_OUTPUT_B=$b" >> "$GITHUB_ENV"
+          fi
+          if [ "$VARIANT" = instead ]; then echo "SPIN_MACHINE_OUTPUT=$b" >> "$GITHUB_ENV"; fi
 
       - name: Take the variables
         run: |
@@ -165,21 +194,9 @@ jobs:
             echo "$pair" >> "$GITHUB_ENV"
           done
 
-      # SPIN_LAB_KERNEL_B_EVERYWHERE=1: every boot on kernel B rather than beside it - for
-      # report, whose matrix is the machine's whole contract, over a changed kernel.
-      - name: Every boot on kernel B
-        if: inputs.kernel_run != '' && contains(inputs.vars, 'SPIN_LAB_KERNEL_B_EVERYWHERE=1')
-        run: echo "FLAGS=${FLAGS:+$FLAGS }--kernel $SPIN_KERNEL_B" >> "$GITHUB_ENV"
-
-      # SPIN_LAB_QEMU_B_EVERYWHERE=1: every boot on qemu_run's QEMU and firmware rather than
-      # beside them - for report and boot:firmware, which check what a change to either breaks.
-      - name: Every boot on QEMU B
-        if: inputs.qemu_run != '' && contains(inputs.vars, 'SPIN_LAB_QEMU_B_EVERYWHERE=1')
-        run: |
-          echo "SPIN_MACHINE_OUTPUT=$SPIN_MACHINE_OUTPUT_B" >> "$GITHUB_ENV"
-          echo "SPIN_MACHINE_OUTPUT_B=" >> "$GITHUB_ENV"
-
       - name: What this run is
+        env:
+          VARIANT: ${{ inputs.variant }}
         run: |
           {
             echo "### $EXPERIMENT on $RUNNER_NAME"
@@ -188,23 +205,13 @@ jobs:
             echo "- kernel B: ${KERNEL_RUN:+run }${KERNEL_RUN:-none}"
             echo "- kernel C: ${KERNEL_RUN_C:+run }${KERNEL_RUN_C:-none}"
             echo "- QEMU B: ${QEMU_RUN:+run }${QEMU_RUN:-none}"
+            if [ -n "$KERNEL_RUN$KERNEL_RUN_C$QEMU_RUN" ]; then echo "- booted: $VARIANT the release"; fi
             echo "- vars: ${VARS:-none}"
             echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
             echo "- load: $(cut -d' ' -f1-3 /proc/loadavg)"
             if sudo -n true 2>/dev/null; then echo "- sudo -n: yes"; else echo "- sudo -n: **no** (targets that edit an overlay skip)"; fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm"; exit 1; }
-
-      # SPIN_LAB_SEABIOS=1: every boot of the experiment on the SeaBIOS QEMU ships beside qboot,
-      # the machine's firmware - for report, whose matrix is the machine's whole contract.
-      - name: Every boot on SeaBIOS
-        if: contains(inputs.vars, 'SPIN_LAB_SEABIOS=1')
-        run: echo "FLAGS=${FLAGS:+$FLAGS }--bios bios-256k.bin" >> "$GITHUB_ENV"
-
-      # A release tarball carries no spin-machine, and releaseDir skips without one: built from
-      # this checkout into the tree, as report does through its tools dependency.
-      - name: Build spin-machine into the release tree
-        run: task tools OUTPUT_DIR="$SPIN_MACHINE_OUTPUT"
 
       # report writes its JSON where OUT says; the others print their tables through t.Log.
       # A skipped test exits 0, and a green run that measured nothing reads as a result, so a

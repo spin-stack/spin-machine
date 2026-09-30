@@ -24,14 +24,13 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 # One release at a time, across every ref, and not per-ref. Per-ref serialises two runs on
 # the same tag and nothing else: a workflow_dispatch on main and a tag push are different
 # refs, so both count the tags already taken today, both generate .01, and the loser finds
-# out at `git tag` — after six hours of building. The version is decided at the start of a
-# run and pushed at the end, so that window is the whole build, and there is no reason to
-# build two releases at once anyway.
+# out at `git tag`, after the whole build. The version is decided at the start of a run and
+# pushed at the end, so that window is the whole build, and there is no reason to build two
+# releases at once anyway.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -39,10 +38,9 @@ concurrency:
 jobs:
   release:
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    # QEMU and the kernel are each tens of minutes from cold, on a runner with two cores,
-    # and this job builds both plus the image. The GitHub Actions cache makes a warm run
-    # far shorter; the ceiling is for the cold one.
-    timeout-minutes: 360
+    # A warm run reads main's BuildKit cache and takes a few minutes (2m13s, 2026-09-30). The
+    # ceiling is for the cold one, which compiles QEMU and the kernel, each tens of minutes.
+    timeout-minutes: 180
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -119,7 +117,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Releasing $version — $origin"
 
-      # `task release` builds all three artefacts and packs them, ending in hack/release,
+      # `task release` builds all four artefacts and packs them, ending in hack/release,
       # which refuses to produce a tarball with anything missing. A release that installs
       # and then fails for want of an option ROM is worse than no release.
       - name: Build the release
@@ -129,10 +127,6 @@ jobs:
           # Taskfile.yml. That is the whole point of them being named there: a release
           # reads what the lane on main already paid to compile, instead of starting cold
           # because a workflow file spelled the scope differently.
-          #
-          # This run's own writes are mostly wasted — it is triggered by a tag, and a cache
-          # written under one tag ref cannot be read from another tag or from a branch. The
-          # reads are what matter, and those come from the default branch.
           CACHE_BACKEND: gha
           # Reads what main's lanes exported and writes nothing back: a release is built once, and
           # the next one reads main's newer cache, not this. See CACHE_EXPORT in Taskfile.yml.
