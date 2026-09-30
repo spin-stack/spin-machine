@@ -146,7 +146,7 @@
   archive: 6fb3842d9be9c7488ffef33e5aa2cc430a5065337ad6239e3facf981b38748d2
   track: branch
   note: >-
-    the firmware experiment in qemu/qboot, never in a release. archive is the sha256 of what
+    the machine's BIOS, built in qemu/Dockerfile's qboot stage. archive is the sha256 of what
     `git archive` writes for the commit with debian's git, which nothing but a build can
     compute, so a bump is by hand: the commit, a build, the archive's sum from its failure,
     write-pointer.patch rebased onto it, NOTICE and qemu/qboot/README.md restated, and

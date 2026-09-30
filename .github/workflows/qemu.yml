@@ -69,7 +69,7 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          build=$(hack/touches "$BASE" alpine qemu -- \
+          build=$(hack/touches "$BASE" alpine qemu debian debian-snapshot qboot -- \
             qemu versions go.mod .github/workflows/qemu.yml)
           echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
 
@@ -232,7 +232,7 @@ jobs:
             --cache-from type=gha,scope=qemu \
             --cache-from type=gha,scope=qemu-image \
             --cache-to type=gha,scope=qemu-image,mode=max \
-            $(go tool versions args alpine qemu) \
+            $(go tool versions args alpine qemu debian debian-snapshot qboot) \
             --build-arg JOBS=4 \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --tag ghcr.io/${{ github.repository }}/qemu:${{ steps.qemu.outputs.version }} \

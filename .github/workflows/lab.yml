@@ -160,28 +160,6 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm"; exit 1; }
 
-      # qboot is not in a release: boot:firmware builds it (qemu/qboot/Dockerfile, which needs
-      # Docker) into the tree, where the probe looks for it.
-      - name: Build the firmware to compare
-        if: inputs.experiment == 'boot:firmware' || contains(inputs.vars, 'SPIN_LAB_QBOOT=1')
-        # The build exports its cache, which buildx's default docker driver refuses: a
-        # docker-container builder of the lab's own, made once and reused, on the host's network
-        # because the runner's DNS does not answer inside the builder's own.
-        run: |
-          set -euo pipefail
-          docker buildx use spin-machine-lab-host 2>/dev/null ||
-            docker buildx create --name spin-machine-lab-host --driver docker-container --driver-opt network=host --use
-          task qemu:qboot OUTPUT_DIR="$SPIN_MACHINE_OUTPUT"
-          # SPIN_LAB_QBOOT=1: every boot of the experiment on the patched qboot instead of
-          # SeaBIOS - the release's firmware directory with bios-256k.bin, the image QEMU loads
-          # for q35, replaced. For report, whose matrix is the machine's whole contract.
-          if [[ "$VARS" == *SPIN_LAB_QBOOT=1* ]]; then
-            fw="$LAB_TREE/firmware-qboot"
-            cp -a "$SPIN_MACHINE_OUTPUT/qemu" "$fw"
-            cp "$SPIN_MACHINE_OUTPUT/qboot/patched/bios.bin" "$fw/bios-256k.bin"
-            echo "FLAGS=${FLAGS:+$FLAGS }--firmware $fw" >> "$GITHUB_ENV"
-          fi
-
       # A release tarball carries no spin-machine, and releaseDir skips without one: built from
       # this checkout into the tree, as report does through its tools dependency.
       - name: Build spin-machine into the release tree

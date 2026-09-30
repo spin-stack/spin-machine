@@ -23,11 +23,12 @@ import (
 // so this measures a small line item and says so: what it is for is deciding whether a
 // firmware can run this machine at all, and only then what it saves.
 //
-// qboot cannot, as it stands. Its ACPI linker-loader implements ALLOCATE, ADD_POINTER and
+// Stock qboot cannot. Its ACPI linker-loader implements ALLOCATE, ADD_POINTER and
 // ADD_CHECKSUM and stops on anything else, and vmgenid needs WRITE_POINTER to tell QEMU
 // where the GUID lives. The symptom is a vCPU halted inside the firmware with not one byte
-// on the console, not even earlyprintk — which is why the stock variant is booted here
-// deliberately and its timeout is the assertion, not a failure.
+// on the console, not even earlyprintk. The qboot built beside QEMU carries the command
+// (qemu/qboot/write-pointer.patch), and this asserts it: the table published and a restored
+// guest reseeded, before anything is timed.
 //
 // The inputs are not release artefacts. The firmware is `task qemu:qboot`'s; the initrd is
 // SPIN_PROBE_INITRD's, or boot/probeinit built into one (probe_initrd_test.go):
@@ -36,11 +37,10 @@ import (
 //	SPIN_PROBE_INITRD=<cpio>     a diagnostic initrd instead of probeinit's; see below
 //	REPS=<n>                     boots per firmware (default 20)
 //
-// The two qboot binaries are read from _output/qboot/, where `task qemu:qboot` writes them,
-// and SPIN_QBOOT_STOCK and SPIN_QBOOT_PATCHED override that. Defaulting rather than
-// requiring them removes a trap worth naming: a relative path in either variable resolves
-// against this package's directory and not the repository root, so `_output/qboot/...` on
-// the command line looked right and pointed at boot/_output.
+// Both firmwares are in the tree's qemu/: bios-256k.bin, the SeaBIOS QEMU ships, and qboot.bin,
+// built beside it with qemu/qboot/write-pointer.patch. SPIN_QBOOT names another qboot to try.
+// A relative path there resolves against this package's directory and not the repository
+// root, so `_output/...` on the command line looks right and points at boot/_output.
 //
 // The initrd is diagnostic input because what runs as PID 1 is not this repository's
 // business. Its /init must mount proc, print any dmesg line matching vmgenid, print
@@ -49,15 +49,14 @@ import (
 // has to be used for both variants or the comparison is between two initrds.
 func TestFirmwareCost(t *testing.T) {
 	if os.Getenv("SPIN_FIRMWARE_PROBE") == "" {
-		t.Skip("set SPIN_FIRMWARE_PROBE=1: this boots dozens of VMs and needs firmware built outside the release")
+		t.Skip("set SPIN_FIRMWARE_PROBE=1: this boots dozens of VMs")
 	}
 	out := releaseDir(t)
 	reps := envInt(t, "REPS", 20)
 
 	bios := map[string]string{
 		"seabios": filepath.Join(out, "qemu", "bios-256k.bin"),
-		"stock":   firmwareFile(t, "SPIN_QBOOT_STOCK", filepath.Join(out, "qboot", "stock", "bios.bin")),
-		"patched": firmwareFile(t, "SPIN_QBOOT_PATCHED", filepath.Join(out, "qboot", "patched", "bios.bin")),
+		"qboot":   firmwareFile(t, "SPIN_QBOOT", filepath.Join(out, "qemu", "qboot.bin")),
 	}
 	p := &probe{
 		out:      out,
@@ -68,32 +67,22 @@ func TestFirmwareCost(t *testing.T) {
 		dir:      t.TempDir(),
 	}
 
-	// One: the machine boots this firmware at all, with vmgenid off. A firmware that cannot
-	// do this is not slow, it is broken, and separating the two is why there are three boots
-	// before any timing.
-	if ms := p.mustReach(t, "stock", noVMGenID, "SPIN-READY"); ms > 0 {
-		t.Logf("stock qboot, no vmgenid: %.1f ms to SPIN-READY", ms)
+	// qboot boots the machine at all, with vmgenid off: a firmware that cannot do this is not
+	// slow, it is broken, and separating the two is why there are boots before any timing.
+	if ms := p.mustReach(t, "qboot", noVMGenID, "SPIN-READY"); ms > 0 {
+		t.Logf("qboot, no vmgenid: %.1f ms to SPIN-READY", ms)
 	}
 
-	// Two: the stock firmware is expected to hang once vmgenid is on. Asserted, because a
-	// stock qboot that booted would mean the WRITE_POINTER story is wrong and every number
-	// below is measuring something else.
-	if ms, err := p.reach(t, "stock", withVMGenID, "SPIN-READY", 3*time.Second); err == nil {
-		t.Fatalf("stock qboot booted with vmgenid in %.1f ms; it implements no WRITE_POINTER, "+
-			"so either the firmware is not the one described or the machine no longer asks "+
-			"for vmgenid", ms)
-	}
-	t.Log("stock qboot, vmgenid on: no console output, as expected")
-
-	// Three: the patched firmware boots, publishes the table, and survives a restore with
-	// the guest noticing. The reseed is the point of vmgenid; a firmware that boots and
-	// loses it is worse than one that does not boot, because nothing says so.
+	// And it publishes vmgenid's table and survives a restore with the guest noticing. The
+	// reseed is the point of vmgenid; a firmware that boots and loses it is worse than one that
+	// does not boot, because nothing says so. Stock qboot is that firmware - its linker loader
+	// stops on WRITE_POINTER - which is what the patch it is built with is for.
 	p.mustPublishVMGenID(t)
 
 	// Only now, the timing. Interleaved for the reason TestBootCost is: a block schedule
 	// hands one variant a slow minute and reads it as a difference.
 	samples := map[string][]float64{}
-	order := []string{"seabios", "patched"}
+	order := []string{"seabios", "qboot"}
 	for range reps {
 		for _, v := range order {
 			ms, err := p.reach(t, v, withVMGenID, "SPIN-READY", 8*time.Second)
@@ -112,7 +101,7 @@ func TestFirmwareCost(t *testing.T) {
 	}
 	// The difference, stated rather than left to the reader: it is the number the decision
 	// turns on, and it is small enough that a reader who has to subtract will round it up.
-	fmt.Fprintf(&b, "\np50 reduction: %.2f ms\n", pct(samples["seabios"], 50)-pct(samples["patched"], 50))
+	fmt.Fprintf(&b, "\np50 reduction: %.2f ms\n", pct(samples["seabios"], 50)-pct(samples["qboot"], 50))
 	t.Log(b.String())
 }
 
@@ -229,7 +218,7 @@ func (p *probe) mustReach(t *testing.T, variant string, gen bool, marker string)
 	return ms
 }
 
-// mustPublishVMGenID boots the patched firmware, saves the machine, restores it into a new
+// mustPublishVMGenID boots qboot, saves the machine, restores it into a new
 // QEMU with a fresh GUID, and requires the guest to say it noticed.
 //
 // The reseed is the whole reason the device is on the machine's command line: two guests
@@ -239,18 +228,18 @@ func (p *probe) mustReach(t *testing.T, variant string, gen bool, marker string)
 // reports a fault.
 func (p *probe) mustPublishVMGenID(t *testing.T) {
 	t.Helper()
-	v := p.start(t, "patched", withVMGenID, "", "", "", "")
+	v := p.start(t, "qboot", withVMGenID, "", "", "", "")
 	ms, err := v.wait("SPIN-READY", 8*time.Second)
 	if err != nil {
 		v.close()
-		t.Fatalf("patched qboot: %v", err)
+		t.Fatalf("qboot: %v", err)
 	}
 	if !strings.Contains(strings.ToLower(string(v.out)), "vmgenid") {
 		v.close()
-		t.Fatalf("patched qboot booted in %.1f ms but the guest saw no VMGENID table; "+
+		t.Fatalf("qboot booted in %.1f ms but the guest saw no VMGENID table; "+
 			"console was:\n%s", ms, tail(v.out, 800))
 	}
-	t.Logf("patched qboot, vmgenid on: %.1f ms to SPIN-READY, table present", ms)
+	t.Logf("qboot, vmgenid on: %.1f ms to SPIN-READY, table present", ms)
 
 	state := filepath.Join(p.dir, "state")
 	q := dial(t, v.qmp, v)
@@ -260,7 +249,7 @@ func (p *probe) mustPublishVMGenID(t *testing.T) {
 	q.close()
 	v.close()
 
-	r := p.start(t, "patched", withVMGenID, state, "", "", "")
+	r := p.start(t, "qboot", withVMGenID, state, "", "", "")
 	defer r.close()
 	q = dial(t, r.qmp, r)
 	defer q.close()
