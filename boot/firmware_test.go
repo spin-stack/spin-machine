@@ -17,7 +17,7 @@ import (
 	"github.com/spin-stack/spin-machine/boot"
 )
 
-// Firmware A/B, against a caller-supplied diagnostic initrd.
+// Firmware A/B, against a diagnostic initrd.
 //
 // The firmware is ~10 ms of vCPU 0's work in a boot that reaches a login in a few hundred,
 // so this measures a small line item and says so: what it is for is deciding whether a
@@ -29,10 +29,11 @@ import (
 // on the console, not even earlyprintk — which is why the stock variant is booted here
 // deliberately and its timeout is the assertion, not a failure.
 //
-// The inputs are not release artefacts and nothing here builds them:
+// The inputs are not release artefacts. The firmware is `task qemu:qboot`'s; the initrd is
+// SPIN_PROBE_INITRD's, or boot/probeinit built into one (probe_initrd_test.go):
 //
 //	SPIN_FIRMWARE_PROBE=1        run at all
-//	SPIN_PROBE_INITRD=<cpio>     a diagnostic initrd; see below
+//	SPIN_PROBE_INITRD=<cpio>     a diagnostic initrd instead of probeinit's; see below
 //	REPS=<n>                     boots per firmware (default 20)
 //
 // The two qboot binaries are read from _output/qboot/, where `task qemu:qboot` writes them,
@@ -62,7 +63,7 @@ func TestFirmwareCost(t *testing.T) {
 		out:      out,
 		firmware: filepath.Join(out, "qemu"),
 		kernel:   filepath.Join(out, "kernel", "vmlinux"),
-		initrd:   envFile(t, "SPIN_PROBE_INITRD"),
+		initrd:   probeInitrd(t),
 		bios:     bios,
 		dir:      t.TempDir(),
 	}

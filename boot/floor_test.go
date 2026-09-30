@@ -27,7 +27,7 @@ import (
 // bounds what this measures — the kernel phase and the launch around it, not a boot.
 //
 //	SPIN_FLOOR_PROBE=1     run at all
-//	SPIN_PROBE_INITRD=<cpio>  the diagnostic initrd, as for task boot:firmware
+//	SPIN_PROBE_INITRD=<cpio>  a diagnostic initrd instead of probeinit's, as for boot:firmware
 //	REPS=<n>               boots per kernel (default 20)
 //
 // The floor kernel is read from _output/kernel-minimal/vmlinux, where `task kernel:minimal`
@@ -45,7 +45,7 @@ func TestKernelFloor(t *testing.T) {
 		out:      out,
 		firmware: filepath.Join(out, "qemu"),
 		kernel:   filepath.Join(out, "kernel", "vmlinux"),
-		initrd:   envFile(t, "SPIN_PROBE_INITRD"),
+		initrd:   probeInitrd(t),
 		bios:     map[string]string{"seabios": filepath.Join(out, "qemu", "bios-256k.bin")},
 		dir:      t.TempDir(),
 	}
