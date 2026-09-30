@@ -10,8 +10,8 @@
 # fixed. A CPU that was added and left offline is a core somebody paid for and cannot use,
 # and there is no arrangement in which the right answer is to leave it offline.
 #
-# Growing is what a workspace does: it starts at the smallest machine that can be restored
-# from a template and is grown to the size that was asked for. Without this the host has to
+# Growing is what a workspace does: it starts at the size it booted with and is grown to the
+# size that was asked for. Without this the host has to
 # reach into the guest over RPC to online each core it just attached, which is a second
 # mechanism doing what the guest's own event handling does, and one that stops being
 # reachable the moment the guest's init hands over to something else.

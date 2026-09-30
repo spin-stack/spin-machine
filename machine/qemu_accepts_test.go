@@ -122,28 +122,6 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 	qemu, firmware := qemuTCG(t)
 	kernel := pvhStub(t)
 
-	// A memory file, and one large enough: memory-backend-file takes the size
-	// from the object and maps the file, so a short one is an error about the
-	// file rather than about the command line.
-	memFile := filepath.Join(t.TempDir(), "memory")
-	if err := os.WriteFile(memFile, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Truncate(memFile, 512<<20); err != nil {
-		t.Fatal(err)
-	}
-	// A published template, which a restoring QEMU may read and not write.
-	sealedMemFile := filepath.Join(t.TempDir(), "sealed-memory")
-	if err := os.WriteFile(sealedMemFile, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Truncate(sealedMemFile, 512<<20); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(sealedMemFile, 0o444); err != nil {
-		t.Fatal(err)
-	}
-
 	base := func() Spec {
 		return Spec{
 			QEMU:     qemu,
@@ -166,29 +144,10 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 		name: "plain",
 		spec: func(s Spec) Spec { return s },
 	}, {
-		// The machine a template is taken from: RAM in a file, mapped shared so
-		// the pages the guest dirties reach the file the restores will read.
-		name: "template source",
-		spec: func(s Spec) Spec {
-			s.Memory.File, s.Memory.Shared = memFile, true
-			return s
-		},
-	}, {
-		// And the machine one is restored into: the same file mapped private,
-		// with no machine state until QMP says where to load it from.
+		// The machine a checkpoint is resumed into: no machine state until QMP says
+		// where to load it from.
 		name: "restore target",
 		spec: func(s Spec) Spec {
-			s.Memory.File = memFile
-			s.IncomingDefer = true
-			return s
-		},
-	}, {
-		// Restored from a file it may not write: a published template, which belongs to
-		// the host and not to the VM. Root would open it anyway, so under root this case
-		// says nothing; the gate runs as a user.
-		name: "restore target, read-only template",
-		spec: func(s Spec) Spec {
-			s.Memory.File = sealedMemFile
 			s.IncomingDefer = true
 			return s
 		},
@@ -274,14 +233,6 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 		// is a readonly= QEMU cannot parse and the socket's is a wait= it obeys.
 		name: "commas in paths",
 		spec: func(s Spec) Spec {
-			mem := filepath.Join(t.TempDir(), "memory,share=on")
-			if err := os.WriteFile(mem, nil, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Truncate(mem, 512<<20); err != nil {
-				t.Fatal(err)
-			}
-			s.Memory.File, s.Memory.Shared = mem, true
 			s.Disks = []Disk{{Path: rawDisk(t, "a,readonly=off.raw"), Format: "raw", Serial: "a,b"}}
 			s.Monitors = []Monitor{{Socket: qmpSocket(t) + ",wait=on"}}
 			return s
@@ -311,12 +262,11 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			return s
 		},
 	}, {
-		// The shape a real VM has, all at once: file-backed RAM, a ceiling, a
-		// vsock, two disks, a NIC and a console.
+		// The shape a real VM has, all at once: a ceiling, a vsock, a disk, a NIC
+		// and a console.
 		name:       "everything",
 		needsVsock: true,
 		spec: func(s Spec) Spec {
-			s.Memory.File, s.Memory.Shared = memFile, true
 			s.Memory.MaxMB, s.MaxCPUs = 2048, 8
 			s.VsockCID = 12345
 			s.Disks = []Disk{

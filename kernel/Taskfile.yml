@@ -4,8 +4,8 @@ version: '3'
 # versions.yaml, and KERNEL_ARCH is the root Taskfile.yml's.
 #
 # A changed kernel is a changed machine: the fingerprint hashes it by content, so every
-# template on every host stops matching. That is the point — it is how a fleet is stopped
-# from restoring a template into a machine of another shape — but it means a config change
+# checkpoint on every host stops resuming. That is the point — it is how a fleet is stopped
+# from resuming a checkpoint into a machine of another shape — but it means a config change
 # here is a fleet-wide event and should be a deliberate commit with a measurement in it.
 
 # The pinned version, for the name of the configuration file menuconfig writes. The builds

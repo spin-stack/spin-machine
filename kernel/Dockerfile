@@ -2,7 +2,7 @@
 #
 # It is here, next to the QEMU binary and the base image, because a kernel and the machine
 # that boots it are one release: `machine.Spec.Fingerprint` hashes this image by content
-# alongside the emulator, so changing either invalidates every template taken against the
+# alongside the emulator, so changing either strands every checkpoint taken against the
 # previous pair. They are coupled by what they are, and storing them apart only hides it.
 #
 # The build depends on no source but its own: a version and a config file.
@@ -12,12 +12,12 @@
 #
 # The config is not stable furniture. Symbols get added and removed for measured reasons —
 # a device a restored VM needs to reseed from, a crypto driver worth milliseconds of boot —
-# and every one of those changes invalidates every template in the fleet. That is the
+# and every one of those changes strands every checkpoint in the fleet. That is the
 # design, and it makes a change here a fleet-wide event rather than a tidy-up.
 #
 # The toolchain is pinned, by the base image's digest and by the date of the Debian archive
 # its packages come from. A different compiler, assembler or pahole is a different vmlinux,
-# which is a different machine fingerprint, which is every template invalidated — so it
+# which is a different machine fingerprint, which is every checkpoint stranded — so it
 # changes when this file says so, and not when Debian publishes a point release. A tag and
 # the live archive gave no such promise: `debian:bookworm` and whatever gcc-12 was current.
 #
@@ -316,7 +316,7 @@ RUN <<EOT
     # 65 ms and acpi_init alone is 10 ms of it — and ACPI is what CPU and memory hotplug
     # ride on, so the big one is not available either.
     #
-    # Anything here also costs a fleet-wide template rebuild: machine.Spec.Fingerprint
+    # Anything here also strands every checkpoint in the fleet: machine.Spec.Fingerprint
     # hashes this kernel by content. 154 us is not the price of the change.
 
     # The memory-management options, which look like the largest remaining candidate and are
@@ -354,13 +354,11 @@ RUN <<EOT
     # present costs its *registration*, not a probe. There is nothing on the bus for it to
     # find. What a driver like that costs is bytes, not time — 14.5 MB of .text in a
     # 33.8 MB vmlinux — and those bytes are read once from the host's page cache (a warm
-    # read of the whole file is under 10 ms, inside a 35 ms launch phase) and then live in
-    # guest RAM that a restored machine maps copy-on-write from one shared memory file per
-    # template. Kernel text is never written, so it stays shared: the cost is once per
-    # host, not once per VM.
+    # read of the whole file is under 10 ms, inside a 35 ms launch phase) and then sit in
+    # each guest's RAM.
     #
     # And the price: CONFIG_MODULES is off entirely today — 1379 symbols =y and 0 =m.
-    # Turning it on is a kernel change, so it invalidates every template once. Then it
+    # Turning it on is a kernel change, so it strands every checkpoint once. Then it
     # leaves a standing hazard, because the fingerprint hashes this kernel by content and
     # modules would live in the image, which it does not hash: two machines could carry the
     # same fingerprint and different modules, and "a release is one machine" would stop

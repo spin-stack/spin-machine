@@ -2,20 +2,20 @@
 
 // Package machine defines the virtual machine this repository builds: which
 // chipset, which devices at which PCI slots, which kernel command line, and how
-// guest RAM is backed.
+// much memory.
 //
 // It lives here, next to the QEMU binary, the kernel and the base image, because
-// those four things are one thing. A VM restored from a template loads device and
-// CPU state into a machine that has to be the same shape as the one the template
-// was frozen from, and nothing checks that at run time. So the shape is not a
+// those four things are one thing. A VM resumed from a checkpoint loads device and
+// CPU state into a machine that has to be the same shape as the one the checkpoint
+// was saved from, and nothing checks that at run time. So the shape is not a
 // detail of whoever launches a VM; it is part of what a release *is*, and it has
 // to move with the binary and the kernel it was written for.
 //
 // The rule that follows: Fingerprint hashes the QEMU binary, the kernel, the initrd
 // and the firmware the guest runs by content, together with the five arguments that
-// decide the machine's shape. Two machines with the same fingerprint can exchange
-// templates. Two with different fingerprints cannot, and a release in which any of
-// those files moved has a different fingerprint by construction.
+// decide the machine's shape. A checkpoint resumes only onto a machine with the
+// fingerprint of the one it was saved on, and a release in which any of those files
+// moved has a different fingerprint by construction.
 //
 // What is here is what a machine is. What is not here is everything about
 // running one: allocating a vsock context id, opening a TAP file descriptor,
@@ -139,19 +139,9 @@ var diskFormats = []string{"qcow2", "raw"}
 // cacheModes are QEMU's -drive cache= values.
 var cacheModes = []string{"none", "writeback", "writethrough", "directsync", "unsafe"}
 
-// MemoryBackendID names the RAM object when guest memory is file-backed.
-//
-// The machine references it by id, and migration matches RAM blocks by name
-// across save and restore, so it must be identical on both sides. It is "pc.ram"
-// because that is what QEMU calls the machine's main RAM block when it creates
-// one itself: keeping the name means a template taken from a machine with
-// anonymous RAM and one taken from a machine with file-backed RAM describe the
-// same block.
-const MemoryBackendID = "pc.ram"
-
 // memGrowthID names the memory a virtio-mem device hands out. It is a separate
-// region from pc.ram: that one is the memory the guest boots with and a template
-// is made of, this one is empty until somebody asks for it.
+// region from pc.ram, the memory the guest boots with: this one is empty until
+// somebody asks for it.
 const memGrowthID = "mem.growth"
 
 // VirtioMemID is the virtio-mem device's id: the QOM path a caller grows and shrinks the VM
@@ -432,24 +422,8 @@ type Memory struct {
 	// afterwards — which is the half that made this worth having.
 	//
 	// Nothing is plugged at start-up. The caller sets requested-size over QMP when
-	// it wants more, which is also what makes one template serve VMs that end up
-	// different sizes: the template is taken with the boot memory and nothing
-	// else, and each restored VM grows on its own.
+	// it wants more.
 	MaxMB int
-	// File backs guest RAM with a file rather than anonymous memory. Empty means
-	// anonymous.
-	//
-	// This is what makes a template possible: the pages a VM dirties land in a
-	// file that other VMs can then map.
-	File string
-	// Shared maps that file MAP_SHARED. A VM being frozen into a template needs
-	// this — the pages it dirties must reach the file the restores will read. A
-	// VM restoring from one passes false, opening the same file read-only and
-	// mapping it MAP_PRIVATE: it sees the template's memory and anything it writes
-	// stays private to it.
-	// That is the whole copy-on-write story, and it is why one template file can
-	// serve many VMs without being copied.
-	Shared bool
 }
 
 // Monitor is one QMP monitor: a Unix socket QEMU creates and listens on, or one the
@@ -505,8 +479,8 @@ type Spec struct {
 	// ceiling is cheaper because it is a different mechanism, one device rather than a slot
 	// per block: `--max-memory 16384` costs 1.0 ms.
 	//
-	// Worth knowing rather than worth avoiding: this is paid when a template is built, and a
-	// restored machine pays none of it. It is the number to reach for when somebody proposes
+	// Worth knowing rather than worth avoiding: this is paid by a boot, and a machine resumed
+	// from a checkpoint pays none of it. It is the number to reach for when somebody proposes
 	// a generous ceiling "since it costs nothing when unused" — it does cost something, and
 	// here is what.
 	MaxCPUs int
@@ -521,11 +495,11 @@ type Spec struct {
 	// through CPUID which instructions exist, and it does not ask again. Restore
 	// it somewhere without AVX-512 and it executes an instruction that is not
 	// there. Fingerprint therefore folds the host's CPU model in when this is
-	// "host", so a template built here does not match a machine elsewhere.
+	// "host", so a checkpoint saved here does not match a machine elsewhere.
 	//
 	// Naming a model instead — "Skylake-Server-v4", "EPYC-Rome-v3", whichever is
 	// the oldest microarchitecture in the fleet — gives every host the same guest
-	// CPU, so templates cross hosts and the host model drops out of the
+	// CPU, so checkpoints cross hosts and the host model drops out of the
 	// fingerprint. The cost is that guests never see anything newer than the
 	// model names, on any machine.
 	//
@@ -551,7 +525,7 @@ type Spec struct {
 	// TCG can present — QEMU refuses it with "CPU model 'host' requires KVM or HVF" — so
 	// the default below is "max" here and "host" under KVM.
 	//
-	// Templates do not cross the two, and nothing extra is needed to keep them apart: the
+	// Checkpoints do not cross the two, and nothing extra is needed to keep them apart: the
 	// fingerprint hashes the QEMU binary by content, and the TCG build is a different file.
 	// This lands in the shape as well, which makes the separation visible in an argument
 	// rather than only in a hash.
@@ -577,7 +551,7 @@ type Spec struct {
 	//
 	// The controller is in the fingerprint and the count is not: every position is a
 	// target of the same controller, so machines that differ only in how many disks they
-	// may be given share a template.
+	// may be given have one fingerprint, and raising the count strands no checkpoint.
 	HotplugDisks int
 
 	// VsockCID, when non-zero, gives the machine a vhost-vsock device with that
@@ -592,7 +566,7 @@ type Spec struct {
 
 	// KVMFDSet is /dev/kvm as a descriptor set, for the same QEMU. Only under KVM, which
 	// is the accelerator that opens a device. The shape still says kvm: where the
-	// accelerator's descriptor came from is not the machine a template is loaded into, so
+	// accelerator's descriptor came from is not the machine a checkpoint is loaded into, so
 	// it is added to -accel by Args and is in neither Shape nor the fingerprint.
 	KVMFDSet int
 
@@ -632,13 +606,10 @@ type Spec struct {
 	Cmdline Cmdline
 
 	// IncomingDefer starts QEMU with no machine state, waiting to be told over
-	// QMP where to load it from.
-	//
-	// Deferred and not a URI on the command line, because a restore that keeps
-	// the guest's RAM in the memory file needs the x-ignore-shared capability
-	// agreed before the first byte is read, and there is no way to pass a
-	// migration capability to exec. Whoever drives that owns the lifecycle; this
-	// is the machine argument they need.
+	// QMP where to load it from (migrate-incoming): how a checkpoint is resumed by
+	// a caller that starts the machine before it has the state in hand, or wants a
+	// word with QEMU before the first byte is read. Whoever drives that owns the
+	// lifecycle; this is the machine argument they need.
 	IncomingDefer bool
 
 	// Incoming names that source at exec time instead — a migration URI, most
@@ -657,11 +628,11 @@ type Spec struct {
 //
 // It is one type with one constructor because it has two consumers that must
 // never disagree: the command line QEMU is given, and the fingerprint that
-// decides which templates this machine may restore from. If the fingerprint
-// stopped describing the command line, a VM would restore from a template of
-// another machine and the failure would be silent. Args passes each field as it
-// is; the only thing it adds is where /dev/kvm came from (KVMFDSet), which is the
-// host's business and not the guest's.
+// decides which checkpoints this machine may resume. If the fingerprint stopped
+// describing the command line, a VM would resume a checkpoint of another machine
+// and the failure would be silent. Args passes each field as it is; the only thing
+// it adds is where /dev/kvm came from (KVMFDSet), which is the host's business and
+// not the guest's.
 type Shape struct {
 	Machine string
 	Accel   string
@@ -670,11 +641,8 @@ type Shape struct {
 	Memory  string
 }
 
-// shape returns the machine's shape.
-//
-// It reports the shape of a machine with *file-backed* RAM whenever the spec has
-// a memory file, because that changes the machine string.
-func (s Spec) shape() Shape {
+// Shape returns the machine's shape, which is the one Args runs and Fingerprint hashes.
+func (s Spec) Shape() Shape {
 	accel := s.accel()
 	cpu := s.CPU
 	if cpu == "" {
@@ -731,7 +699,7 @@ func (s Spec) shape() Shape {
 	cpu += ",-vmx,-svm"
 
 	return Shape{
-		Machine: s.machineOpts(),
+		Machine: machineOpts,
 		Accel:   accel,
 		CPU:     cpu,
 		SMP:     smpArg(s.BootCPUs, s.MaxCPUs),
@@ -752,65 +720,56 @@ func (s Spec) accel() string {
 // descriptor (KVMFDSet), and QEMU refuses the two together — "The -accel and
 // "-machine accel=" options are incompatible" (11.1.1). One form for every machine is
 // one string for the fingerprint to hash and the command line to carry.
-func (s Spec) machineOpts() string {
-	backend := ""
-	if s.Memory.File != "" {
-		backend = "memory-backend=" + MemoryBackendID
-	}
-
-	// hpet=off: the HPET is a timer the guest would enumerate, initialise and
-	// then not use, because a KVM guest reads the TSC and the KVM clock.
-	// kernel-irqchip=on keeps interrupt delivery in the kernel rather than
-	// bouncing every one through userspace. acpi=on is not optional: vmgenid
-	// reaches the guest through an ACPI table, vCPU hotplug through the DSDT's
-	// processor objects, and the kernel finds the PCIe config space (MCFG) and
-	// the interrupt routing (_PRT) there. PCI hotplug is not ACPI's (see the
-	// ICH9-LPC globals below), nor is memory growth, which is virtio-mem.
-	//
-	// sata=off and smbus=off remove the two ICH9 functions a q35 builds beside
-	// the LPC bridge and this machine has no use for: an AHCI controller at
-	// 00:1f.2, on a kernel built without CONFIG_ATA, and an SMBus controller at
-	// 00:1f.3 with eight SPD EEPROMs behind it, on a kernel with no i2c bus
-	// driver to reach them. Both were on the bus with no driver bound, and the
-	// guest paid for enumerating them, for their BARs and for their I/O windows
-	// (0x0700-0x073f and 0xc040-0xc05f, gone from the guest's /proc/ioports).
-	//
-	// Kernel to init, medians of 400 boots each, measured 2026-09-08 on the KVM
-	// binary: 62.3 ms as it was, 61.3 ms with sata=off, 61.7 ms with smbus=off,
-	// 60.6 ms with both. Nothing else moved — the guest's PCI list loses exactly
-	// those two functions, the remaining BARs shift down by the page the AHCI
-	// controller had, and a boot onto the real root filesystem still reaches its
-	// init.
-	//
-	// Four more machine options were measured the same way and are deliberately
-	// not here, because each bought nothing (same date, 300 boots per variant,
-	// medians against a 62.9 ms baseline whose run-to-run spread was ±2 ms):
-	//
-	//   - usb=off, 63.0 ms, is a no-op twice over. This q35 already reports
-	//     /machine usb false, and the binary is built from qemu/devices.mak with
-	//     no USB controller in it at all, so usb=on is not even startable here:
-	//     "unknown type 'ich9-usb-ehci1'".
-	//   - vmport=off, 62.6 ms. The VMware backdoor port is emulated but never
-	//     touched: nothing in the guest's /proc/ioports claims it, because a
-	//     Linux guest decides whether to talk to it from CPUID and this one
-	//     finds KVM.
-	//   - smm=off, 62.3 ms. The scepticism it deserves is what makes it a
-	//     no-change: this machine enters a PVH ELF kernel directly, has no
-	//     pflash and no OVMF, and the 0.6 ms is inside the noise, so the option
-	//     would be carrying an interaction with firmware nobody here has for a
-	//     number that cannot be told from zero.
-	//   - i8042=off, 62.5 ms. It does remove the PS/2 controller, its two ports
-	//     and port92 — 92 bytes off the DSDT is the whole visible effect — and
-	//     the kernel has no CONFIG_SERIO_I8042 to probe any of it with.
-	//
-	// kernel-irqchip=on stays under either accelerator. It names KVM's in-kernel interrupt
-	// controller and TCG has none, but QEMU accepts the option and ignores it rather than
-	// refusing — measured against 11.1.1 — so the shape is one string and not two.
-	return strings.Join(nonEmpty(
-		"q35", "kernel-irqchip=on", "hpet=off", "acpi=on",
-		"sata=off", "smbus=off", backend,
-	), ",")
-}
+//
+// hpet=off: the HPET is a timer the guest would enumerate, initialise and
+// then not use, because a KVM guest reads the TSC and the KVM clock.
+// kernel-irqchip=on keeps interrupt delivery in the kernel rather than
+// bouncing every one through userspace. acpi=on is not optional: vmgenid
+// reaches the guest through an ACPI table, vCPU hotplug through the DSDT's
+// processor objects, and the kernel finds the PCIe config space (MCFG) and
+// the interrupt routing (_PRT) there. PCI hotplug is not ACPI's (see the
+// ICH9-LPC globals below), nor is memory growth, which is virtio-mem.
+//
+// sata=off and smbus=off remove the two ICH9 functions a q35 builds beside
+// the LPC bridge and this machine has no use for: an AHCI controller at
+// 00:1f.2, on a kernel built without CONFIG_ATA, and an SMBus controller at
+// 00:1f.3 with eight SPD EEPROMs behind it, on a kernel with no i2c bus
+// driver to reach them. Both were on the bus with no driver bound, and the
+// guest paid for enumerating them, for their BARs and for their I/O windows
+// (0x0700-0x073f and 0xc040-0xc05f, gone from the guest's /proc/ioports).
+//
+// Kernel to init, medians of 400 boots each, measured 2026-09-08 on the KVM
+// binary: 62.3 ms as it was, 61.3 ms with sata=off, 61.7 ms with smbus=off,
+// 60.6 ms with both. Nothing else moved — the guest's PCI list loses exactly
+// those two functions, the remaining BARs shift down by the page the AHCI
+// controller had, and a boot onto the real root filesystem still reaches its
+// init.
+//
+// Four more machine options were measured the same way and are deliberately
+// not here, because each bought nothing (same date, 300 boots per variant,
+// medians against a 62.9 ms baseline whose run-to-run spread was ±2 ms):
+//
+//   - usb=off, 63.0 ms, is a no-op twice over. This q35 already reports
+//     /machine usb false, and the binary is built from qemu/devices.mak with
+//     no USB controller in it at all, so usb=on is not even startable here:
+//     "unknown type 'ich9-usb-ehci1'".
+//   - vmport=off, 62.6 ms. The VMware backdoor port is emulated but never
+//     touched: nothing in the guest's /proc/ioports claims it, because a
+//     Linux guest decides whether to talk to it from CPUID and this one
+//     finds KVM.
+//   - smm=off, 62.3 ms. The scepticism it deserves is what makes it a
+//     no-change: this machine enters a PVH ELF kernel directly, has no
+//     pflash and no OVMF, and the 0.6 ms is inside the noise, so the option
+//     would be carrying an interaction with firmware nobody here has for a
+//     number that cannot be told from zero.
+//   - i8042=off, 62.5 ms. It does remove the PS/2 controller, its two ports
+//     and port92 — 92 bytes off the DSDT is the whole visible effect — and
+//     the kernel has no CONFIG_SERIO_I8042 to probe any of it with.
+//
+// kernel-irqchip=on stays under either accelerator. It names KVM's in-kernel interrupt
+// controller and TCG has none, but QEMU accepts the option and ignores it rather than
+// refusing — measured against 11.1.1 — so the shape is one string and not two.
+const machineOpts = "q35,kernel-irqchip=on,hpet=off,acpi=on,sata=off,smbus=off"
 
 // accelArg is -accel: the accelerator, and under KVM the descriptor set /dev/kvm is in
 // when the caller opened it (validate refuses one for any other accelerator).
@@ -822,26 +781,10 @@ func accelArg(accel string, kvmFDSet int) string {
 }
 
 // derivedFromHost reports whether a CPU model takes its feature set from the
-// silicon it runs on, which is what makes a template built with it unusable on
+// silicon it runs on, which is what makes a checkpoint saved with it unusable on
 // another machine — and what migratable=on applies to.
 func derivedFromHost(model string) bool {
 	return model == "host" || model == "max"
-}
-
-// TemplateShape is the shape a template of this machine is taken from, which is
-// the shape Fingerprint hashes.
-//
-// It is Shape with RAM always file-backed, whatever this spec was configured
-// with. Every template and every VM restored from one has its memory in a file,
-// so the lookup that decides whether a VM may restore has to give the same
-// answer for a VM that has not been given a memory file yet — otherwise a VM
-// could never find the template it would itself produce.
-func (s Spec) TemplateShape() Shape {
-	forTemplate := s
-	if forTemplate.Memory.File == "" {
-		forTemplate.Memory.File = "-"
-	}
-	return forTemplate.shape()
 }
 
 func smpArg(bootCPUs, maxCPUs int) string {
@@ -862,16 +805,6 @@ func memoryArg(sizeMB, maxMB int) string {
 		return fmt.Sprintf("%d,maxmem=%dM", sizeMB, maxMB)
 	}
 	return fmt.Sprintf("%d", sizeMB)
-}
-
-func nonEmpty(values ...string) []string {
-	kept := make([]string, 0, len(values))
-	for _, v := range values {
-		if v != "" {
-			kept = append(kept, v)
-		}
-	}
-	return kept
 }
 
 // validate reports what is wrong with a spec, before a command line is built
@@ -917,8 +850,6 @@ func (s Spec) validate() error {
 		return fmt.Errorf("both IncomingDefer and Incoming %q: -incoming takes one form", s.Incoming)
 	case s.Memory.SizeMB < 1:
 		return fmt.Errorf("memory is %d MB", s.Memory.SizeMB)
-	case s.Memory.Shared && s.Memory.File == "":
-		return errors.New("Memory.Shared with no Memory.File to share")
 	case len(s.Disks) > maxDisks:
 		return fmt.Errorf("%d disks, and the slot range holds %d", len(s.Disks), maxDisks)
 	case len(s.NICs) > maxNICs:
@@ -1042,7 +973,7 @@ func (s Spec) Args() ([]string, error) {
 		return nil, err
 	}
 
-	shape := s.shape()
+	shape := s.Shape()
 	args := make([]string, 0, 64)
 	args = append(args,
 		"-L", s.Firmware,
@@ -1068,7 +999,6 @@ func (s Spec) Args() ([]string, error) {
 		"-smp", shape.SMP,
 		"-m", shape.Memory,
 	)
-	args = s.appendMemory(args)
 	args = appendChipset(args)
 	args = s.appendBoot(args)
 	args = s.appendDevices(args)
@@ -1085,25 +1015,6 @@ func (s Spec) Args() ([]string, error) {
 // Args calls them in a fixed order so that the same spec is the same command line, byte
 // for byte. Appending into one slice rather than returning a slice each keeps the
 // command line in one backing array rather than one per part.
-
-// appendMemory is the object that backs guest RAM, when it is a file.
-func (s Spec) appendMemory(args []string) []string {
-	if s.Memory.File != "" {
-		// A restore opens the file read-only. QEMU otherwise opens it read-write even to
-		// map it private, so every VM restored from a template could write the template
-		// the next one restores from — and a QEMU that is not root cannot open it at all,
-		// the file being its host's and not the VM's. rom=off keeps the guest's RAM
-		// writable: its writes land in its private copy, which is what share=off meant.
-		backing := "share=off,readonly=on,rom=off"
-		if s.Memory.Shared {
-			backing = "share=on"
-		}
-		args = append(args, "-object",
-			fmt.Sprintf("memory-backend-file,id=%s,size=%dM,mem-path=%s,%s",
-				MemoryBackendID, s.Memory.SizeMB, qemuOpt(s.Memory.File), backing))
-	}
-	return args
-}
 
 // appendChipset is the chipset's globals and what a reset does, which no spec changes.
 func appendChipset(args []string) []string {
@@ -1151,12 +1062,12 @@ func (s Spec) appendBoot(args []string) []string {
 func (s Spec) appendDevices(args []string) []string {
 	// The VM Generation ID, whose value QEMU randomises for every VM it starts.
 	//
-	// It exists for restores. Every VM restored from a template starts with the
-	// template's memory, which includes the state of the guest's random pool:
-	// two guests restored from the same template would otherwise produce the
-	// same "random" bytes until something reseeded them. The kernel watches this
-	// device and reseeds when the value it sees differs from the one in the
-	// memory it woke up with, which is exactly this case.
+	// It exists for restores. A VM resumed from a checkpoint starts with the
+	// checkpoint's memory, which includes the state of the guest's random pool: two
+	// guests resumed from one checkpoint, or one resumed twice, would otherwise
+	// produce the same "random" bytes until something reseeded them. The kernel
+	// watches this device and reseeds when the value it sees differs from the one in
+	// the memory it woke up with, which is exactly this case.
 	args = append(args, "-device", "vmgenid,guid=auto")
 
 	args = append(args, "-device",
@@ -1171,20 +1082,13 @@ func (s Spec) appendDevices(args []string) []string {
 	//
 	// free-page-reporting rather than a host-driven target: the guest reports
 	// pages it has genuinely freed and QEMU discards them, continuously and with
-	// nobody deciding a number. On file-backed memory that is a hole punched in
-	// the file, so the host gets the pages back rather than only the mapping. The
-	// guest half is CONFIG_PAGE_REPORTING, which this kernel has.
+	// nobody deciding a number. The guest half is CONFIG_PAGE_REPORTING, which
+	// this kernel has.
 	//
 	// deflate-on-oom is the safety valve for the other direction: a guest about
 	// to kill a process for want of memory takes some back from the balloon
 	// first. It costs nothing when nothing is inflated, and the alternative is a
 	// build dying with the host holding memory this VM had already earned.
-	//
-	// It is safe with templates, which is the part worth writing down. A VM being
-	// frozen maps its memory file share=on, so reporting punches holes in the very
-	// file that becomes the template — and that is fine, and slightly good: a
-	// reported page is one the guest considers free, its content is not relied
-	// upon, and it reads back as zero on restore. The template ends up sparser.
 	args = append(args, "-device",
 		fmt.Sprintf("virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on,%s,addr=0x%x",
 			virtioModern, slotBalloon))
@@ -1201,16 +1105,8 @@ func (s Spec) appendDevices(args []string) []string {
 	// virtio-mem, when this VM is allowed to grow: the region between its boot
 	// memory and its ceiling, present as a device and empty.
 	//
-	// requested-size=0 — nothing is plugged until somebody asks over QMP. That is
-	// what lets one template serve VMs of different final sizes: it is taken with
-	// the boot memory and an empty device, and each restored VM grows on its own.
-	//
-	// memory-backend-ram and not a file, unlike the boot memory. The boot memory
-	// is file-backed because a template *is* that file; this region is empty when
-	// a template is taken, so a second file would be a second empty file to
-	// manage. What is plugged at freeze time goes through the migration stream
-	// instead, which is correct and only matters for a template taken from a VM
-	// that had already grown.
+	// requested-size=0 — nothing is plugged until somebody asks over QMP. What is
+	// plugged when a checkpoint is saved goes into it with the rest of the memory.
 	if s.Memory.MaxMB > s.Memory.SizeMB {
 		growth := s.Memory.MaxMB - s.Memory.SizeMB
 		args = append(args,
@@ -1356,20 +1252,16 @@ func (s Spec) bios() string {
 //
 // It hashes the QEMU binary, the kernel, the initrd and the firmware the guest
 // runs (the BIOS and pvh.bin) — the files, not their paths — together with the
-// five arguments that decide the machine's shape. Two
-// machines with the same fingerprint present the same thing to a guest and can
-// exchange templates; two with different fingerprints cannot, and a restore
-// across them is undefined rather than an error.
+// five arguments that decide the machine's shape. Two machines with the same
+// fingerprint present the same thing to a guest, and a checkpoint saved on one
+// resumes on the other; across two with different fingerprints a resume is
+// undefined rather than an error, because QEMU does not check it.
 //
 // The consequence is deliberate: a release in which any of those files moved
-// has a different fingerprint, so every template taken against the previous one
-// stops matching and is rebuilt. That is the design. A template restored into a
-// machine of another shape is memory and device state loaded into hardware that
-// is not the hardware it came from.
-//
-// The shape is always taken as if RAM were file-backed, because a template and
-// every VM restored from one have their memory in a file whatever the spec being
-// asked was configured with.
+// has a different fingerprint, so every checkpoint taken against the previous one
+// stops resuming. That is the design. A checkpoint resumed into a machine of
+// another shape is memory and device state loaded into hardware that is not the
+// hardware it came from.
 func (s Spec) Fingerprint() (string, error) {
 	return s.fingerprint(hostCPUModel)
 }
@@ -1425,7 +1317,7 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 // files: the machine's shape, its device topology, and the host's own CPU when the
 // guest is being shown it.
 func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
-	shape := s.TemplateShape()
+	shape := s.Shape()
 
 	var b strings.Builder
 	write := func(key, value string) {
@@ -1441,16 +1333,16 @@ func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 	// The host's own CPU, but only when the guest is being shown it.
 	//
 	// Under model "host" the guest is told through CPUID exactly which
-	// instructions this silicon has, and it never asks again — so a template
-	// taken here describes a CPU the next machine may not have, and restoring it
+	// instructions this silicon has, and it never asks again — so a checkpoint
+	// saved here describes a CPU the next machine may not have, and resuming it
 	// there is a guest executing an instruction that does not exist. Nothing
 	// about the QEMU binary, the kernel or the five shape arguments differs
-	// between two hosts, so without this a Zen 4 template and a Skylake template
+	// between two hosts, so without this a Zen 4 checkpoint and a Skylake one
 	// have the same fingerprint and each machine happily accepts the other's.
 	//
 	// Under a named model it is deliberately left out: every host shows the guest
 	// the same CPU, which is the entire point of naming one, and folding the host
-	// in would partition templates per machine for no reason.
+	// in would pin checkpoints to the machine they were saved on for no reason.
 	if model, _, _ := strings.Cut(shape.CPU, ","); derivedFromHost(model) {
 		cpu, err := hostCPU()
 		if err != nil {
@@ -1467,38 +1359,27 @@ func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 // everything about *this* VM removed: no paths, no file descriptors, no context
 // id, no MAC.
 //
-// It is in the fingerprint because a restore loads device state into a machine
-// that has to have the same devices, and without it the fingerprint answers the
-// question wrongly in both directions. Adding a device to this package changes
-// what a template may restore into and would not have moved the hash — a
-// balloon was added at slot 0x04 and every existing template would have gone on
-// matching a machine it can no longer be restored into. And two VMs given
-// different numbers of disks have different device state and had the same
-// fingerprint, so one could be handed the other's template.
+// It is in the fingerprint because a resume loads device state into a machine
+// that has to have the same devices. Adding a device to this package changes what
+// a checkpoint may resume into, and without this it would not move the hash — a
+// balloon was added at slot 0x04, and every existing saved state would have gone
+// on matching a machine it can no longer be loaded into.
 //
 // What is deliberately not in it: the backing files and the identifiers, and the
-// disks and NICs themselves.
+// disks.
 //
-// The files and identifiers, because two VMs with one disk each are the same
-// machine whether that disk is a database or a scratch overlay — that is the
-// whole reason a template is worth having. Each of the three is a thing a
-// restore is known to be allowed to differ in, and each for its own reason: the
-// vsock context id is not carried in the migration stream at all, and the guest
-// re-reads it when QEMU resets the transport after the restore; a disk is
-// cold-plugged onto the running guest afterwards and found with a PCI rescan;
-// and what sits behind a NIC is a host-side file descriptor the guest never
-// sees. What is present here is the device *model at its slot*, which is what
-// the state being loaded describes.
+// The files and identifiers, because each is a thing a resume is known to be
+// allowed to differ in, and each for its own reason: the vsock context id is not
+// carried in the migration stream at all, and the guest re-reads it when QEMU
+// resets the transport after the resume; a disk's contents are whatever file the
+// resuming machine opens; and what sits behind a NIC is a host-side file
+// descriptor the guest never sees. What is present here is the device *model at
+// its slot*, which is what the state being loaded describes.
 //
-// The disks and NICs, because a machine restored from a template does not have
-// them yet. A template is built from the emptiest VM there is — it does not know
-// which workload it will become — and each restored VM is given its disks and its
-// address afterwards, cold-plugged onto a guest that is already running. So the
-// device set that has to match is the one present when the state is loaded, and
-// counting disks here would mean a VM never finding the template it should
-// restore from.
-//
-// The devices below are the ones that are there at that moment, on both sides.
+// The disks, because they are the VM's and not the machine's. A fingerprint names
+// what a host runs, and a host computes it before any VM exists to say how many
+// disks it has; a checkpoint is resumed with the disks it was saved with, and
+// supplying them is the resuming caller's part of the contract.
 func (s Spec) topology() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", slotRNG, slotBalloon)
@@ -1515,34 +1396,29 @@ func (s Spec) topology() string {
 	if s.Serial != "" || s.SerialFDSet != 0 {
 		b.WriteString(";isa-serial")
 	}
-	// The hotplug controller, which is a device present when the state is loaded even
-	// though the disks it is for are not. How many it may be given is not here: they are
-	// targets on the one controller, and not devices on the bus.
+	// The hotplug controller, which is on the command line whatever it is given. How many
+	// disks it may be given is not here: they are targets on the one controller, and not
+	// devices on the bus.
 	if s.HotplugDisks > 0 {
 		fmt.Fprintf(&b, ";virtio-scsi-pci@%#x", slotHotplug)
 	}
 	// The NICs, by how many and where, and deliberately not by MAC or by descriptor.
 	//
 	// A NIC is on the command line when the machine starts, so it is present when state is
-	// loaded, and a template frozen from a machine without one cannot be loaded into a
-	// machine that has one. That is the same rule as the hotplug controller above, and the reason
-	// disks are *not* here is the reverse of it: a disk is added after the restore, so a
-	// machine that will be given one looks exactly like the template it came from.
+	// loaded, and a checkpoint saved on a machine without one cannot be loaded into a
+	// machine that has one.
 	//
 	// What is left out matters as much. A descriptor number is not the machine's shape —
 	// it is which file the backend reads, the way a disk's path is — and the MAC is a
 	// property of the device rather than of the bus. Both are left out so that machines
-	// which differ only in those two share one template, which is what lets a host keep
-	// one and start every VM from it. A caller that wants distinct MACs pays for it in
-	// templates, and should not: give each machine a segment of its own instead.
+	// which differ only in those two have one fingerprint.
 	//
 	// The MTU is here, unlike those two, because it is not a setting on the backend: it
 	// is VIRTIO_NET_F_MTU, negotiated at probe and carried in the migration stream, so a
-	// template frozen with it announced cannot be loaded into a machine that does not
-	// announce it, or announces another value. It costs nothing to include — the MTU is
-	// the uplink's, one per node, and a node keeps its own templates — and including it
-	// turns "the operator changed the MTU" into a template that is rebuilt rather than a
-	// restore that fails.
+	// checkpoint saved with it announced cannot be loaded into a machine that does not
+	// announce it, or announces another value. Including it turns "the operator changed
+	// the MTU" into a checkpoint that is refused before the load rather than a resume
+	// that fails.
 	if len(s.NICs) > 0 {
 		fmt.Fprintf(&b, ";virtio-net-pci@%#x*%d", slotNICBase, len(s.NICs))
 		for _, n := range s.NICs {
@@ -1553,11 +1429,11 @@ func (s Spec) topology() string {
 }
 
 // hostCPUModel reports the host CPU's model name, which model "host" makes part
-// of what a template describes.
+// of what a checkpoint describes.
 //
 // The model name and not the feature flags. The flags would be the exact thing —
 // they are what the guest is shown — but they also move with microcode updates
-// and kernel mitigations, so hashing them would invalidate every template on a
+// and kernel mitigations, so hashing them would strand every checkpoint on a
 // machine that has not meaningfully changed. The model is the coarse identity
 // that separates one host's silicon from another's, which is what this is for.
 //

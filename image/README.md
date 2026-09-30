@@ -32,8 +32,8 @@ grown from the image onto a larger disk would keep 5% of the larger size.
   existence — silently, because the overlays keep working until they read a cluster that
   moved. It is written `0444`, and `task shell` checks its checksum across a boot.
 - **No identity in the image.** No hostname, no machine-id, no `/etc/resolv.conf`, no SSH
-  host keys, no random seed. A VM restored from a frozen template is handed its identity
-  afterwards; anything baked in is shared by every VM that ever boots from it.
+  host keys, no random seed. A VM is handed its identity by whoever runs it; anything
+  baked in is shared by every VM that ever boots from it.
   `build.sh` asserts each of these on the finished filesystem — `/etc/machine-id` present
   and *empty*, everything else absent.
 

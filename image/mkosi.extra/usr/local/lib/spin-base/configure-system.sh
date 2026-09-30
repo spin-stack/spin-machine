@@ -88,7 +88,7 @@ EOF
 # -------------------------------------------------
 # The distribution's goes, all of it: scripts that check for available updates, count
 # reboots and advertise a support subscription — network calls and package queries in a
-# machine that is restored from a template and thrown away.
+# machine that is started, does one piece of work and is thrown away.
 #
 # What replaces it is one line that says how long this machine took to boot.
 #
@@ -124,7 +124,7 @@ sed -i 's/^#\(session.*pam_motd.so\)/\1/' /etc/pam.d/sshd
 # 7. The distribution's background maintenance
 # -------------------------------------------------
 # Ubuntu ships five timers enabled. Four of them have no business in a machine that is
-# restored from a template, does one piece of work and is thrown away.
+# started, does one piece of work and is thrown away.
 #
 # apt-daily and apt-daily-upgrade are the two that produce a failure rather than merely
 # spending time: they run `apt.systemd.daily update` and `install`, which take the apt and
@@ -144,11 +144,9 @@ sed -i 's/^#\(session.*pam_motd.so\)/\1/' /etc/pam.d/sshd
 # TRIM reaches the qcow2 overlay and gives its blocks back to the host: it is the one of
 # the five that returns something.
 #
-# All five carry Persistent=true, and that is what makes this a restore problem rather
-# than only a boot-time one. The stamps live in /var/lib/systemd/timers, so they are the
-# template's; a VM restored from a template that sat on disk for a week is a machine with
-# a week of missed runs to catch up on, and it catches up at the moment it is handed a
-# workload.
+# All five carry Persistent=true, so they catch up on what they missed: a VM resumed from
+# a checkpoint that sat on disk for a week is a machine with a week of missed runs to catch
+# up on, and it catches up at the moment it is handed a workload.
 #
 # Masked and not merely disabled: a symlink to /dev/null survives a package upgrade
 # putting the unit's own [Install] symlink back. image/build.sh asserts each one.

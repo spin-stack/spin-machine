@@ -71,10 +71,9 @@ func (m *monitor) commands(t *testing.T) []qmpRequest {
 const ok = `{"return": {}}`
 
 // save and restore, against a monitor that answers as QEMU does: what each sends, and what it
-// makes of the answers. A real QEMU does the same in boot/restore_bench_test.go, under KVM.
+// makes of the answers.
 func TestSaveAndRestoreSayWhatQEMUNeeds(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "vm.state")
-	shared := `{"return": [{"id": "pc.ram", "share": true, "size": 536870912}]}`
 	completed := `{"return": {"status": "completed"}}`
 	active := `{"return": {"status": "active"}}`
 
@@ -90,21 +89,6 @@ func TestSaveAndRestoreSayWhatQEMUNeeds(t *testing.T) {
 		replies: []string{ok, ok, active, completed, ok},
 		do:      func(s string) error { return save(saveFlags{qmp: s, to: state, timeout: time.Minute}) },
 		want:    []string{"migrate", "query-migrate", "query-migrate", "quit"},
-	}, {
-		name:    "a template stops the VM with the capability set, before it migrates",
-		replies: []string{ok, shared, ok, ok, ok, completed, ok},
-		do: func(s string) error {
-			return save(saveFlags{qmp: s, to: state, template: true, timeout: time.Minute})
-		},
-		want: []string{"query-memdev", "migrate-set-capabilities", "stop", "migrate", "query-migrate", "quit"},
-	}, {
-		name:    "a template of RAM that is not shared is refused before anything else",
-		replies: []string{ok, `{"return": [{"id": "pc.ram", "share": false}]}`},
-		do: func(s string) error {
-			return save(saveFlags{qmp: s, to: state, template: true, timeout: time.Minute})
-		},
-		want:    []string{"query-memdev"},
-		wantErr: "not a shared pc.ram",
 	}, {
 		name:    "a save QEMU could not finish says why",
 		replies: []string{ok, ok, `{"return": {"status": "failed", "error-desc": "No space left on device"}}`},
@@ -124,12 +108,10 @@ func TestSaveAndRestoreSayWhatQEMUNeeds(t *testing.T) {
 		want:    []string{"migrate"},
 		wantErr: "starting the save",
 	}, {
-		name:    "a template restore sets the capability, loads, and continues a VM that arrives paused",
-		replies: []string{ok, ok, ok, completed, `{"return": {"status": "paused"}}`, ok},
-		do: func(s string) error {
-			return restore(restoreFlags{qmp: s, from: state, template: true, timeout: time.Minute})
-		},
-		want: []string{"migrate-set-capabilities", "migrate-incoming", "query-migrate", "query-status", "cont"},
+		name:    "a restore loads, and continues a VM that arrives paused",
+		replies: []string{ok, ok, completed, `{"return": {"status": "paused"}}`, ok},
+		do:      func(s string) error { return restore(restoreFlags{qmp: s, from: state, timeout: time.Minute}) },
+		want:    []string{"migrate-incoming", "query-migrate", "query-status", "cont"},
 	}, {
 		name:    "a VM that arrives running is not continued",
 		replies: []string{ok, ok, completed, `{"return": {"status": "running"}}`},
@@ -172,18 +154,13 @@ func TestSaveAndRestoreSayWhatQEMUNeeds(t *testing.T) {
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("asked %v, want %v", got, tc.want)
 			}
-			// The file named is the one given, absolute, in QEMU's file: form; and the
-			// capability is the one both sides of a template must agree on.
+			// The file named is the one given, absolute, in QEMU's file: form.
 			for _, r := range asked {
-				switch r.Execute {
-				case "migrate", "migrate-incoming":
-					if uri := r.Arguments["uri"]; uri != "file:"+state {
-						t.Errorf("%s to %v, want file:%s", r.Execute, uri, state)
-					}
-				case "migrate-set-capabilities":
-					if b, _ := json.Marshal(r.Arguments); !strings.Contains(string(b), `"capability":"x-ignore-shared","state":true`) {
-						t.Errorf("capabilities %s, want x-ignore-shared on", b)
-					}
+				if r.Execute != "migrate" && r.Execute != "migrate-incoming" {
+					continue
+				}
+				if uri := r.Arguments["uri"]; uri != "file:"+state {
+					t.Errorf("%s to %v, want file:%s", r.Execute, uri, state)
 				}
 			}
 		})
@@ -237,7 +214,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 	every.BIOS = "bios-256k.bin"
 	every.CPU, every.BootCPUs, every.MaxCPUs = "Skylake-Server-v4", 3, 8
 	every.Accel = "tcg"
-	every.Memory = machine.Memory{SizeMB: 1024, MaxMB: 4096, File: "/m", Shared: true}
+	every.Memory = machine.Memory{SizeMB: 1024, MaxMB: 4096}
 	every.HotplugDisks, every.VsockCID = 2, 7
 	every.Monitors = []machine.Monitor{{Socket: "/qmp"}}
 	every.Incoming = "file:/s"
@@ -270,7 +247,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 		{"everything given", []string{"--qemu", "/q", "--kernel", "/k", "--initrd", "/i", "--firmware", "/f", "--bios", "bios-256k.bin",
 			"--disk", "/d", "--disk-format", "raw", "--disk-readonly", "--disk-serial", "ser", "--disk-cache", "none",
 			"--disk-direct-over-backing", "--accel", "tcg", "--memory", "1024", "--max-memory", "4096", "--cpu", "Skylake-Server-v4",
-			"--cpus", "3", "--max-cpus", "8", "--memory-file", "/m", "--memory-share", "--hotplug-disks", "2",
+			"--cpus", "3", "--max-cpus", "8", "--hotplug-disks", "2",
 			"--vsock-cid", "7", "--qmp", "/qmp", "--incoming", "file:/s", "--console", "", "--init", "/bin/sh",
 			"--root", "/dev/vdb", "--profile", "--append", "a=1 b"}, every, false},
 		{"incoming defer is a restore over QMP", []string{"--incoming", "defer"}, deferred, true},

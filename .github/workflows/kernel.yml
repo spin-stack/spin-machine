@@ -4,8 +4,8 @@ name: Kernel
 # minutes and the merge gate must not wait for it.
 #
 # It matters more than a build time, though. A changed kernel is a changed machine — the
-# fingerprint hashes this binary by content — so every template taken against the previous
-# one stops matching. The job prints the checksum of what it produced for exactly that
+# fingerprint hashes this binary by content — so every checkpoint taken against the previous
+# one stops resuming. The job prints the checksum of what it produced for exactly that
 # reason: a config change whose effect nobody looked at is a fleet-wide event nobody
 # noticed.
 
@@ -105,10 +105,10 @@ jobs:
 
       # Compared against the last released machine, which every release publishes as a
       # machine.env asset. The kernel's checksum is one of the numbers in it that decide
-      # whether a template still matches (hack/fingerprint-diff names them).
+      # whether a checkpoint still resumes (hack/fingerprint-diff names them).
       #
       # So a pull request that changes the config, or bumps the Debian toolchain the kernel
-      # is compiled with, says on its own summary that it invalidates every template in
+      # is compiled with, says on its own summary that it strands every checkpoint in
       # existence. That is not a reason to reject it — it is a release this repository makes
       # deliberately, and the step exits 0 either way. It is a reason to know: the change
       # that does this need not look like much, and a comment edited in this directory's

@@ -156,25 +156,6 @@ func TestArgs(t *testing.T) {
 		want:   []string{"-m 2048 "},
 		absent: []string{"maxmem", "virtio-mem"},
 	}, {
-		// A template's source maps its file shared and writes it. File-backed RAM is
-		// in the machine string too, which is why it is in the shape and not only in
-		// an -object.
-		name: "the template's source",
-		set:  func(s *Spec) { s.Memory.File, s.Memory.Shared = "/tmp/pc.ram", true },
-		want: []string{
-			"memory-backend=" + MemoryBackendID,
-			"memory-backend-file,id=" + MemoryBackendID + ",size=512M,mem-path=/tmp/pc.ram,share=on ",
-		},
-		absent: []string{"readonly=on"},
-	}, {
-		// A restore maps the same file private and opens it read-only, so no VM
-		// restored from a template can change it for the next, and a QEMU that does
-		// not own the file can still restore from it.
-		name:   "a restore",
-		set:    func(s *Spec) { s.Memory.File = "/tmp/pc.ram" },
-		want:   []string{"mem-path=/tmp/pc.ram,share=off,readonly=on,rom=off "},
-		absent: []string{"rom=on"},
-	}, {
 		// A device handed over as a descriptor is named by it on the command line, and
 		// one that is not is left for QEMU to open.
 		name: "devices QEMU opens",
@@ -216,14 +197,12 @@ func TestArgs(t *testing.T) {
 		name: "commas in values",
 		set: func(s *Spec) {
 			s.Disks = []Disk{{Path: "/img/a,readonly=off", Format: "raw", Serial: "x,addr=0x2"}}
-			s.Memory.File = "/mem/a,share=on"
 			s.Monitors = []Monitor{{Socket: "/run/q,wait=on"}}
 			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3, Opaque: "/o,p"}}}}
 		},
 		want: []string{
 			"file=/img/a,,readonly=off,if=none,",
 			",serial=x,,addr=0x2 ",
-			"mem-path=/mem/a,,share=on,share=off,",
 			"unix:/run/q,,wait=on,server=on,wait=off ",
 			"opaque=/o,,p ",
 		},
@@ -258,7 +237,7 @@ func TestAnUnnamedCPUFollowsTheAccelerator(t *testing.T) {
 	for accel, want := range map[string]string{"kvm": "host,", "tcg": "max,"} {
 		s := spec(t)
 		s.Accel = accel
-		if got := s.shape().CPU; !strings.HasPrefix(got, want) {
+		if got := s.Shape().CPU; !strings.HasPrefix(got, want) {
 			t.Errorf("-accel %s: -cpu %q, want %q first", accel, got, want)
 		}
 	}
@@ -281,7 +260,7 @@ func TestHotplugDisk(t *testing.T) {
 }
 
 // The command line and the fingerprint read one Shape. If they read two, a VM could
-// restore from a template of a machine it is not.
+// resume a checkpoint of a machine it is not.
 func TestArgsCarriesTheShape(t *testing.T) {
 	s := spec(t)
 	args, err := s.Args()
@@ -293,7 +272,7 @@ func TestArgsCarriesTheShape(t *testing.T) {
 	if i := slices.Index(args, ""); i >= 0 {
 		t.Errorf("argument %d is empty: %q", i, args)
 	}
-	sh := s.shape()
+	sh := s.Shape()
 	for _, c := range []struct{ flag, want string }{
 		{"-machine", sh.Machine},
 		{"-accel", sh.Accel},
@@ -416,12 +395,11 @@ func TestAChainsBacking(t *testing.T) {
 }
 
 // The fingerprint, one pair of machines per row: a is spec() changed by a, b is a
-// changed by b, and the row says whether the two may exchange templates.
+// changed by b, and the row says whether a checkpoint saved on one resumes on the other.
 //
-// Two machines may exchange templates only if the binary, the kernel, the initrd,
-// the shape and the devices present when state is loaded all agree — and must be
-// able to when all that differs is what is behind the devices, or a host keeps one
-// template per VM.
+// It may only if the binary, the kernel, the initrd, the shape and the devices present
+// when state is loaded all agree — and must be able to when all that differs is what is
+// behind the devices, or a checkpoint resumes nowhere but on the VM that saved it.
 func TestFingerprint(t *testing.T) {
 	const intel, amd = "13th Gen Intel(R) Core(TM) i9-13900HK", "AMD EPYC 9634 84-Core Processor"
 	rewrite := func(t *testing.T, path, content string) {
@@ -453,20 +431,13 @@ func TestFingerprint(t *testing.T) {
 			s.QEMU, s.Kernel = other.QEMU, other.Kernel
 		}},
 
-		// Whether RAM is file-backed must not change it: a template is always taken
-		// from a machine with a memory file, so the lookup that decides whether a VM
-		// may restore has to give the same answer for a VM that has not been given
-		// one yet.
-		{name: "a memory file", same: true, b: func(_ *testing.T, s *Spec) { s.Memory.File = "/tmp/pc.ram" }},
-
-		// A disk is added after the restore, so a machine that will be given one
-		// looks exactly like the template it came from.
+		// The disks are the VM's, and a host fingerprints its machine before there is a
+		// VM: a checkpoint is resumed with the disks it was saved with, by its caller.
 		{name: "a disk", same: true, b: func(_ *testing.T, s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw"}} }},
 
 		// A descriptor number is which file the backend reads, the way a disk's path
 		// is, and a MAC is a property of the device and not of the bus. A caller that
-		// wants distinct MACs should give each machine a segment of its own, not pay
-		// for it in templates.
+		// wants distinct MACs should not find that its checkpoints resume nowhere else.
 		{name: "another TAP and MAC", same: true,
 			a: func(_ *testing.T, s *Spec) { s.NICs = []NIC{nic()} },
 			b: func(_ *testing.T, s *Spec) { s.NICs = []NIC{{TapFD: 9, MAC: "52:54:00:ff:ff:ff"}} }},
@@ -519,16 +490,15 @@ func TestFingerprint(t *testing.T) {
 		// A vsock and a memory ceiling are there on both sides of a restore.
 		{name: "a vsock", b: func(_ *testing.T, s *Spec) { s.VsockCID = 7 }},
 		{name: "a memory ceiling", b: func(_ *testing.T, s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB * 2 }},
-		// A NIC is on the command line, so it is present when state is loaded. "It is
-		// cold-plugged after a restore" is true of disks and does not carry across.
+		// A NIC is on the command line, so it is present when state is loaded.
 		{name: "a NIC", b: func(_ *testing.T, s *Spec) { s.NICs = []NIC{nic()} }},
 		// The MTU is VIRTIO_NET_F_MTU, negotiated at probe and written into the
-		// migration stream: an operator changing it must cost a template build, not
-		// every workspace on the node. Announcing nothing is a third machine.
+		// migration stream: a checkpoint saved under one MTU must not be loaded under
+		// another. Announcing nothing is a third machine.
 		{name: "an MTU announced", a: withMTU(0), b: withMTU(1500)},
 		{name: "another MTU", a: withMTU(1500), b: withMTU(1400)},
 		// Under model host the guest is told through CPUID exactly which instructions
-		// this silicon has, and a template taken here describes a CPU the next host
+		// this silicon has, and a checkpoint saved here describes a CPU the next host
 		// may not have.
 		{name: "another host under CPU host", hostB: amd},
 		{name: "a named CPU instead of host", b: func(_ *testing.T, s *Spec) { s.CPU = "Skylake-Server-v4" }},
@@ -559,9 +529,9 @@ func TestFingerprint(t *testing.T) {
 			}
 			switch {
 			case tc.same && fa != fb:
-				t.Error("two machines that may exchange templates have different fingerprints")
+				t.Error("two machines a checkpoint may move between have different fingerprints")
 			case !tc.same && fa == fb:
-				t.Error("two machines that may not exchange templates share a fingerprint")
+				t.Error("two machines a checkpoint may not move between share a fingerprint")
 			}
 		})
 	}
@@ -673,7 +643,6 @@ func TestValidateRefuses(t *testing.T) {
 		// A ceiling below the boot size: memoryArg drops it, so without this the
 		// caller gets a machine that cannot grow having asked for one that can.
 		{"a memory ceiling below the boot size", func(s *Spec) { s.Memory.SizeMB, s.Memory.MaxMB = 2048, 512 }},
-		{"shared memory with no file to share", func(s *Spec) { s.Memory.Shared = true }},
 		{"more disks than the slot range holds", func(s *Spec) {
 			s.Disks = make([]Disk, maxDisks+1)
 			for i := range s.Disks {
@@ -804,7 +773,7 @@ func TestValidateRefuses(t *testing.T) {
 	}
 }
 
-// What the fingerprint says is present when a template's state is loaded. Two machines
+// What the fingerprint says is present when a checkpoint's state is loaded. Two machines
 // that differ in one of these differ on the bus, so each has to be in the string when the
 // device is there and out of it when it is not; a check that is only "the two
 // fingerprints differ" holds none of them, because an inverted test still differs.

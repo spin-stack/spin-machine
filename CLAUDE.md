@@ -29,11 +29,11 @@ and makes its scope and result clear.
 
 1. **A release is one machine.** `machine.Spec.Fingerprint` hashes the QEMU binary, the
    kernel, the initrd and the firmware the guest runs (the BIOS, qboot.bin, and pvh.bin) by
-   content, together with the five arguments that decide the machine's shape. Two machines
-   with the same fingerprint may exchange templates; two without may not, and a restore
-   across them is undefined rather than an error. A content change to any of those files
-   invalidates every template in existence. That is the
-   design, not a bug to work around. A source or recipe change is a possible fleet-wide event; whether
+   content, together with the five arguments that decide the machine's shape. A checkpoint
+   resumes only onto a machine with the fingerprint of the one it was saved on; across two
+   that differ a resume is undefined rather than an error. A content change to any of those
+   files is a fleet-wide event: every checkpoint taken against the previous machine stops
+   resuming. That is the design, not a bug to work around. A source or recipe change is a possible fleet-wide event; whether
    it is one is decided by the resulting artifact hashes and shape, not by the diff's apparent
    size. Verify them before promotion.
 
@@ -81,7 +81,7 @@ not silently become production behaviour.
   run is enough to decide what to investigate; a promotion needs a reproducible comparison
   and the functional check that could reveal a false win.
 - If a promoted change alters what a restored guest sees, update the machine identity and
-  prove that templates do not cross the boundary. If it is host-only (for example launcher
+  prove that checkpoints do not cross the boundary. If it is host-only (for example launcher
   CPU affinity), document why it does not.
 - Remove or quarantine an experiment once it no longer has an active question. Keep the
   conclusion and durable evidence, not a permanent switch in the release path.
@@ -203,5 +203,5 @@ entry's note says what the bump is checked with.
 ## Versions
 
 CalVer, `vYYYYMMDD.NN`. A release is the machine as it stood on a date. There is no API here
-to promise compatibility about, and the one thing a version could promise — that templates
-still match — is decided by the fingerprint, not by a number anybody chose.
+to promise compatibility about, and the one thing a version could promise — that checkpoints
+still resume — is decided by the fingerprint, not by a number anybody chose.

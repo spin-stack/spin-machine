@@ -4,7 +4,7 @@ name: Release
 #
 # CalVer — v20260909.01 — because that is what a release of this repository is: the machine
 # as it stood on a date. There is no API here to promise compatibility about, and the one
-# thing a version could promise — that templates still match — is decided by the
+# thing a version could promise — that checkpoints still resume — is decided by the
 # fingerprint of the artefacts and not by a number anybody chose. A major version bump
 # would say something this repository cannot mean.
 #
@@ -133,11 +133,11 @@ jobs:
           CACHE_EXPORT: "false"
         run: task release QEMU_JOBS=4 KERNEL_NPROC=4
 
-      # The machine's identity, and what it costs whoever holds templates.
+      # The machine's identity, and what it costs whoever holds checkpoints.
       #
       # The alternative to hack/fingerprint-diff is opening two release pages and comparing
       # sixty-four hex digits by eye, which is a thing nobody does — so the answer to "why
-      # did every template in the fleet stop matching?" is one nobody has. The script
+      # did every checkpoint in the fleet stop resuming?" is one nobody has. The script
       # fetches the previous release's machine.env and states the consequence in a sentence,
       # at the top of the notes, where a consumer deciding whether to take this release
       # reads it.
@@ -196,7 +196,7 @@ jobs:
           body: ${{ steps.manifest.outputs.notes }}
           # machine.env is published on its own, and not only inside the tarball, so the
           # next release can read it back in a few hundred bytes and say whether it
-          # invalidates the templates taken against this one.
+          # strands the checkpoints taken against this one.
           files: |
             _output/release/*.tar.gz
             _output/release/*.tar.gz.sha256

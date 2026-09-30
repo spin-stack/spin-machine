@@ -12,7 +12,7 @@
 # bump. `task versions` says what is behind and `task bump NAME=...` moves one entry, resolving
 # its pin with it; a bot that bumped a version without its hash would produce a build that fails
 # on the checksum, at best. A bump of qemu, kernel, debian or debian-snapshot is a new machine
-# and every template in existence stops matching, which is a decision and not a routine merge.
+# and every checkpoint in existence stops resuming, which is a decision and not a routine merge.
 version: 2
 
 updates:

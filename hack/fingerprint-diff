@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 #
-# Whether this build is still the machine the fleet's templates were taken against.
+# Whether this build is still the machine the fleet's checkpoints were taken against.
 #
 # `machine.Spec.Fingerprint` hashes by content the files a guest runs - QEMU, the kernel, the
 # initrd and the firmware - together with the machine's shape. The initrd is brought by whoever
 # runs guests and the shape is decided per VM, so between two releases the question collapses
-# to the checksums bears_on_fingerprint names below: **templates carry over if and only if
+# to the checksums bears_on_fingerprint names below: **checkpoints carry over if and only if
 # none of them changed.**
 #
 # image_sha256 is deliberately not one of them. The base image is mapped read-only through
-# a backing chain and is not hashed into the fingerprint, so a release that moves only the
-# image still restores every template taken against its predecessor. Saying that plainly is
+# a backing chain and is not hashed into the fingerprint - a checkpoint resumes with its own
+# disks, chain and all - so a release that moves only the image still resumes every
+# checkpoint taken against its predecessor. Saying that plainly is
 # half the value of this script: the other half is that the numbers which *do* decide it stop
 # being something a human diffs by eye across two release pages.
 #
@@ -49,7 +50,7 @@ fi
 
 # The classification this script exists to hold in one place. Adding a file to the
 # fingerprint means adding it here; anything else is a number that is reported and does not
-# bear on whether a template matches.
+# bear on whether a checkpoint resumes.
 bears_on_fingerprint() {
   case "$1" in
     qemu_sha256 | kernel_sha256 | bios_sha256 | pvh_sha256) return 0 ;;
@@ -100,7 +101,7 @@ work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 
 if ! gh release download "${reference}" --pattern machine.env --dir "${work}" >/dev/null 2>&1; then
-  say "Cannot say whether templates carry over: \`${reference}\` published no \`machine.env\`"
+  say "Cannot say whether checkpoints carry over: \`${reference}\` published no \`machine.env\`"
   say "to compare against. Releases from this one on do."
   exit 0
 fi
@@ -148,15 +149,15 @@ detail() {
 }
 
 if [ "${#moved_fp[@]}" -gt 0 ]; then
-  say "### ⚠️ Every template taken against \`${reference}\` stops matching this machine"
+  say "### ⚠️ Every checkpoint taken against \`${reference}\` stops resuming on this machine"
   say
-  say "The fingerprint hashes these by content, so a host restoring a template frozen"
-  say "against \`${reference}\` into this machine is doing something undefined rather than"
+  say "The fingerprint hashes these by content, so a host resuming a checkpoint saved"
+  say "against \`${reference}\` on this machine is doing something undefined rather than"
   say "something that fails."
   say
   detail "${moved_fp[@]}"
 elif [ "${#unchecked_fp[@]}" -eq 0 ]; then
-  say "### Templates taken against \`${reference}\` still match this machine"
+  say "### Checkpoints taken against \`${reference}\` still resume on this machine"
   say
   say "\`qemu_sha256\`, \`kernel_sha256\`, \`bios_sha256\` and \`pvh_sha256\` are unchanged, and they are the whole of what"
   say "this repository contributes to the fingerprint — the initrd and the machine's shape"
@@ -172,7 +173,7 @@ fi
 
 if [ "${#moved_other[@]}" -gt 0 ]; then
   say
-  say "Changed, and not part of the fingerprint — templates are unaffected:"
+  say "Changed, and not part of the fingerprint — checkpoints are unaffected:"
   say
   detail "${moved_other[@]}"
 fi

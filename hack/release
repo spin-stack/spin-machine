@@ -109,8 +109,8 @@ require "${OUTPUT_DIR}/licenses.txt" "${SHARE}/licenses.txt" "the image's licenc
 # What this release is, in a form something other than a human can read. The qemu, kernel,
 # bios and pvh checksums are the machine's identity — the same numbers
 # `machine.Spec.Fingerprint` hashes (with the initrd's, which is not in this tarball) to decide
-# whether a template may be restored; the image's is reported beside them and is not. A host wondering why its templates stopped matching diffs this against the
-# previous release's.
+# whether a checkpoint may be resumed; the image's is reported beside them and is not. A host
+# wondering why its checkpoints stopped resuming diffs this against the previous release's.
 {
   echo "version=${VERSION}"
   # Which tree this came out of. The version alone does not answer it: for a tagged

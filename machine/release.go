@@ -121,7 +121,7 @@ func (r *Release) optional(name, what string) (string, error) {
 // tree has no manifest.
 //
 // It names a build for a human reading a log. It is not what decides whether a
-// template may be restored — Fingerprint is, by content — so two hosts agreeing
+// checkpoint may be resumed — Fingerprint is, by content — so two hosts agreeing
 // on this string is evidence and not proof.
 func (r *Release) Version() string { return r.env["version"] }
 
