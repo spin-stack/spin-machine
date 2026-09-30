@@ -228,8 +228,11 @@ func renames(old, new []Row) map[string]Row {
 		}
 	}
 	nearest := func(r Row, among []Row) (Row, bool) {
-		var best Row
-		n, found, tie := 0, false, false
+		var (
+			best       Row
+			n          int
+			found, tie bool
+		)
 		for _, c := range among {
 			if !sameAxes(r, c) {
 				continue
