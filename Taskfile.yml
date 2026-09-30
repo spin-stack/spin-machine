@@ -321,6 +321,15 @@ tasks:
     cmds:
       - SPIN_FLOOR_PROBE=1 go test ./boot/ -run TestKernelFloor -count=1 -v -timeout 20m
 
+  boot:firmware-stages:
+    desc: >-
+      Where the time before the kernel goes on the machine a workspace boots: QEMU's start and
+      each of the firmware's steps (PCI walk, fw_cfg directory, ACPI, e820, SMBIOS, command
+      line, initrd), from QEMU's own trace of the firmware's fw_cfg selects and exits. Needs
+      KVM and a built release; no sudo. REPS= boots, FLAGS= the machine's spin-machine flags.
+    cmds:
+      - SPIN_FIRMWARE_STAGES=1 go test ./boot/ -run '^TestFirmwareStages$' -count=1 -v -timeout 20m
+
   boot:firmware:
     desc: >-
       Compare the machine's firmware, qboot, with the SeaBIOS QEMU ships beside it: both are

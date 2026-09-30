@@ -1,0 +1,282 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package boot_test
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// Where the time before the kernel goes: QEMU's own start, and the firmware's steps, on the
+// machine this repository defines rather than a firmware probe's bare one - the PCI walk
+// depends on the devices there are.
+//
+// It needs no instrumented firmware. qboot names what it asks QEMU for through fw_cfg, and
+// each of its steps starts with a select of its own: the file directory, the ACPI tables and
+// their loader, e820, SMBIOS, the command line, the initrd, the kernel's entry. So QEMU's
+// trace of those selects - with the configuration accesses of the PCI walk and every exit to
+// QEMU beside them, all stamped by QEMU's own clock - is the firmware's timeline, read from
+// outside it. The exec is stamped by this process, on the same wall clock.
+//
+// Tracing costs a little in every interval it measures - a formatted line per event - so the
+// numbers are where the time goes, not how much a boot without tracing takes.
+//
+//	SPIN_FIRMWARE_STAGES=1   run at all
+//	REPS=<n>                 boots (default 10)
+//	FLAGS=<flags>            spin-machine flags for the machine (default: a workspace's shape)
+//	SPIN_PROBE_INITRD=<cpio> as for boot:firmware
+func TestFirmwareStages(t *testing.T) {
+	if os.Getenv("SPIN_FIRMWARE_STAGES") == "" {
+		t.Skip("set SPIN_FIRMWARE_STAGES=1: this boots VMs under QEMU's tracing")
+	}
+	out := releaseDir(t)
+	reps := envInt(t, "REPS", 10)
+	initrd := probeInitrd(t)
+
+	flags := strings.Fields(orElse("--cpus 1 --memory 512 --max-cpus 16 --max-memory 8192 --hotplug-disks 1", os.Getenv("FLAGS")))
+	args := machineArgs(t, out, append([]string{"--disk", "-", "--initrd", initrd, "--console", "file:/dev/stdout"}, flags...))
+
+	var runs []map[string]stage
+	for range reps {
+		runs = append(runs, traceOneBoot(t, args))
+	}
+	t.Log(stageTable(runs))
+}
+
+// stage is one step's wall time and the exits to QEMU inside it.
+type stage struct {
+	ms    float64
+	exits int
+}
+
+// machineArgs is the command line `spin-machine args` prints, one argument per line: QEMU's
+// binary first. Split on lines and not on spaces, because -append's value has them.
+func machineArgs(t *testing.T, out string, flags []string) []string {
+	t.Helper()
+	b, err := exec.Command(filepath.Join(out, "bin", "spin-machine"), append([]string{"args", "--release", out}, flags...)...).Output()
+	if err != nil {
+		t.Fatalf("spin-machine args: %v", err)
+	}
+	var args []string
+	for _, l := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		args = append(args, strings.TrimSuffix(strings.TrimPrefix(l, "  "), " \\"))
+	}
+	return args
+}
+
+// traceOneBoot boots once with QEMU tracing the firmware's selects, its PCI walk and every exit
+// to QEMU, waits for the diagnostic init, and returns each step's time.
+func traceOneBoot(t *testing.T, args []string) map[string]stage {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "trace")
+	full := append(slices.Clone(args[1:]),
+		"-msg", "timestamp=on", "-D", log,
+		"-trace", "enable=fw_cfg_select", "-trace", "enable=pci_cfg_read", "-trace", "enable=pci_cfg_write",
+		"-trace", "enable=kvm_run_exit")
+	cmd := exec.Command(args[0], full...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout, cmd.Stderr = w, w
+	exec0 := time.Now()
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("launching QEMU: %v", err)
+	}
+	_ = w.Close()
+	defer func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		_ = r.Close()
+	}()
+	var console strings.Builder
+	buf := make([]byte, 65536)
+	deadline := time.Now().Add(60 * time.Second)
+	for !strings.Contains(console.String(), "SPIN-READY") {
+		if err := r.SetReadDeadline(deadline); err != nil {
+			t.Fatal(err)
+		}
+		n, err := r.Read(buf)
+		console.Write(buf[:n])
+		if err != nil {
+			t.Fatalf("no SPIN-READY: %v\n%s", err, tail([]byte(console.String()), 2000))
+		}
+	}
+	ready := time.Now()
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stages(string(raw), exec0, ready)
+}
+
+// " 12345@1790000000.123456:fw_cfg_select 0x55d0 key 0x0019 'etc/e820', ret: 1"
+var reTrace = regexp.MustCompile(`^\d+@(\d+)\.(\d{6}):(\w+) (.*)$`)
+
+var reSelectName = regexp.MustCompile(`key 0x([0-9a-f]+) '([^']*)'`)
+
+// stageOf names the step a firmware's fw_cfg select starts, or "" when it continues the step
+// before it. The keys are QEMU's (hw/nvram/fw_cfg.c); files by the prefix of their name.
+func stageOf(key uint64, name string) string {
+	switch {
+	case key == 0x19: // the file directory
+		return "fw_cfg directory"
+	case strings.HasPrefix(name, "etc/table-loader"), strings.HasPrefix(name, "etc/acpi"):
+		return "ACPI tables"
+	case name == "etc/e820":
+		return "e820"
+	case strings.HasPrefix(name, "etc/smbios"):
+		return "SMBIOS"
+	case key == 0x14 || key == 0x15: // command line size and data
+		return "command line"
+	case key == 0x0b || key == 0x0a || key == 0x12: // initrd size, address, data
+		return "initrd"
+	case key == 0x10 || key == 0x08: // kernel entry and size, read last before the jump
+		return "kernel handoff"
+	}
+	return ""
+}
+
+// stages splits one boot's trace into steps: QEMU's start (exec to the first exit), the
+// firmware's steps (a PCI walk, then each run of fw_cfg selects), and the kernel and init (the
+// last select to SPIN-READY). Each step's exits are counted from kvm_run_exit.
+func stages(trace string, exec0, ready time.Time) map[string]stage {
+	type mark struct {
+		name string
+		at   time.Time
+	}
+	var marks []mark
+	var exits []time.Time
+	add := func(name string, at time.Time) {
+		if len(marks) == 0 || marks[len(marks)-1].name != name {
+			marks = append(marks, mark{name, at})
+		}
+	}
+	for line := range strings.SplitSeq(trace, "\n") {
+		m := reTrace.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
+			continue
+		}
+		sec, _ := strconv.ParseInt(m[1], 10, 64)
+		usec, _ := strconv.ParseInt(m[2], 10, 64)
+		at := time.Unix(sec, usec*1000)
+		switch m[3] {
+		case "kvm_run_exit":
+			if len(exits) == 0 {
+				add("firmware start", at)
+			}
+			exits = append(exits, at)
+		case "pci_cfg_read", "pci_cfg_write":
+			if len(marks) > 0 && marks[len(marks)-1].name == "firmware start" {
+				add("PCI walk", at)
+			}
+		case "fw_cfg_select":
+			s := reSelectName.FindStringSubmatch(m[4])
+			if s == nil {
+				continue
+			}
+			key, _ := strconv.ParseUint(s[1], 16, 16)
+			if name := stageOf(key, s[2]); name != "" {
+				add(name, at)
+			}
+		}
+	}
+	// What a step was is decided by where the next one starts; the last firmware step ends at
+	// the jump, which the kernel's first exit does not mark, so it ends at its own last event.
+	out := map[string]stage{}
+	if len(marks) == 0 {
+		return out
+	}
+	out["QEMU start"] = stage{ms: float64(marks[0].at.Sub(exec0).Microseconds()) / 1000}
+	for i, mk := range marks {
+		end := ready
+		if i+1 < len(marks) {
+			end = marks[i+1].at
+		}
+		name := mk.name
+		if i == len(marks)-1 {
+			name = "kernel and init"
+		}
+		n := 0
+		for _, e := range exits {
+			if !e.Before(mk.at) && e.Before(end) {
+				n++
+			}
+		}
+		prev := out[name]
+		out[name] = stage{ms: prev.ms + float64(end.Sub(mk.at).Microseconds())/1000, exits: prev.exits + n}
+	}
+	return out
+}
+
+// stageTable is the p50 of each step over the boots, in the order a boot takes them.
+func stageTable(runs []map[string]stage) string {
+	order := []string{"QEMU start", "firmware start", "PCI walk", "fw_cfg directory", "ACPI tables", "e820",
+		"SMBIOS", "command line", "initrd", "kernel handoff", "kernel and init"}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nbefore the kernel, p50 over %d traced boots (tracing inflates every step a little)\n\n", len(runs))
+	fmt.Fprintf(&b, "%-18s %10s %8s\n", "STEP", "MS", "EXITS")
+	for _, name := range order {
+		var ms, ex []float64
+		for _, r := range runs {
+			if s, ok := r[name]; ok {
+				ms = append(ms, s.ms)
+				ex = append(ex, float64(s.exits))
+			}
+		}
+		if len(ms) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "%-18s %10.2f %8.0f\n", name, pct(ms, 50), pct(ex, 50))
+	}
+	return b.String()
+}
+
+func TestTheFirmwareTraceIsSplitIntoItsSteps(t *testing.T) {
+	exec0 := time.Unix(1000, 0)
+	trace := `7@1000.030000:kvm_run_exit cpu_index 0, reason 2
+7@1000.030500:pci_cfg_read virtio-rng-pci 03:0 @0x0 -> 0x1af4
+7@1000.031000:kvm_run_exit cpu_index 0, reason 2
+7@1000.032000:fw_cfg_select 0x55 key 0x0019 'etc/file-dir', ret: 1
+7@1000.033000:fw_cfg_select 0x55 key 0x0021 'etc/table-loader', ret: 1
+7@1000.033500:kvm_run_exit cpu_index 0, reason 2
+7@1000.034000:fw_cfg_select 0x55 key 0x0022 'etc/acpi/tables', ret: 1
+7@1000.036000:fw_cfg_select 0x55 key 0x0024 'etc/e820', ret: 1
+7@1000.037000:fw_cfg_select 0x55 key 0x0014 'cmdline size', ret: 1
+7@1000.038000:fw_cfg_select 0x55 key 0x000b 'initrd size', ret: 1
+7@1000.041000:fw_cfg_select 0x55 key 0x0008 'kernel size', ret: 1
+7@1000.041200:fw_cfg_select 0x55 key 0x0010 'kernel entry', ret: 1
+`
+	got := stages(trace, exec0, time.Unix(1000, 100_000_000))
+	want := map[string]stage{
+		"QEMU start":       {ms: 30},
+		"firmware start":   {ms: 0.5, exits: 1},
+		"PCI walk":         {ms: 1.5, exits: 1},
+		"fw_cfg directory": {ms: 1},
+		"ACPI tables":      {ms: 3, exits: 1},
+		"e820":             {ms: 1},
+		"command line":     {ms: 1},
+		"initrd":           {ms: 3},
+		"kernel and init":  {ms: 59},
+	}
+	for k, w := range want {
+		g := got[k]
+		if d := g.ms - w.ms; d > 1e-6 || d < -1e-6 || g.exits != w.exits {
+			t.Errorf("%s: %+v, want %+v", k, g, w)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("steps %v, want %v", got, want)
+	}
+}

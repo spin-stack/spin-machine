@@ -37,6 +37,7 @@ on:
           - boot:kernel-pages
           - boot:memory-policy
           - boot:firmware
+          - boot:firmware-stages
           - report
       release:
         description: "The release to boot, e.g. v20260929.01 (default: the newest)"
