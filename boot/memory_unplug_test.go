@@ -19,7 +19,8 @@ import (
 // guest, for each way the guest can online the memory virtio-mem plugs.
 //
 // The VM grows to its ceiling, and a script in the guest fills most of it: a large tmpfs file,
-// which it then deletes, and 200 000 small files on its disk, whose inodes and dentries are
+// which it then deletes, and up to 200 000 small files on its disk (nine tenths of the free
+// inodes, which the image has fewer of; the console says how many), whose inodes and dentries are
 // kernel memory that cannot be moved, only reclaimed. The VM is then asked to give everything
 // back. What was plugged when it stopped, how long that took and whether the kernel killed
 // anything for memory while it tried is the answer, per variant:
@@ -116,7 +117,10 @@ mount -t tmpfs -o size=100% tmpfs /run/unplug
 free=$(awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo)
 dd if=/dev/zero of=/run/unplug/big bs=1M count=$(( free * 6 / 10 )) status=none
 i=0
-while [ $i -lt 200000 ]; do : > /var/tmp/unplug/$i; i=$((i + 1)); done
+n=$(df -i --output=iavail /var/tmp | tail -1)
+n=$(( n * 9 / 10 < 200000 ? n * 9 / 10 : 200000 ))
+echo "UNPLUG-FILES $n" > /dev/console
+while [ $i -lt $n ]; do : > /var/tmp/unplug/$i; i=$((i + 1)); done
 rm -f /run/unplug/big
 sync
 [ "$2" = reclaim ] && echo 2 > /proc/sys/vm/drop_caches
