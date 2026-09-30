@@ -123,6 +123,13 @@ RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/va
 # kernel bump is one somebody has to read again, not one to apply near where it used to go.
 # The release ships them beside the binary (hack/release), because a changed GPL source is
 # distributed with its changes.
+#
+# They are written as kernel patches (Documentation/process/submitting-patches.rst): made with
+# git format-patch against the pinned tarball, a subsystem-prefixed subject, a changelog that
+# states the problem, the change, what it was measured to be worth and what it costs, and
+# master's scripts/checkpatch.pl --strict clean. A tool-assisted patch says so with
+# Assisted-by: (coding-assistants.rst) and carries no Signed-off-by a tool added: that
+# certifies the DCO, which only the human who takes the patch on can do.
 COPY kernel/patches/ /usr/src/patches/
 RUN cd /usr/src/linux && \
     for p in /usr/src/patches/*.patch; do \

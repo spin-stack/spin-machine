@@ -1,0 +1,55 @@
+From 5eab74b9227eb99cfe3dad43cd99ae1429e64d62 Mon Sep 17 00:00:00 2001
+From: Manuel de Brito Fontes <aledbf@gmail.com>
+Date: Tue, 29 Sep 2026 21:53:46 -0300
+Subject: [PATCH 2/4] ftrace: Skip the weak function scan when sorttable has
+ run
+
+Since commit ef378c3b8233 ("scripts/sorttable: Zero out weak functions
+in mcount_loc table"), sorttable zeroes the __mcount_loc entries of
+overridden weak functions when CONFIG_BUILDTIME_MCOUNT_SORT is set,
+and ftrace_process_locs() skips the zeroed entries. Yet
+ftrace_check_for_weak_functions() still queues a scan of every record
+through kallsyms_lookup() at boot, and ftrace_check_sync() waits for it
+at late_initcall_sync, although there is nothing left for it to find.
+
+Return early from ftrace_check_for_weak_functions() when
+CONFIG_BUILDTIME_MCOUNT_SORT is set. Module records are still checked
+in ftrace_module_enable(), as sorttable does not process modules.
+
+On an x86_64 KVM guest with one vCPU the scan is 11.9 ms of a kworker's
+CPU during boot, and on that vCPU it runs inside acpi_init(). Together
+with the previous patch, the time from kernel start to "Freeing unused
+kernel image" goes from 110.0 ms to 89.5 ms (p50 of 15 boots,
+interleaved), and available_filter_functions lists no
+__ftrace_invalid_address__ entries.
+
+The trade-off: an entry sorttable failed to zero would no longer be
+disabled at boot, and would be listed as __ftrace_invalid_address__.
+
+Assisted-by: LLM
+---
+ kernel/trace/ftrace.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index db8eeaefe..d8a55f6ad 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -4405,6 +4405,14 @@ static __init void ftrace_check_work_func(struct work_struct *work)
+ 
+ static int __init ftrace_check_for_weak_functions(void)
+ {
++	/*
++	 * sorttable zeroes the mcount entries of overridden weak functions at build
++	 * time, and ftrace_process_locs() skips what it zeroed: there is nothing left
++	 * for this scan of every record through kallsyms to find.
++	 */
++	if (IS_ENABLED(CONFIG_BUILDTIME_MCOUNT_SORT))
++		return 0;
++
+ 	INIT_WORK(&ftrace_check_work, ftrace_check_work_func);
+ 
+ 	ftrace_check_wq = alloc_workqueue("ftrace_check_wq", WQ_UNBOUND, 0);
+-- 
+2.53.0
+

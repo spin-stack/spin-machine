@@ -1,0 +1,48 @@
+From 148d9676769eaf6d459466a810d31b23c35d1918 Mon Sep 17 00:00:00 2001
+From: Manuel de Brito Fontes <aledbf@gmail.com>
+Date: Tue, 29 Sep 2026 21:53:46 -0300
+Subject: [PATCH 1/4] ftrace: Prefer objtool mcount recording where it can
+ write NOPs
+
+When the compiler accepts -mrecord-mcount, FTRACE_MCOUNT_USE_CC is
+selected and objtool does not record the __fentry__ call sites. The
+compiler leaves those sites as calls, so ftrace_init() has to turn
+every one of them into a NOP at boot, in ftrace_update_code().
+
+objtool records the same sites and, on architectures that select
+HAVE_OBJTOOL_NOP_MCOUNT, writes the NOPs at build time (--mnop). The
+build then defines CC_USING_NOP_MCOUNT, ftrace_need_init_nop() is
+false, and the boot-time conversion does not happen.
+
+Make FTRACE_MCOUNT_USE_CC depend on !HAVE_OBJTOOL_NOP_MCOUNT, so the
+objtool path is taken wherever it can write the NOPs.
+
+On an x86_64 KVM guest with one vCPU (gcc 14.2, about 41,000 fentry
+sites) this takes 7.0 ms off the time from kernel start to "Freeing
+unused kernel image": p50 of 15 boots, interleaved with the unpatched
+kernel. The function tracer, function_graph and fentry/fexit BPF
+programs work as before.
+
+The cost is at build time: objtool records the sites of every object,
+which the compiler did before.
+
+Assisted-by: LLM
+---
+ kernel/trace/Kconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/trace/Kconfig b/kernel/trace/Kconfig
+index 084f34dc6..7aae107f2 100644
+--- a/kernel/trace/Kconfig
++++ b/kernel/trace/Kconfig
+@@ -883,6 +883,7 @@ config FTRACE_MCOUNT_USE_CC
+ 	depends on $(cc-option,-mrecord-mcount)
+ 	depends on !FTRACE_MCOUNT_USE_PATCHABLE_FUNCTION_ENTRY
+ 	depends on DYNAMIC_FTRACE
++	depends on !HAVE_OBJTOOL_NOP_MCOUNT
+ 
+ config FTRACE_MCOUNT_USE_OBJTOOL
+ 	def_bool y
+-- 
+2.53.0
+
