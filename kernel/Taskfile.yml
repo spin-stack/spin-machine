@@ -26,7 +26,7 @@ tasks:
           --target kernel \
           --platform linux/amd64 \
           --cache-from {{.KERNEL_CACHE_FROM}} \
-          --cache-to {{.KERNEL_CACHE_TO}} \
+          {{.KERNEL_CACHE_TO}} \
           $({{.VERSIONS}} args debian debian-snapshot kernel moby-check-config) \
           --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
@@ -48,7 +48,7 @@ tasks:
           --target extract \
           --platform linux/amd64 \
           --cache-from {{.KMIN_CACHE_FROM}} \
-          --cache-to {{.KMIN_CACHE_TO}} \
+          {{.KMIN_CACHE_TO}} \
           $({{.VERSIONS}} args debian debian-snapshot kernel) \
           --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
@@ -80,7 +80,7 @@ tasks:
           --target kernel-build-base \
           --platform linux/amd64 \
           --cache-from {{.KERNEL_CACHE_FROM}} \
-          --cache-to {{.KERNEL_CACHE_TO}} \
+          {{.KERNEL_CACHE_TO}} \
           $({{.VERSIONS}} args debian debian-snapshot kernel moby-check-config) \
           --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \

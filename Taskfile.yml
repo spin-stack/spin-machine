@@ -122,22 +122,30 @@ vars:
   # are not in a plain `run:` step's environment, and without them `--cache-to type=gha` is
   # accepted, stores nothing, and says nothing.
   CACHE_BACKEND: '{{.CACHE_BACKEND | default "local"}}'
+  # Whether a build writes its cache back, and only CI's main needs it to. On Blacksmith the
+  # builder keeps BuildKit's own state on a sticky disk per cache-key (setup-docker-builder),
+  # so a lane re-reads what it built without any export; what the Actions cache adds is the
+  # one thing a disk cannot: the release, which builds everything with a builder of its own,
+  # reusing what main's lanes paid for. Exporting cost 88 s of "preparing build cache for
+  # export" on a kernel build (2026-09-30), on every PR and dispatch that warmed nothing a
+  # release reads. So the lanes export on a push to main, and nothing else does.
+  CACHE_EXPORT: '{{.CACHE_EXPORT | default "true"}}'
   BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default (printf "%s/.cache/buildkit" .ROOT_DIR)}}'
 
   QEMU_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/qemu{{end}}'
-  QEMU_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qemu,mode=max,compression=zstd{{end}}'
+  QEMU_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qemu,mode=max,compression=zstd{{end}}{{end}}'
   KERNEL_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kernel{{end}}'
-  KERNEL_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kernel,mode=max,compression=zstd{{end}}'
+  KERNEL_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kernel,mode=max,compression=zstd{{end}}{{end}}'
   # The floor-kernel experiment: never built by `task build`.
   KMIN_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kmin{{end}}'
-  KMIN_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kmin,mode=max,compression=zstd{{end}}'
+  KMIN_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kmin,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kmin,mode=max,compression=zstd{{end}}{{end}}'
   E2FSPROGS_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/e2fsprogs{{end}}'
-  E2FSPROGS_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/e2fsprogs,mode=max,compression=zstd{{end}}'
+  E2FSPROGS_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/e2fsprogs,mode=max,compression=zstd{{end}}{{end}}'
   # The container that builds the base image. Small — mkosi, qemu-utils — and cached like
   # the rest: uncached, every CI run reinstalls it from the archive before any image work
   # starts.
   IMAGE_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=image{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/image{{end}}'
-  IMAGE_CACHE_TO: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=image,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/image,mode=max,compression=zstd{{end}}'
+  IMAGE_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=image,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/image,mode=max,compression=zstd{{end}}{{end}}'
 
   # mkosi's package cache, which is not a BuildKit cache because mkosi does not run under
   # BuildKit (see image/Dockerfile). A rebuild of the base image is ~1.5 GB of apt.

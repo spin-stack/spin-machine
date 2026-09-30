@@ -134,6 +134,9 @@ jobs:
           # written under one tag ref cannot be read from another tag or from a branch. The
           # reads are what matter, and those come from the default branch.
           CACHE_BACKEND: gha
+          # Reads what main's lanes exported and writes nothing back: a release is built once, and
+          # the next one reads main's newer cache, not this. See CACHE_EXPORT in Taskfile.yml.
+          CACHE_EXPORT: "false"
         run: task release QEMU_JOBS=4 KERNEL_NPROC=4
 
       # The machine's identity, and what it costs whoever holds templates.

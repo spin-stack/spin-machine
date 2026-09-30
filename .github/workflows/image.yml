@@ -112,11 +112,11 @@ jobs:
       # the build container's, and image/build.sh stops when it is not there.
       - name: Build e2fsprogs
         run: |
-          CACHE_BACKEND=gha task e2fsprogs:build
+          CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task e2fsprogs:build
 
       - name: Build the base image
         run: |
-          CACHE_BACKEND=gha task image:build
+          CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task image:build
 
       - name: What this image is
         run: |
