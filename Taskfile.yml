@@ -301,17 +301,18 @@ tasks:
     desc: >-
       What a kernel costs before anything is configured into it: the release kernel against
       the one `task kernel:minimal` builds, interleaved, on a marker both can reach. Needs
-      KVM, a built release, `task kernel:minimal`, and a diagnostic initrd in
-      SPIN_PROBE_INITRD=. The answer bounds every kernel-config change that could follow.
+      KVM, a built release and `task kernel:minimal`; SPIN_PROBE_INITRD= names a diagnostic
+      initrd, and without it boot/probeinit is built into one. The answer bounds every
+      kernel-config change that could follow.
     cmds:
       - SPIN_FLOOR_PROBE=1 go test ./boot/ -run TestKernelFloor -count=1 -v -timeout 20m
 
   boot:firmware:
     desc: >-
       Compare firmware for this machine: SeaBIOS against the qboot build in qemu/qboot/.
-      Needs KVM, a built release, `task qemu:qboot`, and a diagnostic initrd in
-      SPIN_PROBE_INITRD=. Without the firmware or the initrd it says which is missing and
-      skips: neither is an artefact a release carries. It asserts a firmware can run this
+      Needs KVM, a built release and `task qemu:qboot`; SPIN_PROBE_INITRD= names a diagnostic
+      initrd, and without it boot/probeinit is built into one. Without the firmware it says
+      so and skips: qboot is not an artefact a release carries. It asserts a firmware can run this
       machine at all before it times one, because a firmware with no WRITE_POINTER loses
       vmgenid and a lost vmgenid has no symptom.
     cmds:

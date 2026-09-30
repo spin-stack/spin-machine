@@ -35,6 +35,7 @@ on:
           - boot:restore
           - boot:ssh-load
           - boot:memory-policy
+          - boot:firmware
           - report
       release:
         description: "The release to boot, e.g. v20260929.01 (default: the newest)"
@@ -137,6 +138,12 @@ jobs:
             if sudo -n true 2>/dev/null; then echo "- sudo -n: yes"; else echo "- sudo -n: **no** (targets that edit an overlay skip)"; fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm"; exit 1; }
+
+      # qboot is not in a release: boot:firmware builds it (qemu/qboot/Dockerfile, which needs
+      # Docker) into the tree, where the probe looks for it.
+      - name: Build the firmware to compare
+        if: inputs.experiment == 'boot:firmware'
+        run: task qemu:qboot OUTPUT_DIR="$SPIN_MACHINE_OUTPUT"
 
       # A release tarball carries no spin-machine, and releaseDir skips without one: built from
       # this checkout into the tree, as report does through its tools dependency.
