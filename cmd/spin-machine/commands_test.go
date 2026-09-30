@@ -233,6 +233,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 
 	every := base
 	every.QEMU, every.Kernel, every.Initrd, every.Firmware = "/q", "/k", "/i", "/f"
+	every.BIOS = "bios-256k.bin"
 	every.CPU, every.BootCPUs, every.MaxCPUs = "Skylake-Server-v4", 3, 8
 	every.Accel = "tcg"
 	every.Memory = machine.Memory{SizeMB: 1024, MaxMB: 4096, File: "/m", Shared: true}
@@ -265,7 +266,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 		scratch bool
 	}{
 		{"nothing given", nil, defaults, true},
-		{"everything given", []string{"--qemu", "/q", "--kernel", "/k", "--initrd", "/i", "--firmware", "/f",
+		{"everything given", []string{"--qemu", "/q", "--kernel", "/k", "--initrd", "/i", "--firmware", "/f", "--bios", "bios-256k.bin",
 			"--disk", "/d", "--disk-format", "raw", "--disk-readonly", "--disk-serial", "ser", "--disk-cache", "none",
 			"--disk-direct-over-backing", "--accel", "tcg", "--memory", "1024", "--max-memory", "4096", "--cpu", "Skylake-Server-v4",
 			"--cpus", "3", "--max-cpus", "8", "--memory-file", "/m", "--memory-share", "--hotplug-disks", "2",
