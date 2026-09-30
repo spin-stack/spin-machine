@@ -28,7 +28,7 @@ combination of the machine's features, booted from the published tarball to a lo
 `release.yml` builds all three and packs one tarball. Versions are **CalVer**,
 `v20260909.01`: a release of this repository is the machine as it stood on a date. There is
 no API here to promise compatibility about, and the one thing a version could promise —
-that templates still match — is decided by the fingerprint of the artefacts, not by a
+that checkpoints still resume — is decided by the fingerprint of the artefacts, not by a
 number anybody chose. Pushing a `v*` tag releases that version; running the workflow by
 hand with no input generates the next sequence for today, tags the commit, and puts the
 three checksums in the release notes.
@@ -37,9 +37,8 @@ three checksums in the release notes.
 
 A release also says what it costs. After it publishes, the `report` job boots the tarball it
 just published, on a self-hosted runner labelled `kvm`, through every combination of the
-machine's features (accelerator; memory anonymous, restored from a template's file, shared for
-freezing one, or with a virtio-mem ceiling; vsock; hotplug ports; disk caching) and every
-boot variant of the image. It writes `report.json` beside the tarball: per row, the command
+machine's features (accelerator; memory fixed or with a virtio-mem ceiling; vsock; a hotplug
+controller) and every boot variant of the image. It writes `report.json` beside the tarball: per row, the command
 line, the shape and fingerprint, whether QEMU ran it, and p50/p95 of each boot phase. It then
 appends `spin-machine compare` against the newest earlier release that has a report to the
 release notes. The axes are the `axes` table in `boot/report_test.go`; a new axis is measured

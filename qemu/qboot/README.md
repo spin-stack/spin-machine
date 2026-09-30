@@ -88,8 +88,6 @@ The 3.9–6.3 ms observed reduction is useful but is not evidence of a larger sa
 complete userspace boot: measured against this machine's real boot, the firmware is
 about 10 ms of a few hundred.
 
-Before selecting qboot for a release, verify the full device topology, CPU/memory
-hotplug, reset, and systemd/SSH readiness. Firmware contents are currently absent
-from Spec.Fingerprint: supporting a selectable firmware requires including them
-in machine identity, otherwise two different firmware builds could match templates.
-Keep the existing SeaBIOS release unchanged until those parts are handled.
+Firmware contents are part of Spec.Fingerprint — the BIOS and pvh.bin, by content — so
+two firmware builds are two machines, and a checkpoint saved under one does not resume
+under the other.

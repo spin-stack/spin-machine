@@ -82,16 +82,6 @@ func TestQMP(t *testing.T) {
 		},
 		wantErr: "failed: No space left on device",
 	}, {
-		// x-ignore-shared skips only shared RAM: a template of anything else writes its
-		// memory into the state and restores nothing a template restore expects.
-		name: "a template of RAM that is not shared is refused before it stops the VM",
-		replies: []string{
-			`{"return": {}}`,
-			`{"return": [{"id": "pc.ram", "share": false, "size": 536870912}]}`,
-		},
-		do:      freeze,
-		wantErr: "the VM's RAM is not a shared pc.ram",
-	}, {
 		name:    "a refused handshake",
 		replies: []string{`{"error": {"class": "CommandNotFound", "desc": "not in this mode"}}`},
 		wantErr: "qmp_capabilities: CommandNotFound: not in this mode",

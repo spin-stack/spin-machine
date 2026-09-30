@@ -199,8 +199,8 @@ func (p *probe) mustReach(t *testing.T, variant string, gen bool, marker string)
 // QEMU with a fresh GUID, and requires the guest to say it noticed.
 //
 // The reseed is the whole reason the device is on the machine's command line: two guests
-// restored from one template share the template's memory, and that memory contains the
-// state of the random pool. A firmware that boots and quietly fails to publish the table
+// resumed from one checkpoint share its memory, and that memory contains the state of the
+// random pool. A firmware that boots and quietly fails to publish the table
 // produces two VMs generating the same "random" bytes, and nothing on either of them
 // reports a fault.
 func (p *probe) mustPublishVMGenID(t *testing.T) {
@@ -236,7 +236,7 @@ func (p *probe) mustPublishVMGenID(t *testing.T) {
 	q.do(t, "cont", nil)
 	if _, err := r.wait("crng reseeded due to virtual machine fork", 20*time.Second); err != nil {
 		t.Fatalf("the restored guest never reseeded, so the GUID did not reach it "+
-			"— every VM restored from one template would share its random pool: %v", err)
+			"— every VM resumed from one checkpoint would share its random pool: %v", err)
 	}
 	t.Log("restored guest reseeded: the WRITE_POINTER path carries the GUID")
 }

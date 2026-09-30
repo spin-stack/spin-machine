@@ -190,8 +190,6 @@ type machineFlags struct {
 	accel        string
 	cpus         int
 	maxCPUs      int
-	memFile      string
-	memShare     bool
 	hotplugDisks int
 
 	vsockCID int
@@ -227,8 +225,6 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.accel, "accel", "", "kvm (default) or tcg; tcg runs the release's TCG build unless --qemu names another")
 	fs.IntVar(&o.cpus, "cpus", 2, "boot vCPUs")
 	fs.IntVar(&o.maxCPUs, "max-cpus", 0, "vCPU hotplug ceiling (0: no hotplug)")
-	fs.StringVar(&o.memFile, "memory-file", "", "back guest RAM with this file instead of anonymous memory")
-	fs.BoolVar(&o.memShare, "memory-share", false, "map the memory file shared, which is what freezing a template needs")
 	fs.IntVar(&o.hotplugDisks, "hotplug-disks", 0,
 		fmt.Sprintf("disks attach can give the VM at once while it runs (0-%d)", machine.MaxHotplugDisks))
 
@@ -287,16 +283,13 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 	s.Memory = machine.Memory{
 		SizeMB: o.memoryMB,
 		MaxMB:  o.maxMemMB,
-		File:   o.memFile,
-		Shared: o.memShare,
 	}
 	s.HotplugDisks = o.hotplugDisks
 	s.VsockCID = o.vsockCID
 	if o.qmp != "" {
 		s.Monitors = []machine.Monitor{{Socket: o.qmp}}
 	}
-	// defer is QEMU's own word for "the source comes over QMP", and a template needs it:
-	// see restore.
+	// defer is QEMU's own word for "the source comes over QMP": see restore.
 	if o.incoming == "defer" {
 		s.IncomingDefer = true
 	} else {
@@ -392,16 +385,13 @@ func fingerprint(s machine.Spec) error {
 	if err != nil {
 		return err
 	}
-	// The shape a *template* is taken from, which is the one the fingerprint
-	// hashes.
-	shape := s.TemplateShape()
 	out := struct {
 		Fingerprint string        `json:"fingerprint"`
 		QEMU        string        `json:"qemu"`
 		Kernel      string        `json:"kernel"`
 		Initrd      string        `json:"initrd,omitempty"`
 		Shape       machine.Shape `json:"shape"`
-	}{fp, s.QEMU, s.Kernel, s.Initrd, shape}
+	}{fp, s.QEMU, s.Kernel, s.Initrd, s.Shape()}
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -612,32 +602,25 @@ func memory(o memoryFlags, w io.Writer) error {
 }
 
 type saveFlags struct {
-	qmp      string
-	to       string
-	template bool
-	timeout  time.Duration
+	qmp     string
+	to      string
+	timeout time.Duration
 }
 
 func (o *saveFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
 	fs.StringVar(&o.to, "to", "", "where to write the state (required)")
-	fs.BoolVar(&o.template, "template", false,
-		"leave guest RAM in the VM's shared --memory-file and write only the device state (docs/templates.md)")
 	fs.DurationVar(&o.timeout, "timeout", 5*time.Minute, "how long the save may take")
 }
 
-// save stops a running VM and writes everything needed to resume it elsewhere.
+// save stops a running VM and writes everything needed to resume it: a checkpoint.
 //
 // It is `migrate` to a file, which is the same mechanism a live migration uses
-// with the far end replaced by a path: memory, device state, CPU state. The VM is
-// left stopped, because a VM that kept running after its state was captured would
-// have written to its disk and the state would no longer describe it.
-//
-// Without --template the memory goes into the file, which is right for the thing a
-// plain save is for: one file that can be copied to another machine and resumed
-// there. --template is the other contract, many VMs on one host restored from one
-// frozen machine: x-ignore-shared leaves RAM in the file that already backs it, and
-// the state is the devices alone.
+// with the far end replaced by a path: memory, device state and CPU state, all in
+// the one file, so it can be copied and resumed on another machine with the same
+// fingerprint. The VM is left stopped, because a VM that kept running after its
+// state was captured would have written to its disk and the state would no longer
+// describe it.
 func save(o saveFlags) error {
 	if o.qmp == "" || o.to == "" {
 		return errors.New("save: --qmp and --to are required")
@@ -653,11 +636,6 @@ func save(o saveFlags) error {
 	}
 	defer func() { _ = c.Close() }()
 
-	if o.template {
-		if err := freeze(c); err != nil {
-			return err
-		}
-	}
 	if err := c.run("migrate", map[string]any{"uri": "file:" + to}, nil); err != nil {
 		return fmt.Errorf("starting the save: %w", err)
 	}
@@ -673,60 +651,24 @@ func save(o saveFlags) error {
 	return nil
 }
 
-// freeze makes the next migrate a template: RAM stays in its file, the VM stops first.
-//
-// The RAM has to be shared for that to mean anything. x-ignore-shared skips only
-// memory mapped shared; a VM with private or anonymous RAM would write its memory
-// into the stream anyway and produce a state file that restores nothing a template
-// restore expects — so it is asked, and refused here, not discovered at restore.
-//
-// stop before migrate, not after: see docs/templates.md.
-func freeze(c *qmpConn) error {
-	type memdev struct {
-		ID    string `json:"id"`
-		Share bool   `json:"share"`
-	}
-	var mem []memdev
-	if err := c.run("query-memdev", nil, &mem); err != nil {
-		return err
-	}
-	if !slices.ContainsFunc(mem, func(m memdev) bool { return m.ID == machine.MemoryBackendID && m.Share }) {
-		return fmt.Errorf("save --template: the VM's RAM is not a shared %s; boot it with --memory-file and --memory-share",
-			machine.MemoryBackendID)
-	}
-	if err := c.run("migrate-set-capabilities", ignoreShared, nil); err != nil {
-		return err
-	}
-	return c.run("stop", nil, nil)
-}
-
-// ignoreShared is the capability both sides of a template have to agree on. Set on
-// one side only, QEMU exits at load: "Capability x-ignore-shared is off, but received
-// capability is on".
-var ignoreShared = map[string]any{
-	"capabilities": []map[string]any{{"capability": "x-ignore-shared", "state": true}},
-}
-
 type restoreFlags struct {
-	qmp      string
-	from     string
-	template bool
-	timeout  time.Duration
+	qmp     string
+	from    string
+	timeout time.Duration
 }
 
 func (o *restoreFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "QMP socket of a VM booted with --incoming defer (required)")
 	fs.StringVar(&o.from, "from", "", "the state save wrote (required)")
-	fs.BoolVar(&o.template, "template", false, "the state is a template's: RAM comes from the VM's --memory-file")
 	fs.DurationVar(&o.timeout, "timeout", 5*time.Minute, "how long the load may take")
 }
 
 // restore loads a saved state into a VM waiting for one, and runs it.
 //
-// A separate command, and not a URI given to boot, because boot becomes QEMU and a
-// template needs a word with QEMU before the first byte is read: the capability.
-// There is no way to hand exec a migration capability. For a plain save,
-// `boot --incoming file:PATH` does the same thing in one step.
+// `boot --incoming file:PATH` loads the same file in one step. This is the other
+// form, and the one a caller that resumes checkpoints uses: the machine is started
+// with -incoming defer (Spec.IncomingDefer), and the state is named over QMP once
+// the caller is ready for it. Driving that by hand is what this command is for.
 func restore(o restoreFlags) error {
 	if o.qmp == "" || o.from == "" {
 		return errors.New("restore: --qmp and --from are required")
@@ -741,11 +683,6 @@ func restore(o restoreFlags) error {
 	}
 	defer func() { _ = c.Close() }()
 
-	if o.template {
-		if err := c.run("migrate-set-capabilities", ignoreShared, nil); err != nil {
-			return err
-		}
-	}
 	if err := c.run("migrate-incoming", map[string]any{"uri": "file:" + from}, nil); err != nil {
 		return fmt.Errorf("loading %s: %w", from, err)
 	}
@@ -753,8 +690,8 @@ func restore(o restoreFlags) error {
 		return fmt.Errorf("loading %s: %w", from, err)
 	}
 	// A VM saved stopped comes back stopped: QEMU carries the source's run state across
-	// and does not autostart a machine that was paused when it was captured, which every
-	// template is. A plain save of a running VM arrives running.
+	// and does not autostart a machine that was paused when it was captured. A save of a
+	// running VM arrives running.
 	var st struct {
 		Status string `json:"status"`
 	}
@@ -777,8 +714,9 @@ func restore(o restoreFlags) error {
 // save that fails leaves a truncated file, so its status is asked for rather than
 // assumed.
 //
-// Every 2 ms, because a template restore is over in ~25 and the poll is inside what it
-// takes: the 100 ms a save could afford would be four times the thing a restore waits for.
+// Every 2 ms, because whatever is left of the interval when the migration completes is
+// added to the restore: a poll is one QMP round trip, and the 100 ms a long save could
+// afford would be up to 100 ms more on every resume.
 func (q *qmpConn) waitMigration(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {

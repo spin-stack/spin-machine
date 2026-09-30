@@ -1,8 +1,8 @@
 # The QEMU this machine runs on. One build, for every consumer, and statically linked.
 #
 # One and not several, and the reason is not disk. `machine.Spec.Fingerprint` hashes this
-# binary's *contents* into the identity that decides whether a VM may restore from a
-# template, so two binaries are two machines and a template taken on one is undefined on
+# binary's *contents* into the identity that decides whether a VM may resume from a
+# checkpoint, so two binaries are two machines and a checkpoint taken on one is undefined on
 # the other. A second build of "the same" QEMU with one flag moved is a second machine that
 # looks identical in a file listing.
 #

@@ -175,8 +175,8 @@ jobs:
 
       # The other thing a changed QEMU binary is: a different machine. It is hashed by
       # content into the fingerprint exactly as the kernel is, so a configure flag added
-      # here, or a device removed from devices.mak, stops every template in the fleet from
-      # matching. Compared against the last released machine.env and reported; never a
+      # here, or a device removed from devices.mak, stops every checkpoint in the fleet from
+      # resuming. Compared against the last released machine.env and reported; never a
       # failure, since changing the machine is a thing that gets done on purpose.
       #
       # The TCG binary is deliberately not compared. It is not part of a machine's identity

@@ -1,7 +1,7 @@
 # Guest kernel
 
 A version and a config file (`config-<version>-<arch>`). It is here because a kernel and the
-machine that boots it are one release: changing either invalidates every template taken
+machine that boots it are one release: changing either strands every checkpoint taken
 against the previous pair. `task kernel:build` builds it; `task kernel:verify` reads the ELF
 notes out of the kernel it just stripped.
 
@@ -44,7 +44,7 @@ boundary this machine already is.
 
 ## Changing it
 
-Every change to the config invalidates every template in the fleet, which is the design —
+Every change to the config strands every checkpoint in the fleet, which is the design —
 it should not be quiet. The kernel workflow runs `hack/fingerprint-diff` and puts the
 answer in its summary.
 

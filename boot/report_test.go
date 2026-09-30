@@ -30,26 +30,16 @@ type choice struct {
 	flags []string
 }
 
-// memoryFile and diskFile stand in for the per-boot paths in the command line a report
-// records, so that it is the same on every host and every run.
-const (
-	memoryFile       = "/report/memory"
-	sharedMemoryFile = "/report/memory-shared"
-	diskFile         = "/report/disk.qcow2"
-)
+// diskFile stands in for the per-boot disk in the command line a report records, so that it
+// is the same on every host and every run.
+const diskFile = "/report/disk.qcow2"
 
 var axes = []axis{
 	// The KVM build a host runs, and the TCG build that has no /dev/kvm to ask.
 	{"accel", []choice{{"kvm", nil}, {"tcg", []string{"--accel", "tcg"}}}},
-	// RAM as a template sees it: anonymous; a file mapped private and read-only, which is a
-	// VM restored from a template's memory; a file mapped shared, which is what freezing a
-	// template needs; and a ceiling reached through virtio-mem.
+	// RAM fixed at its boot size, or with a ceiling reached through virtio-mem.
 	{"memory", []choice{
 		{"anonymous", nil},
-		{"private-file", []string{"--memory-file", memoryFile}},
-		// Its own file: a shared mapping writes the guest's RAM back, and the private rows
-		// would otherwise read one boot's leftovers as their template.
-		{"shared-file", []string{"--memory-file", sharedMemoryFile, "--memory-share"}},
 		{"ceiling", []string{"--max-memory", "4096"}},
 	}},
 	{"vsock", []choice{{"off", nil}, {"on", []string{"--vsock-cid", "1000"}}}},
@@ -138,16 +128,6 @@ func TestReport(t *testing.T) {
 	// sample of whichever row came first.
 	bootOnce(t, out, variant{label: "warm-up", cpus: "2", memory: "2048", files: login})
 
-	// The memory file exists before QEMU does: a private mapping of it is a restore target's,
-	// which reads a template's memory and never creates one. A sparse file of the guest's size
-	// stands in for the template.
-	scratch := t.TempDir()
-	if err := os.WriteFile(filepath.Join(scratch, "memory"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Truncate(filepath.Join(scratch, "memory"), 2048<<20); err != nil {
-		t.Fatal(err)
-	}
 	for _, combo := range combinations() {
 		row := boot.Row{Features: map[string]string{}}
 		var ids, rowFlags []string
@@ -180,7 +160,7 @@ func TestReport(t *testing.T) {
 		row.Fingerprint, row.Shape = fp.Fingerprint, fp.Shape
 
 		v := variant{label: row.ID, cpus: "2", memory: "2048", files: login,
-			flags: perBoot(rowFlags, scratch)}
+			flags: rowFlags}
 		if row.Features["accel"] == "tcg" {
 			v.timeout = 5 * time.Minute
 		}
@@ -255,20 +235,6 @@ func static(t *testing.T, out, command string, flags []string) []string {
 		lines = append(lines, strings.ReplaceAll(l, out, "$RELEASE"))
 	}
 	return lines
-}
-
-// perBoot puts the fixed names a report records back at real paths for a boot.
-func perBoot(flags []string, dir string) []string {
-	f := append([]string(nil), flags...)
-	for i := range f {
-		switch f[i] {
-		case memoryFile:
-			f[i] = filepath.Join(dir, "memory")
-		case sharedMemoryFile:
-			f[i] = filepath.Join(dir, "memory-shared")
-		}
-	}
-	return f
 }
 
 func thisHost(t *testing.T) boot.Host {

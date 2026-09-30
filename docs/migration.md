@@ -1,18 +1,17 @@
 # Moving a VM to another machine
 
-This is the host-to-host case: one state file, carried somewhere else, resumed there. The
-other one — many VMs on one host restored from a single frozen machine — is the same two
-arguments with one migration capability added, and it is in [templates.md](templates.md).
+A checkpoint is one state file — memory, device state and CPU state, written by a
+`migrate` to a file — carried somewhere else and resumed there.
 
 Stopping a VM here and resuming it there is a lifecycle, and this repository does not
-implement one — it builds the machine that lifecycle runs on, and offers the two arguments
-it needs: `Memory.File` (the guest's RAM lives in a file, so it can stay there while the
-device state is written elsewhere) and `IncomingDefer` (start with no state and wait to be
-told where it is, over QMP, because the capability that keeps the RAM in the file has to be
-agreed before the first byte is read).
+implement one — it builds the machine that lifecycle runs on, and offers the arguments it
+needs: `Incoming` (a state to load at exec time, `-incoming file:…`) and `IncomingDefer`
+(start with no state and wait to be told where it is, over QMP, for a caller that starts the
+machine before it has the state in hand).
 
-`spin-machine save --qmp … --to state` and `spin-machine boot --incoming file:state` are the
-same two halves by hand, with the memory inside the state file rather than beside it.
+`spin-machine save --qmp … --to state` is the first half by hand, and the second is either
+`spin-machine boot --incoming file:state` or `boot --incoming defer` followed by
+`spin-machine restore --qmp … --from state`.
 
 ## The CPU decides whether a VM can move at all
 
@@ -45,5 +44,5 @@ features` and exit 1, before the VM exists.
 Down to whether there is a serial port — restoring without one says `Unknown section or
 instance 'serial'`. That is why the device set is in the fingerprint
 ([machine.md](machine.md#the-fingerprint)). NICs are in it, by count and MTU: a NIC is on
-the command line, so it is there when the state is loaded. Disks are not: they are attached
-to a guest that is already running, so counting them would stop a VM finding its template.
+the command line, so it is there when the state is loaded. Disks are not: they are the VM's
+and not the machine's, and whoever resumes a checkpoint gives it the disks it was saved with.

@@ -150,7 +150,7 @@ func (c Cmdline) String() string {
 	// because every one of those thousand wakeups a second is a vmexit. And the
 	// setup cost it would buy back does not show: with the tick left alone, a
 	// machine's boot and a workspace's restore both measured what they did before
-	// — 821-853 ms to boot and build a template, 113-221 ms to a usable workspace,
+	// — 821-853 ms from boot to a saved state, 113-221 ms to a usable workspace,
 	// against 843-846 ms and 124-216 ms with nohz=off.
 	//
 	// Not every VM is short-lived, either. A machine that is started before anyone

@@ -11,7 +11,7 @@
 # bump. What a bump is then checked with is the entry's note.
 #
 # A bump of qemu, kernel, debian or debian-snapshot is a new machine: a different QEMU binary
-# or vmlinux is a different fingerprint, and every template in existence stops matching (see
+# or vmlinux is a different fingerprint, and every checkpoint in existence stops resuming (see
 # CLAUDE.md, the first rule). The lane that builds it says so on its summary. That is not a
 # reason not to bump; it is a reason for the bump to be its own commit.
 #
