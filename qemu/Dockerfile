@@ -405,7 +405,8 @@ RUN for b in /opt/qemu/bin/qemu-system-x86_64 /opt/qemu/bin/qemu-img \
 # runner, 20 boots interleaved (2026-09-29): 121.9 -> 114.8 ms p50 to a diagnostic init, and
 # report's whole matrix boots on it. Stock qboot cannot run this machine: its ACPI linker
 # loader stops on WRITE_POINTER, which vmgenid needs, and the guest halts with nothing on the
-# console. qboot/write-pointer.patch adds the command; qboot/README.md says what it does.
+# console. qboot/write-pointer.patch adds the command, qboot/pam.patch cuts the memory map
+# rebuilds its PAM setup costs QEMU; qboot/README.md says what each does.
 #
 # Built here and not by a Dockerfile of its own, because it ships beside the SeaBIOS blobs it
 # replaces: everything that reads this build's qemu/ directory - a release, `task qemu:fetch`,
@@ -452,13 +453,14 @@ RUN git clone --quiet --branch "${QBOOT_VERSION}" https://github.com/bonzini/qbo
     git -C upstream archive "${QBOOT_COMMIT}" > upstream.tar && \
     echo "${QBOOT_ARCHIVE_SHA256}  upstream.tar" | sha256sum -c -
 
-COPY qemu/qboot/write-pointer.patch /build/write-pointer.patch
+COPY qemu/qboot/write-pointer.patch qemu/qboot/pam.patch /build/
 
 # Upstream's meson.build flags, with -Os fixed rather than taken from a build type.
 RUN set -eux; \
     mkdir -p src out; \
     tar -xf upstream.tar -C src; \
     patch -p1 --fuzz=0 -d src < write-pointer.patch; \
+    patch -p1 --fuzz=0 -d src < pam.patch; \
     cd src; \
     for f in *.c *.S; do \
         gcc -Os -m32 -march=i386 -mregparm=3 -fno-stack-protector \
@@ -471,13 +473,15 @@ RUN set -eux; \
     objcopy -O binary /build/out/qboot.elf /build/qboot.bin
 
 # Asserted on what came out. A firmware that is not the size the ROM window expects does not
-# fail here - it fails as a guest that prints nothing - so the size is checked; and the patch,
-# because a patch that applied to nothing still leaves a tree that compiles, and the firmware
-# built from it hangs every machine that has vmgenid.
+# fail here - it fails as a guest that prints nothing - so the size is checked; and the patches,
+# because a patch that applied to nothing still leaves a tree that compiles: without the first
+# the firmware hangs every machine that has vmgenid, without the second it is slower and says
+# nothing.
 RUN set -eux; \
     size=$(stat -c%s /build/qboot.bin); \
     test "$size" -eq 65536 || { echo "qboot.bin is $size bytes, not 65536" >&2; exit 1; }; \
     grep -q 'CMD_WRITE_PTR' src/tables.c && grep -q 'fw_cfg_write_file' src/fw_cfg.c || { echo "the WRITE_POINTER patch is not in the tree that was compiled" >&2; exit 1; }; \
+    grep -q '0x33333330' src/hwsetup.c || { echo "the PAM patch is not in the tree that was compiled" >&2; exit 1; }; \
     sha256sum /build/qboot.bin
 
 FROM ${ALPINE_IMAGE} AS runtime

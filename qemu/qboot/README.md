@@ -13,12 +13,22 @@ Protocol references:
 [the ACPI linker loader](https://github.com/qemu/qemu/blob/master/hw/acpi/bios-linker-loader.c).
 The patch is GPL-2.0, like upstream; see COPYING and the repository NOTICE.
 
+## PAM in three writes
+
+qboot makes 0xc0000-0x100000 ram with seven one-byte configuration writes, one per PAM
+register, and QEMU's q35 host bridge rebuilds the guest's memory map for each write that
+touches one (`mch_update_pam`) - every address space's flat view and KVM's memory slots.
+`pam.patch` sets q35's registers, which start 4-aligned at 0x90, with a long, a word and a
+byte. The values are immediates: once PAM0 is ram, 0xf0000-0x100000 reads zeroes until
+`setup_hw` has shadowed the BIOS, so a table in `.rodata` would be read back as zeroes.
+i440fx keeps the loop; this machine is q35 and nothing here boots the other.
+
 ## Build
 
 `task qemu:build` builds it, in the `qboot` stage of `qemu/Dockerfile`, and it lands beside
 the SeaBIOS blobs as `_output/qemu/qboot.bin`, where a release, `task qemu:fetch` and CI all
 find it. The stage clones the pinned commit, verifies the SHA-256 of the tar `git archive`
-writes for it, applies `write-pointer.patch` with no fuzz, and compiles with upstream's
+writes for it, applies `write-pointer.patch` and then `pam.patch` with no fuzz, and compiles with upstream's
 meson.build flags plus `-Os`. It asserts on what came out: 65536 bytes, the ROM window it is
 linked for, and the patch's code in the tree that was compiled.
 
