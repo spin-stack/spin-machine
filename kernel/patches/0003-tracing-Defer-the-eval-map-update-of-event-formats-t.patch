@@ -1,0 +1,214 @@
+From 5d95db0bc449dd06d73caa8da52fd435ec50ae8d Mon Sep 17 00:00:00 2001
+From: Manuel de Brito Fontes <aledbf@gmail.com>
+Date: Tue, 29 Sep 2026 21:53:46 -0300
+Subject: [PATCH 3/4] tracing: Defer the eval map update of event formats to
+ first use
+
+trace_eval_init() queues trace_event_update_with_eval_map() for the
+built-in eval maps, which rewrites the print format and field types of
+every event, and trace_eval_sync() waits for it at late_initcall_sync.
+Nothing reads the result until a format file is opened or a filter,
+trigger or dynamic event is created, and a system may never do either.
+
+The maps are init data. Copy them at boot, which takes microseconds,
+and leave the rewrite pending. trace_eval_ensure() does it once, before
+each of the paths that read an event's format or field types: the
+format file, event and subsystem filters, perf filters, triggers,
+dynamic events and boot-time tracing from bootconfig. It must be called
+without event_mutex held, since the rewrite takes it; lockdep checks
+that.
+
+On an x86_64 KVM guest with one vCPU the rewrite is 9.0 ms of a
+kworker's CPU during boot. With the two ftrace patches before it, the
+time from kernel start to "Freeing unused kernel image" goes from
+109.9 ms to 78.5 ms (p50 of 15 boots, interleaved). A format read back
+after boot has the eval map values in it.
+
+The trade-offs: the first read of a format or write of a filter pays the
+rewrite, about 9 ms once; the copy of the maps stays allocated; and the
+modules' own eval maps, applied when a module loads, are not deferred.
+
+Assisted-by: LLM
+---
+ kernel/trace/trace.c                | 51 +++++++++++++++++++++++++++--
+ kernel/trace/trace.h                |  2 ++
+ kernel/trace/trace_boot.c           |  3 ++
+ kernel/trace/trace_dynevent.c       |  1 +
+ kernel/trace/trace_events.c         |  3 ++
+ kernel/trace/trace_events_filter.c  |  1 +
+ kernel/trace/trace_events_trigger.c |  1 +
+ 7 files changed, 59 insertions(+), 3 deletions(-)
+
+diff --git a/kernel/trace/trace.c b/kernel/trace/trace.c
+index c4fa38a1f..e2c56382e 100644
+--- a/kernel/trace/trace.c
++++ b/kernel/trace/trace.c
+@@ -9141,12 +9141,53 @@ struct workqueue_struct *trace_init_wq __initdata;
+ static struct work_struct eval_map_work __initdata;
+ static struct work_struct tracerfs_init_work __initdata;
+ 
++/*
++ * The built-in eval maps are init data, and rewriting every event's print format
++ * and field types with them costs milliseconds of boot that nothing needs until
++ * something reads a format or writes a filter. At boot they are copied and the
++ * rewrite is left pending; trace_eval_ensure() does it once, on first use.
++ */
++static struct trace_eval_map **trace_eval_pending_maps;
++static int trace_eval_pending_len;
++static DEFINE_MUTEX(trace_eval_lock);
++
++/* Must be called without event_mutex held: the rewrite takes it. */
++void trace_eval_ensure(void)
++{
++	lockdep_assert_not_held(&event_mutex);
++	if (!READ_ONCE(trace_eval_pending_maps))
++		return;
++	mutex_lock(&trace_eval_lock);
++	if (trace_eval_pending_maps) {
++		trace_event_update_with_eval_map(NULL, trace_eval_pending_maps,
++						 trace_eval_pending_len);
++		WRITE_ONCE(trace_eval_pending_maps, NULL);
++	}
++	mutex_unlock(&trace_eval_lock);
++}
++
+ static void __init eval_map_work_func(struct work_struct *work)
+ {
+-	int len;
++	struct trace_eval_map **maps, *copy;
++	int len, i;
+ 
+ 	len = __stop_ftrace_eval_maps - __start_ftrace_eval_maps;
+-	trace_event_update_with_eval_map(NULL, __start_ftrace_eval_maps, len);
++	maps = kmalloc_array(len, sizeof(*maps), GFP_KERNEL);
++	copy = kmalloc_array(len, sizeof(*copy), GFP_KERNEL);
++	if (!len || !maps || !copy) {
++		kfree(maps);
++		kfree(copy);
++		trace_event_update_with_eval_map(NULL, __start_ftrace_eval_maps, len);
++		return;
++	}
++	for (i = 0; i < len; i++) {
++		copy[i] = *__start_ftrace_eval_maps[i];
++		maps[i] = &copy[i];
++	}
++	mutex_lock(&trace_eval_lock);
++	trace_eval_pending_len = len;
++	WRITE_ONCE(trace_eval_pending_maps, maps);
++	mutex_unlock(&trace_eval_lock);
+ }
+ 
+ static int __init trace_eval_init(void)
+@@ -9161,7 +9202,11 @@ static int __init trace_eval_init(void)
+ 		return -ENOMEM;
+ 	}
+ 
+-	queue_work(trace_init_wq, &eval_map_work);
++	/*
++	 * Synchronously: copying the maps takes microseconds, and the rewrite has to be
++	 * pending before anything that could need it - boot-time filters included - runs.
++	 */
++	eval_map_work_func(&eval_map_work);
+ 	return 0;
+ }
+ 
+diff --git a/kernel/trace/trace.h b/kernel/trace/trace.h
+index 3749485a7..124c71dae 100644
+--- a/kernel/trace/trace.h
++++ b/kernel/trace/trace.h
+@@ -2288,12 +2288,14 @@ static inline const char *get_syscall_name(int syscall)
+ #ifdef CONFIG_EVENT_TRACING
+ void trace_event_init(void);
+ void trace_event_update_all(struct trace_eval_map **map, int len, struct module *mod);
++void trace_eval_ensure(void);
+ /* Used from boot time tracer */
+ extern int ftrace_set_clr_event(struct trace_array *tr, char *buf, int set);
+ extern int trigger_process_regex(struct trace_event_file *file, char *buff);
+ #else
+ static inline void __init trace_event_init(void) { }
+ static inline void trace_event_update_all(struct trace_eval_map **map, int len, struct module *mod) { }
++static inline void trace_eval_ensure(void) { }
+ #endif
+ 
+ #ifdef CONFIG_TRACER_SNAPSHOT
+diff --git a/kernel/trace/trace_boot.c b/kernel/trace/trace_boot.c
+index 2ca2541c8..bf0a80aa4 100644
+--- a/kernel/trace/trace_boot.c
++++ b/kernel/trace/trace_boot.c
+@@ -653,6 +653,9 @@ static int __init trace_boot_init(void)
+ 	if (!trace_node)
+ 		return 0;
+ 
++	/* Filters and histograms read the event fields' types. */
++	trace_eval_ensure();
++
+ 	tr = top_trace_array();
+ 	if (!tr)
+ 		return 0;
+diff --git a/kernel/trace/trace_dynevent.c b/kernel/trace/trace_dynevent.c
+index c4dfbc293..4958c0fd0 100644
+--- a/kernel/trace/trace_dynevent.c
++++ b/kernel/trace/trace_dynevent.c
+@@ -124,6 +124,7 @@ int dyn_event_create(const char *raw_command, struct dyn_event_operations *type)
+ {
+ 	int ret;
+ 
++	trace_eval_ensure();
+ 	mutex_lock(&dyn_event_ops_mutex);
+ 	ret = type->create(raw_command);
+ 	mutex_unlock(&dyn_event_ops_mutex);
+diff --git a/kernel/trace/trace_events.c b/kernel/trace/trace_events.c
+index 9c62202b0..a57b87d40 100644
+--- a/kernel/trace/trace_events.c
++++ b/kernel/trace/trace_events.c
+@@ -2177,6 +2177,7 @@ static int trace_format_open(struct inode *inode, struct file *file)
+ 
+ 	/* Do we want to hide event format files on tracefs lockdown? */
+ 
++	trace_eval_ensure();
+ 	ret = seq_open(file, &trace_format_seq_ops);
+ 	if (ret < 0)
+ 		return ret;
+@@ -2252,6 +2253,7 @@ event_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
+ 	if (IS_ERR(buf))
+ 		return PTR_ERR(buf);
+ 
++	trace_eval_ensure();
+ 	mutex_lock(&event_mutex);
+ 	file = event_file_file(filp);
+ 	if (file)
+@@ -2401,6 +2403,7 @@ subsystem_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
+ 	if (IS_ERR(buf))
+ 		return PTR_ERR(buf);
+ 
++	trace_eval_ensure();
+ 	err = apply_subsystem_event_filter(dir, buf);
+ 	kfree(buf);
+ 	if (err < 0)
+diff --git a/kernel/trace/trace_events_filter.c b/kernel/trace/trace_events_filter.c
+index 2b46ca536..b69f8cb50 100644
+--- a/kernel/trace/trace_events_filter.c
++++ b/kernel/trace/trace_events_filter.c
+@@ -2711,6 +2711,7 @@ int ftrace_profile_set_filter(struct perf_event *event, int event_id,
+ 	struct event_filter *filter = NULL;
+ 	struct trace_event_call *call;
+ 
++	trace_eval_ensure();
+ 	guard(mutex)(&event_mutex);
+ 
+ 	call = event->tp_event;
+diff --git a/kernel/trace/trace_events_trigger.c b/kernel/trace/trace_events_trigger.c
+index 1954184ab..884173b29 100644
+--- a/kernel/trace/trace_events_trigger.c
++++ b/kernel/trace/trace_events_trigger.c
+@@ -409,6 +409,7 @@ static ssize_t event_trigger_regex_write(struct file *file,
+ 	if (IS_ERR(buf))
+ 		return PTR_ERR(buf);
+ 
++	trace_eval_ensure();
+ 	guard(mutex)(&event_mutex);
+ 
+ 	event_file = event_file_file(file);
+-- 
+2.53.0
+
