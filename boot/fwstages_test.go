@@ -128,8 +128,9 @@ func traceOneBoot(t *testing.T, args []string) map[string]stage {
 	return st
 }
 
-// " 12345@1790000000.123456:fw_cfg_select 0x55d0 key 0x0019 'etc/e820', ret: 1"
-var reTrace = regexp.MustCompile(`^\d+@(\d+)\.(\d{6}):(\w+) (.*)$`)
+// "2026-09-30T01:52:04.431886Z fw_cfg_select 0x7c8f2b993390 key 0x0019 'etc/e820', ret: 1": QEMU's
+// log backend under -msg timestamp=on, in UTC.
+var reTrace = regexp.MustCompile(`^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6})Z (\w+) (.*)$`)
 
 var reSelectName = regexp.MustCompile(`key 0x([0-9a-f]+) '([^']*)'`)
 
@@ -175,10 +176,11 @@ func stages(trace string, exec0, ready time.Time) map[string]stage {
 		if m == nil {
 			continue
 		}
-		sec, _ := strconv.ParseInt(m[1], 10, 64)
-		usec, _ := strconv.ParseInt(m[2], 10, 64)
-		at := time.Unix(sec, usec*1000)
-		switch m[3] {
+		at, err := time.ParseInLocation("2006-01-02T15:04:05.000000", m[1], time.UTC)
+		if err != nil {
+			continue
+		}
+		switch m[2] {
 		case "kvm_run_exit":
 			if len(exits) == 0 {
 				add("firmware start", at)
@@ -189,7 +191,7 @@ func stages(trace string, exec0, ready time.Time) map[string]stage {
 				add("PCI walk", at)
 			}
 		case "fw_cfg_select":
-			s := reSelectName.FindStringSubmatch(m[4])
+			s := reSelectName.FindStringSubmatch(m[3])
 			if s == nil {
 				continue
 			}
@@ -252,18 +254,18 @@ func stageTable(runs []map[string]stage) string {
 
 func TestTheFirmwareTraceIsSplitIntoItsSteps(t *testing.T) {
 	exec0 := time.Unix(1000, 0)
-	trace := `7@1000.030000:kvm_run_exit cpu_index 0, reason 2
-7@1000.030500:pci_cfg_read virtio-rng-pci 03:0 @0x0 -> 0x1af4
-7@1000.031000:kvm_run_exit cpu_index 0, reason 2
-7@1000.032000:fw_cfg_select 0x55 key 0x0019 'etc/file-dir', ret: 1
-7@1000.033000:fw_cfg_select 0x55 key 0x0021 'etc/table-loader', ret: 1
-7@1000.033500:kvm_run_exit cpu_index 0, reason 2
-7@1000.034000:fw_cfg_select 0x55 key 0x0022 'etc/acpi/tables', ret: 1
-7@1000.036000:fw_cfg_select 0x55 key 0x0024 'etc/e820', ret: 1
-7@1000.037000:fw_cfg_select 0x55 key 0x0014 'cmdline size', ret: 1
-7@1000.038000:fw_cfg_select 0x55 key 0x000b 'initrd size', ret: 1
-7@1000.041000:fw_cfg_select 0x55 key 0x0008 'kernel size', ret: 1
-7@1000.041200:fw_cfg_select 0x55 key 0x0010 'kernel entry', ret: 1
+	trace := `1970-01-01T00:16:40.030000Z kvm_run_exit cpu_index 0, reason 2
+1970-01-01T00:16:40.030500Z pci_cfg_read virtio-rng-pci 03:0 @0x0 -> 0x1af4
+1970-01-01T00:16:40.031000Z kvm_run_exit cpu_index 0, reason 2
+1970-01-01T00:16:40.032000Z fw_cfg_select 0x55 key 0x0019 'etc/file-dir', ret: 1
+1970-01-01T00:16:40.033000Z fw_cfg_select 0x55 key 0x0021 'etc/table-loader', ret: 1
+1970-01-01T00:16:40.033500Z kvm_run_exit cpu_index 0, reason 2
+1970-01-01T00:16:40.034000Z fw_cfg_select 0x55 key 0x0022 'etc/acpi/tables', ret: 1
+1970-01-01T00:16:40.036000Z fw_cfg_select 0x55 key 0x0024 'etc/e820', ret: 1
+1970-01-01T00:16:40.037000Z fw_cfg_select 0x55 key 0x0014 'cmdline size', ret: 1
+1970-01-01T00:16:40.038000Z fw_cfg_select 0x55 key 0x000b 'initrd size', ret: 1
+1970-01-01T00:16:40.041000Z fw_cfg_select 0x55 key 0x0008 'kernel size', ret: 1
+1970-01-01T00:16:40.041200Z fw_cfg_select 0x55 key 0x0010 'kernel entry', ret: 1
 `
 	got := stages(trace, exec0, time.Unix(1000, 100_000_000))
 	want := map[string]stage{
