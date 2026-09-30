@@ -1,0 +1,23 @@
+diff --git a/hwsetup.c b/hwsetup.c
+index 250213e..4e27289 100644
+--- a/hwsetup.c
++++ b/hwsetup.c
+@@ -85,6 +85,18 @@ static void setup_pic(void)
+ void setup_pam(int bdf, int pambase)
+ {
+ 	int i;
++
++	// QEMU rebuilds its memory map once for each configuration write that
++	// touches a PAM register. q35's seven start 4-aligned, so three writes
++	// set them: PAM0-3, PAM4-5, PAM6. Only immediates from here: once PAM0
++	// is ram, 0xf0000-0x100000 reads zeroes until the BIOS is shadowed.
++	if (pambase == Q35_HOST_BRIDGE_PAM0) {
++		pci_config_writel(bdf, pambase, 0x33333330);
++		pci_config_writew(bdf, pambase + 4, 0x3333);
++		pci_config_writeb(bdf, pambase + 6, 0x33);
++		return;
++	}
++
+ 	for (i=0; i<6; i++) {
+ 		int pam = pambase + 1 + i;
+ 		pci_config_writeb(bdf, pam, 0x33);

@@ -38,7 +38,7 @@ import (
 //	REPS=<n>                     boots per firmware (default 20)
 //
 // Both firmwares are in the tree's qemu/: bios-256k.bin, the SeaBIOS QEMU ships, and qboot.bin,
-// built beside it with qemu/qboot/write-pointer.patch. SPIN_QBOOT names another qboot to try.
+// built beside it with qemu/qboot/'s patches. SPIN_QBOOT names another qboot to try.
 // A relative path there resolves against this package's directory and not the repository
 // root, so `_output/...` on the command line looks right and points at boot/_output.
 //

@@ -73,12 +73,13 @@ echo "Firmware:"
 # efi-virtio.rom is the option ROM of the one NIC the build keeps, and a VM given a
 # virtio-net-pci without it does not start at all.
 # qboot.bin is the BIOS the machine boots with (machine.DefaultBIOS), built beside QEMU with a
-# patch of this repository's; the patch and qboot's licence ship beside it, as the kernel's
+# patches of this repository's; the patches and qboot's licence ship beside it, as the kernel's
 # patches ship beside the kernel.
 for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom qboot.bin; do
   require "${OUTPUT_DIR}/qemu/${f}" "${SHARE}/qemu/${f}" "firmware ${f}"
 done
 require qemu/qboot/write-pointer.patch "${SHARE}/qemu/qboot-write-pointer.patch" "qboot's patch"
+require qemu/qboot/pam.patch "${SHARE}/qemu/qboot-pam.patch" "qboot's patch"
 require qemu/qboot/COPYING "${SHARE}/qemu/qboot-COPYING" "qboot's licence"
 
 echo "Kernel:"
@@ -147,7 +148,7 @@ QEMU ${QEMU_VERSION}
   binaries: usr/share/spin-stack/bin/qemu-system-x86_64
             usr/share/spin-stack/bin/qemu-system-x86_64-tcg
             usr/share/spin-stack/bin/qemu-img
-  firmware: usr/share/spin-stack/qemu/*, except qboot.bin and the two qboot files below
+  firmware: usr/share/spin-stack/qemu/*, except qboot.bin and the three qboot files below
   source:   https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz
   sha256:   ${QEMU_SHA256}
   built by: qemu/Dockerfile, unpatched, with the configure flags in that file
@@ -158,7 +159,7 @@ qboot ${QBOOT_COMMIT}
             \`git archive\` writes for it is ${QBOOT_ARCHIVE_SHA256}
   licence:  GPL-2.0, usr/share/spin-stack/qemu/qboot-COPYING
   built by: qemu/Dockerfile's qboot stage, with usr/share/spin-stack/qemu/qboot-write-pointer.patch
-            applied to that source, and the compiler flags in that file
+            and then qboot-pam.patch applied to that source, and the compiler flags in that file
 
 e2fsprogs ${E2FSPROGS_VERSION}
   binary:   usr/share/spin-stack/bin/mkfs.ext4
