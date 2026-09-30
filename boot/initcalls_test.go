@@ -47,6 +47,7 @@ import (
 //	SPIN_KERNEL_B=<vmlinux> adds a variant booting this kernel instead of the release's,
 //	                        which is how a config change is compared without two runs on a
 //	                        host that is not the same host from one minute to the next
+//	SPIN_KERNEL_C=<vmlinux> a third kernel, interleaved with the other two
 //	SPIN_APPEND_B=<params>  adds a variant with these kernel parameters, for the same reason
 //	CPUS=<n> MEMORY_MIB=<n> the machine's shape (default 2 and 2048)
 //	FLAGS=<flags>           spin-machine boot flags for every boot, e.g. the hotplug ceilings
@@ -113,6 +114,14 @@ WantedBy=multi-user.target
 	cvs := slices.Clone(cmdlineVariants)
 	if k := kernelB(t); k != "" {
 		cvs = append(cvs, cmdlineVariant{label: "kernel B", kernel: k})
+	}
+	// A third kernel, for a patch measured against the patches before it rather than against
+	// the release: B with them, C with them and the one in question.
+	if k := os.Getenv("SPIN_KERNEL_C"); k != "" {
+		if _, err := os.Stat(k); err != nil {
+			t.Fatalf("SPIN_KERNEL_C=%s: %v", k, err)
+		}
+		cvs = append(cvs, cmdlineVariant{label: "kernel C", kernel: k})
 	}
 	if a := os.Getenv("SPIN_APPEND_B"); a != "" {
 		cvs = append(cvs, cmdlineVariant{label: "append B", extra: a})
