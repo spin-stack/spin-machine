@@ -144,11 +144,12 @@ jobs:
       - name: Build the firmware to compare
         if: inputs.experiment == 'boot:firmware'
         # The build exports its cache, which buildx's default docker driver refuses: a
-        # docker-container builder of the lab's own, made once and reused.
+        # docker-container builder of the lab's own, made once and reused, on the host's network
+        # because the runner's DNS does not answer inside the builder's own.
         run: |
           set -euo pipefail
-          docker buildx use spin-machine-lab 2>/dev/null ||
-            docker buildx create --name spin-machine-lab --driver docker-container --use
+          docker buildx use spin-machine-lab-host 2>/dev/null ||
+            docker buildx create --name spin-machine-lab-host --driver docker-container --driver-opt network=host --use
           task qemu:qboot OUTPUT_DIR="$SPIN_MACHINE_OUTPUT"
 
       # A release tarball carries no spin-machine, and releaseDir skips without one: built from
