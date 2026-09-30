@@ -65,6 +65,16 @@ func TestDiff(t *testing.T) {
 		Variants: []Row{row("baseline", "", 200, 0)}}
 	nw.Specs[2].Boot.Phases = nil
 	nw.Specs[0].Args = []string{"-m", "4096"}
+	old.Specs[4].Args = []string{"-gone"}
+	nw.Specs[4].Args = []string{"-added"}
+	// An axis dropped from the matrix: the row is renamed and boots what it booted before.
+	renamedOld, renamedNew := row("mem=a,disk=default", "f", 100, 0), row("mem=a", "f", 80, 0)
+	renamedOld.Args, renamedNew.Args = []string{"-renamed"}, []string{"-renamed"}
+	// Two old rows with one new row's command line: which one it was is not known.
+	twinA, twinB, twinNew := row("twin,x=1", "f", 100, 0), row("twin,x=2", "f", 100, 0), row("twin", "f", 100, 0)
+	twinA.Args, twinB.Args, twinNew.Args = []string{"-twin"}, []string{"-twin"}, []string{"-twin"}
+	old.Specs = append(old.Specs, renamedOld, twinA, twinB)
+	nw.Specs = append(nw.Specs, renamedNew, twinNew)
 
 	var b bytes.Buffer
 	Diff(&b, old, nw, 0.05)
@@ -80,13 +90,18 @@ func TestDiff(t *testing.T) {
 		"| gone | row gone | 100.0 / 110.0 |",
 		"| sub-millisecond | usable p50 +100.0% |",
 		"| one boot | boots: some → none |",
+		"| mem=a | was mem=a,disk=default, usable p50 -20.0% | 100.0 / 110.0 → 80.0 / 90.0 |",
+		"| twin | new row |",
+		"| twin,x=1 | row gone |",
+		"| twin,x=2 | row gone |",
 		"### Image variants\n\nNo row changed beyond 5%.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the diff has no %q:\n%s", want, got)
 		}
 	}
-	for _, absent := range []string{"qemu_sha256", "just under", "different hosts", "reached differently"} {
+	for _, absent := range []string{"qemu_sha256", "just under", "different hosts", "reached differently",
+		"| mem=a,disk=default | row gone", "| mem=a | new row"} {
 		if strings.Contains(got, absent) {
 			t.Errorf("the diff names %q, which did not change enough:\n%s", absent, got)
 		}
