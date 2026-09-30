@@ -31,7 +31,7 @@ Assisted-by: LLM
  1 file changed, 8 insertions(+)
 
 diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
-index db8eeaefe..d8a55f6ad 100644
+index 673a54f..8f8e3c3 100644
 --- a/kernel/trace/ftrace.c
 +++ b/kernel/trace/ftrace.c
 @@ -4405,6 +4405,14 @@ static __init void ftrace_check_work_func(struct work_struct *work)

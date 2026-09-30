@@ -39,10 +39,10 @@ Assisted-by: LLM
  7 files changed, 59 insertions(+), 3 deletions(-)
 
 diff --git a/kernel/trace/trace.c b/kernel/trace/trace.c
-index c4fa38a1f..e2c56382e 100644
+index e4a490d..99e6ee8 100644
 --- a/kernel/trace/trace.c
 +++ b/kernel/trace/trace.c
-@@ -9141,12 +9141,53 @@ struct workqueue_struct *trace_init_wq __initdata;
+@@ -9143,12 +9143,53 @@ struct workqueue_struct *trace_init_wq __initdata;
  static struct work_struct eval_map_work __initdata;
  static struct work_struct tracerfs_init_work __initdata;
  
@@ -98,7 +98,7 @@ index c4fa38a1f..e2c56382e 100644
  }
  
  static int __init trace_eval_init(void)
-@@ -9161,7 +9202,11 @@ static int __init trace_eval_init(void)
+@@ -9163,7 +9204,11 @@ static int __init trace_eval_init(void)
  		return -ENOMEM;
  	}
  
@@ -112,7 +112,7 @@ index c4fa38a1f..e2c56382e 100644
  }
  
 diff --git a/kernel/trace/trace.h b/kernel/trace/trace.h
-index 3749485a7..124c71dae 100644
+index 3749485..124c71d 100644
 --- a/kernel/trace/trace.h
 +++ b/kernel/trace/trace.h
 @@ -2288,12 +2288,14 @@ static inline const char *get_syscall_name(int syscall)
@@ -131,10 +131,10 @@ index 3749485a7..124c71dae 100644
  
  #ifdef CONFIG_TRACER_SNAPSHOT
 diff --git a/kernel/trace/trace_boot.c b/kernel/trace/trace_boot.c
-index 2ca2541c8..bf0a80aa4 100644
+index 5da0a8b..7d4e337 100644
 --- a/kernel/trace/trace_boot.c
 +++ b/kernel/trace/trace_boot.c
-@@ -653,6 +653,9 @@ static int __init trace_boot_init(void)
+@@ -750,6 +750,9 @@ static int __init trace_boot_init(void)
  	if (!trace_node)
  		return 0;
  
@@ -145,22 +145,22 @@ index 2ca2541c8..bf0a80aa4 100644
  	if (!tr)
  		return 0;
 diff --git a/kernel/trace/trace_dynevent.c b/kernel/trace/trace_dynevent.c
-index c4dfbc293..4958c0fd0 100644
+index 6f2e39b..f511f5f 100644
 --- a/kernel/trace/trace_dynevent.c
 +++ b/kernel/trace/trace_dynevent.c
-@@ -124,6 +124,7 @@ int dyn_event_create(const char *raw_command, struct dyn_event_operations *type)
+@@ -126,6 +126,7 @@ int dyn_event_create(const char *raw_command, struct dyn_event_operations *type)
  {
  	int ret;
  
 +	trace_eval_ensure();
- 	mutex_lock(&dyn_event_ops_mutex);
- 	ret = type->create(raw_command);
- 	mutex_unlock(&dyn_event_ops_mutex);
+ 	if (!type)
+ 		return create_dyn_event(raw_command);
+ 
 diff --git a/kernel/trace/trace_events.c b/kernel/trace/trace_events.c
-index 9c62202b0..a57b87d40 100644
+index 30c0ddf..4aa7654 100644
 --- a/kernel/trace/trace_events.c
 +++ b/kernel/trace/trace_events.c
-@@ -2177,6 +2177,7 @@ static int trace_format_open(struct inode *inode, struct file *file)
+@@ -2204,6 +2204,7 @@ static int trace_format_open(struct inode *inode, struct file *file)
  
  	/* Do we want to hide event format files on tracefs lockdown? */
  
@@ -168,7 +168,7 @@ index 9c62202b0..a57b87d40 100644
  	ret = seq_open(file, &trace_format_seq_ops);
  	if (ret < 0)
  		return ret;
-@@ -2252,6 +2253,7 @@ event_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
+@@ -2334,6 +2335,7 @@ event_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
  	if (IS_ERR(buf))
  		return PTR_ERR(buf);
  
@@ -176,7 +176,7 @@ index 9c62202b0..a57b87d40 100644
  	mutex_lock(&event_mutex);
  	file = event_file_file(filp);
  	if (file)
-@@ -2401,6 +2403,7 @@ subsystem_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
+@@ -2483,6 +2485,7 @@ subsystem_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
  	if (IS_ERR(buf))
  		return PTR_ERR(buf);
  
@@ -185,7 +185,7 @@ index 9c62202b0..a57b87d40 100644
  	kfree(buf);
  	if (err < 0)
 diff --git a/kernel/trace/trace_events_filter.c b/kernel/trace/trace_events_filter.c
-index 2b46ca536..b69f8cb50 100644
+index 2b46ca5..b69f8cb 100644
 --- a/kernel/trace/trace_events_filter.c
 +++ b/kernel/trace/trace_events_filter.c
 @@ -2711,6 +2711,7 @@ int ftrace_profile_set_filter(struct perf_event *event, int event_id,
@@ -197,7 +197,7 @@ index 2b46ca536..b69f8cb50 100644
  
  	call = event->tp_event;
 diff --git a/kernel/trace/trace_events_trigger.c b/kernel/trace/trace_events_trigger.c
-index 1954184ab..884173b29 100644
+index 4d2fde9..133131d 100644
 --- a/kernel/trace/trace_events_trigger.c
 +++ b/kernel/trace/trace_events_trigger.c
 @@ -409,6 +409,7 @@ static ssize_t event_trigger_regex_write(struct file *file,

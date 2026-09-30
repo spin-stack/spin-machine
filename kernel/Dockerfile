@@ -108,9 +108,15 @@ WORKDIR /usr/src
 
 RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/var/cache/kernel \
     KERNEL_MAJOR="$(echo "${KERNEL_VERSION}" | cut -d. -f1)" && \
-    tarball="/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" && \
+    # A release candidate is on git.kernel.org as the gzip tarball torvalds tags, not on the
+    # CDN; its checksum is pinned the same way.
+    case "${KERNEL_VERSION}" in \
+        *-rc*) url="https://git.kernel.org/torvalds/t/linux-${KERNEL_VERSION}.tar.gz" ;; \
+        *) url="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz" ;; \
+    esac && \
+    tarball="/var/cache/kernel/${url##*/}" && \
     if [ ! -f "$tarball" ]; then \
-        wget -O "$tarball" "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz"; \
+        wget -O "$tarball" "$url"; \
     fi && \
     # Every build, not only after a download: the cache mount outlives the build that
     # filled it.

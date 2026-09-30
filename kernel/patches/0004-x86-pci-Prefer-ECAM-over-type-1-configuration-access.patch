@@ -29,7 +29,7 @@ Assisted-by: LLM
  1 file changed, 12 insertions(+), 4 deletions(-)
 
 diff --git a/arch/x86/pci/common.c b/arch/x86/pci/common.c
-index 63105b29f..0f08239f8 100644
+index 63105b2..0f08239 100644
 --- a/arch/x86/pci/common.c
 +++ b/arch/x86/pci/common.c
 @@ -40,20 +40,28 @@ const struct pci_raw_ops *__read_mostly raw_pci_ext_ops;

@@ -54,10 +54,13 @@ ARG KERNEL_ARCH=x86_64
 ARG KERNEL_NPROC=8
 
 WORKDIR /build
-RUN curl -fsSLO "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz" || \
-    curl -fsSLO "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${KERNEL_VERSION}.tar.xz"
-RUN echo "${KERNEL_SHA256}  linux-${KERNEL_VERSION}.tar.xz" | sha256sum -c - && \
-    tar -xf "linux-${KERNEL_VERSION}.tar.xz" && mv "linux-${KERNEL_VERSION}" linux
+RUN case "${KERNEL_VERSION}" in \
+        *-rc*) curl -fsSL -o linux.tar "https://git.kernel.org/torvalds/t/linux-${KERNEL_VERSION}.tar.gz" ;; \
+        *) curl -fsSL -o linux.tar "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz" || \
+           curl -fsSL -o linux.tar "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${KERNEL_VERSION}.tar.xz" ;; \
+    esac
+RUN echo "${KERNEL_SHA256}  linux.tar" | sha256sum -c - && \
+    tar -xf linux.tar && mv "linux-${KERNEL_VERSION}" linux
 
 # tinyconfig, then back on exactly what a PVH guest needs to reach an initramfs and print.
 #
