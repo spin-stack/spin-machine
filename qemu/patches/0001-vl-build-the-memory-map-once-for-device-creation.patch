@@ -1,0 +1,71 @@
+From: Manuel de Brito Fontes <aledbf@gmail.com>
+Date: Wed, 30 Sep 2026 00:14:10 -0300
+Subject: [PATCH] vl: build the memory map once for device creation
+
+Creating a q35 machine with a handful of virtio-pci devices changes the
+memory map hundreds of times before the guest runs: 438 flat view
+rebuilds were traced on one start, 283 of them while the command line's
+devices are added and the machine-done notifiers run.  Outside a
+transaction each change regenerates the flat view of every address
+space, and a change to guest RAM updates KVM's memory slots.
+
+Wrap device creation and the machine-done notifiers in one memory
+transaction.  Board initialization stays outside it: wrapping it too
+left KVM's memory slots for the system address space unset and the
+guest running without a single exit.  The first system reset, which
+copies ROM contents into guest memory, runs from the main loop after
+the commit.
+
+A device that read guest memory through an address space while being
+realized would see the map from before the transaction.  None of the
+devices this machine creates does.
+
+Assisted-by: LLM
+---
+ system/vl.c | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/system/vl.c b/system/vl.c
+index 061cbdf86..9159e9fd6 100644
+--- a/system/vl.c
++++ b/system/vl.c
+@@ -44,6 +44,7 @@
+ #include "qemu/uuid.h"
+ #include "system/reset.h"
+ #include "system/runstate.h"
++#include "system/memory.h"
+ #include "system/runstate-action.h"
+ #include "system/seccomp.h"
+ #include "system/tcg.h"
+@@ -2813,14 +2814,27 @@ static bool qemu_machine_creation_done(Error **errp)
+ 
+ void qmp_x_exit_preconfig(Error **errp)
+ {
++    bool ok;
++
+     if (phase_check(PHASE_MACHINE_INITIALIZED)) {
+         error_setg(errp, "The command is permitted only before machine initialization");
+         return;
+     }
+ 
+     qemu_init_board();
++    /*
++     * Each device added and each machine-done notifier changes the memory
++     * map, and each change outside a transaction rebuilds the flat view of
++     * every address space.  Build it once, when the machine is complete.  The
++     * board is left out: it sets up the address spaces and the accelerator's
++     * listeners that the commit has to find in place.  The first reset, which
++     * writes the ROMs into guest memory, runs after the commit.
++     */
++    memory_region_transaction_begin();
+     qemu_create_cli_devices();
+-    if (!qemu_machine_creation_done(errp)) {
++    ok = qemu_machine_creation_done(errp);
++    memory_region_transaction_commit();
++    if (!ok) {
+         return;
+     }
+ 
+-- 
+2.53.0
+
