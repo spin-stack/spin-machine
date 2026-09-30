@@ -42,6 +42,12 @@ import (
 // auto-movable 190-194, auto-movable at 1500% 124, and no variant killed anything. The policy
 // moves tens of MiB; what stays is the kernel's slab.
 //
+// With the files on the disk, as a workspace's are (same date and release), the kernel reclaims
+// their inodes as it offlines, and of 7680 MiB online left 14-20 MiB, online after dropping the
+// slab first 16-20, auto-movable 12, auto-movable at 1500% 10, with nothing killed. So the
+// machine keeps memhp_default_state=online: another policy is worth under 10 MiB, and the 1500%
+// that gets the most leaves the kernel's own allocations the boot memory alone.
+//
 //	SPIN_MEMORY_UNPLUG=1   run at all
 //	REPS=<n>               boots per variant (default 3)
 //	FLAGS=<flags>          the machine (default: 512 MiB growing to 8 GiB, 2 vCPUs)
