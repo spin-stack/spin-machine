@@ -146,16 +146,21 @@ func section(w io.Writer, title string, old, new []Row, threshold float64, parti
 	for _, r := range old {
 		before[r.ID] = r
 	}
+	renamed := renames(old, new)
 	var lines []string
 	seen := map[string]bool{}
 	for _, r := range new {
 		seen[r.ID] = true
 		o, ok := before[r.ID]
-		if !ok {
-			lines = append(lines, fmt.Sprintf("| %s | new row | %s |", r.ID, usable(r)))
-			continue
-		}
 		var what []string
+		if !ok {
+			if o, ok = renamed[r.ID]; !ok {
+				lines = append(lines, fmt.Sprintf("| %s | new row | %s |", r.ID, usable(r)))
+				continue
+			}
+			seen[o.ID] = true
+			what = append(what, "was "+o.ID)
+		}
 		if o.Fingerprint != r.Fingerprint {
 			what = append(what, "fingerprint")
 		}
@@ -189,6 +194,41 @@ func section(w io.Writer, title string, old, new []Row, threshold float64, parti
 	for _, l := range lines {
 		fmt.Fprintln(w, l)
 	}
+}
+
+// renames pairs a row whose id only one report has with the row of the other that boots the
+// same command line: a row's id is made of the matrix's axes, so an axis added or removed
+// renames every row while the machines they boot stay the same, and a comparison by id alone
+// would call them all new and gone. A pair is made only when it is the one candidate on both
+// sides; anything else is left to read as new and gone.
+func renames(old, new []Row) map[string]Row {
+	ids := map[string]bool{}
+	for _, r := range old {
+		ids[r.ID] = true
+	}
+	newIDs := map[string]bool{}
+	byArgs := map[string][]Row{} // new rows no old row has the id of, by command line
+	for _, r := range new {
+		newIDs[r.ID] = true
+		if !ids[r.ID] {
+			k := strings.Join(r.Args, "\x00")
+			byArgs[k] = append(byArgs[k], r)
+		}
+	}
+	oldByArgs := map[string][]Row{}
+	for _, r := range old {
+		if !newIDs[r.ID] {
+			k := strings.Join(r.Args, "\x00")
+			oldByArgs[k] = append(oldByArgs[k], r)
+		}
+	}
+	out := map[string]Row{}
+	for k, rs := range byArgs {
+		if o := oldByArgs[k]; len(rs) == 1 && len(o) == 1 {
+			out[rs[0].ID] = o[0]
+		}
+	}
+	return out
 }
 
 func outcome(r Row) string {
