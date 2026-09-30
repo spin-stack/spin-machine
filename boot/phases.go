@@ -55,6 +55,12 @@ const (
 	// Firmware is the first byte the guest writes to the console: SeaBIOS's banner. Reaching
 	// it bounds QEMU's own start-up, which is time this repository had never counted.
 	//
+	// The machine boots qboot (machine.DefaultBIOS), which writes nothing to the console, so
+	// the phase is absent from its boots and present only in one that asks for SeaBIOS
+	// (--bios bios-256k.bin; the lab's SPIN_LAB_SEABIOS). What comes before the kernel on qboot
+	// is split by boot:firmware-stages, from QEMU's own trace: QEMU start, each of qboot's
+	// steps and the waits inside them. What follows is what this phase measured on SeaBIOS.
+	//
 	// There is firmware at all because on q35 the CPU resets into it, whatever QEMU was told
 	// to boot. The kernel here is an ELF carrying the PVH note (XEN_ELFNOTE_PHYS32_ENTRY,
 	// CONFIG_PVH=y), so QEMU direct-boots it — but that decides which option ROM SeaBIOS
