@@ -2,18 +2,17 @@
 #
 # Whether this build is still the machine the fleet's templates were taken against.
 #
-# `machine.Spec.Fingerprint` hashes the QEMU binary, the kernel, the initrd and the firmware the
-# guest runs (the BIOS, qboot.bin, and pvh.bin) by content, together with the machine's shape. Two of those five inputs are not this repository's:
-# the initrd is brought by whoever runs guests, and the shape is decided per VM. Both are
-# the same on either side of the comparison made here, so between two releases the question
-# collapses to two numbers — **templates carry over if and only if qemu_sha256 and
-# kernel_sha256 are unchanged.**
+# `machine.Spec.Fingerprint` hashes by content the files a guest runs - QEMU, the kernel, the
+# initrd and the firmware - together with the machine's shape. The initrd is brought by whoever
+# runs guests and the shape is decided per VM, so between two releases the question collapses
+# to the checksums bears_on_fingerprint names below: **templates carry over if and only if
+# none of them changed.**
 #
 # image_sha256 is deliberately not one of them. The base image is mapped read-only through
 # a backing chain and is not hashed into the fingerprint, so a release that moves only the
 # image still restores every template taken against its predecessor. Saying that plainly is
-# half the value of this script: the other half is that the two numbers which *do* decide it
-# stop being something a human diffs by eye across two release pages.
+# half the value of this script: the other half is that the numbers which *do* decide it stop
+# being something a human diffs by eye across two release pages.
 #
 # It exits 0 whatever it finds. This is not a gate — changing the machine is a thing this
 # repository does on purpose, and a check that failed on it would be one people learn to
@@ -21,7 +20,7 @@
 # exactly once here already: a comment edited in kernel/Dockerfile, a rebuilt vmlinux, and a
 # fleet-wide invalidation that nothing announced.
 #
-#   hack/fingerprint-diff qemu_sha256=<hex> [kernel_sha256=<hex>] [image_sha256=<hex>]
+#   hack/fingerprint-diff qemu_sha256=<hex> [kernel_sha256=<hex>] [bios_sha256=<hex>] [pvh_sha256=<hex>] [image_sha256=<hex>]
 #
 # Writes a Markdown verdict to stdout — meant to be pasted into release notes or a step
 # summary — and its workings to stderr.

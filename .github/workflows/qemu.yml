@@ -16,7 +16,8 @@ on:
 # versions.yaml is listed by every lane that builds from it, and a path filter cannot tell a
 # QEMU bump from an e2fsprogs one. The `changed` job below can: hack/touches compares what the
 # QEMU build is handed at the base and here, and the build is skipped when the change does not
-# reach it. It is given these paths but versions.yaml, and a change to any of them builds.
+# reach it. hack/touches is given these paths except versions.yaml, and a change to any of
+# them builds.
   push:
     branches: [main]
     paths:
@@ -212,19 +213,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The runtime image: a distribution channel for consumers that pull images rather
-      # than tarballs. The binaries are static, so the image around them carries nothing
-      # they need — which is the difference from when this was the only way to run them.
-      #
-      # Two tags: the QEMU version, which is what everything pins, and the commit, which is
-      # what makes a specific build reachable when the version tag has moved because a flag
-      # changed.
-      #
-      # Two --cache-from and one --cache-to, which is not symmetry gone wrong. This target
-      # sits on top of the builder stage the step above just compiled, so it reads the
-      # `qemu` scope to get it and writes only its own — sharing one scope would have the
-      # two builds overwriting each other's cache, which is the default behaviour that made
-      # every scope in this repository distinct in the first place.
+      # The runtime image, tagged with the pinned QEMU version: what `task qemu:fetch` pulls,
+      # so CI's argument check runs main's QEMU in seconds instead of compiling it. The
+      # binaries are static, so the image around them carries nothing they need. It reads the
+      # builder stage the step above compiled from the `qemu` scope, and writes no cache: the
+      # runner's sticky disk already holds these layers.
       - name: Publish the runtime image
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
@@ -233,12 +226,9 @@ jobs:
             --target runtime \
             --platform linux/amd64 \
             --cache-from type=gha,scope=qemu \
-            --cache-from type=gha,scope=qemu-image \
-            --cache-to type=gha,scope=qemu-image,mode=max \
             $(go tool versions args alpine qemu debian debian-snapshot qboot) \
             --build-arg JOBS=4 \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --tag ghcr.io/${{ github.repository }}/qemu:${{ steps.qemu.outputs.version }} \
-            --tag ghcr.io/${{ github.repository }}/qemu:${{ github.sha }} \
             --push \
             .

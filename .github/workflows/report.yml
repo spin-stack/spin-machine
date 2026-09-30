@@ -72,11 +72,13 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm: nothing here can be measured"; exit 1; }
 
+      # No Actions cache: this runner keeps Go's module and build caches on its own disk, and
+      # the cache service only stored another copy per branch, against the repository's limit.
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       - name: Set up Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0

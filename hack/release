@@ -213,8 +213,8 @@ sha256sum "${TARBALL}" | sed "s|${OUTPUT_DIR}/release/||" > "${TARBALL}.sha256"
 # as an asset of its own and read back without the 1 GB around it.
 #
 # That is what makes the next release able to say whether it breaks this one:
-# hack/fingerprint-diff fetches this file for the previous release and compares the two
-# checksums that decide it. Downloading a whole tarball to read three lines would be a cost
+# hack/fingerprint-diff fetches this file for the previous release and compares the
+# checksums that decide it. Downloading a whole tarball to read a few lines would be a cost
 # nobody pays, which is another way of saying the comparison would not happen.
 cp "${SHARE}/machine.env" "${OUTPUT_DIR}/release/machine.env"
 

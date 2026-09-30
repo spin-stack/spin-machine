@@ -104,8 +104,8 @@ jobs:
           CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task kernel:build KERNEL_NPROC=4
 
       # Compared against the last released machine, which every release publishes as a
-      # machine.env asset. The kernel's checksum is one of the two numbers in it that decide
-      # whether a template still matches.
+      # machine.env asset. The kernel's checksum is one of the numbers in it that decide
+      # whether a template still matches (hack/fingerprint-diff names them).
       #
       # So a pull request that changes the config, or bumps the Debian toolchain the kernel
       # is compiled with, says on its own summary that it invalidates every template in
