@@ -160,6 +160,12 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm"; exit 1; }
 
+      # SPIN_LAB_SEABIOS=1: every boot of the experiment on the SeaBIOS QEMU ships beside qboot,
+      # the machine's firmware - for report, whose matrix is the machine's whole contract.
+      - name: Every boot on SeaBIOS
+        if: contains(inputs.vars, 'SPIN_LAB_SEABIOS=1')
+        run: echo "FLAGS=${FLAGS:+$FLAGS }--bios bios-256k.bin" >> "$GITHUB_ENV"
+
       # A release tarball carries no spin-machine, and releaseDir skips without one: built from
       # this checkout into the tree, as report does through its tools dependency.
       - name: Build spin-machine into the release tree

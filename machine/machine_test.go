@@ -25,6 +25,9 @@ func spec(t *testing.T) Spec {
 		}
 		return p
 	}
+	write(DefaultBIOS, "qboot")
+	write("bios-256k.bin", "seabios")
+	write("pvh.bin", "pvh")
 	return Spec{
 		QEMU:     write("qemu-system-x86_64", "qemu"),
 		Kernel:   write("vmlinux", "kernel"),
@@ -66,6 +69,15 @@ func TestArgs(t *testing.T) {
 		// Anonymous RAM names no backend; the virtio-mem device is only for a ceiling, and a
 		// vsock only for a CID.
 		absent: []string{"memory-backend", "virtio-mem", "-incoming", "vhost-vsock"},
+	}, {
+		// qboot unless told otherwise: SeaBIOS is QEMU's own default, and a Spec that left the
+		// firmware to QEMU would boot it without saying so.
+		name: "qboot by default",
+		want: []string{"-bios " + DefaultBIOS},
+	}, {
+		name: "another BIOS when named",
+		set:  func(s *Spec) { s.BIOS = "bios-256k.bin" },
+		want: []string{"-bios bios-256k.bin"},
 	}, {
 		// The slot map is the reason the kernel can be told pci=lastbus=0. A device
 		// that moved off its slot is a device the guest may not find, with no error.
@@ -488,6 +500,18 @@ func TestFingerprint(t *testing.T) {
 		{name: "more vCPUs", b: func(_ *testing.T, s *Spec) { s.BootCPUs = 4 }},
 		{name: "a new kernel", b: func(t *testing.T, s *Spec) { rewrite(t, s.Kernel, "a different kernel") }},
 		{name: "a new QEMU", b: func(t *testing.T, s *Spec) { rewrite(t, s.QEMU, "a different qemu") }},
+		// The firmware runs in the guest, and its ROM is carried by a saved machine.
+		{name: "a new BIOS", b: func(t *testing.T, s *Spec) {
+			rewrite(t, filepath.Join(s.Firmware, DefaultBIOS), "a different qboot")
+		}},
+		{name: "SeaBIOS instead of qboot", b: func(_ *testing.T, s *Spec) { s.BIOS = "bios-256k.bin" }},
+		{name: "a new pvh.bin", b: func(t *testing.T, s *Spec) {
+			rewrite(t, filepath.Join(s.Firmware, "pvh.bin"), "a different pvh")
+		}},
+		{name: "the same firmware in another directory", same: true, b: func(t *testing.T, s *Spec) {
+			s.Firmware = spec(t).Firmware
+		}},
+		{name: "the default BIOS named", same: true, b: func(_ *testing.T, s *Spec) { s.BIOS = DefaultBIOS }},
 		// A guest's state under TCG is not a guest's state under KVM. The binary's
 		// own hash separates them in practice; this holds the shape to it as well, so
 		// the separation does not rest on a caller changing two things at once.
@@ -627,6 +651,7 @@ func TestValidateRefuses(t *testing.T) {
 		{"no QEMU", func(s *Spec) { s.QEMU = "" }},
 		{"no kernel", func(s *Spec) { s.Kernel = "" }},
 		{"no firmware", func(s *Spec) { s.Firmware = "" }},
+		{"a BIOS given as a path", func(s *Spec) { s.BIOS = "/elsewhere/qboot.bin" }},
 		{"no boot CPUs", func(s *Spec) { s.BootCPUs = 0 }},
 		{"a vCPU ceiling below the boot count", func(s *Spec) { s.BootCPUs, s.MaxCPUs = 4, 2 }},
 		{"no memory", func(s *Spec) { s.Memory.SizeMB = 0 }},

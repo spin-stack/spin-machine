@@ -167,6 +167,8 @@ jobs:
           EXCLUDE="$VERSION" hack/fingerprint-diff \
             "qemu_sha256=$(sed -n 's/^qemu_sha256=//p' "$manifest")" \
             "kernel_sha256=$(sed -n 's/^kernel_sha256=//p' "$manifest")" \
+            "bios_sha256=$(sed -n 's/^bios_sha256=//p' "$manifest")" \
+            "pvh_sha256=$(sed -n 's/^pvh_sha256=//p' "$manifest")" \
             "image_sha256=$(sed -n 's/^image_sha256=//p' "$manifest")" \
             > /tmp/verdict.md
 

@@ -48,7 +48,8 @@ something that otherwise boots and is subtly wrong.
 exchange templates; two without may not, and a restore across them is undefined rather
 than an error. It hashes:
 
-- the QEMU binary, the kernel and the initrd, **by content** — not by path;
+- the QEMU binary, the kernel, the initrd and the firmware the guest runs (the BIOS,
+  `qboot.bin` by default, and `pvh.bin`), **by content** — not by path;
 - the shape: the `-machine`, `-accel`, `-cpu`, `-smp` and `-m` arguments;
 - the devices present when state is loaded: vmgenid, the RNG and the balloon, and, when the
   spec has them, the vsock, the virtio-mem region, the serial port, the hotplug controller,
