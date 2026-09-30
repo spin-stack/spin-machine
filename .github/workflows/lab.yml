@@ -45,6 +45,10 @@ on:
         description: "A Kernel workflow run id whose vmlinux is compared against the release's (SPIN_KERNEL_B)"
         required: false
         type: string
+      kernel_run_c:
+        description: "A second Kernel workflow run id, compared as SPIN_KERNEL_C (boot:initcalls)"
+        required: false
+        type: string
       vars:
         description: "KEY=VALUE; KEY=VALUE for the target, e.g. REPS=20; TOP=40"
         required: false
@@ -67,6 +71,7 @@ jobs:
       EXPERIMENT: ${{ inputs.experiment }}
       RELEASE: ${{ inputs.release }}
       KERNEL_RUN: ${{ inputs.kernel_run }}
+      KERNEL_RUN_C: ${{ inputs.kernel_run_c }}
       VARS: ${{ inputs.vars }}
     steps:
       - name: Checkout
@@ -108,6 +113,16 @@ jobs:
           [ -n "$k" ] || { echo "::error::run $KERNEL_RUN has no vmlinux artifact"; exit 1; }
           echo "SPIN_KERNEL_B=$PWD/$k" >> "$GITHUB_ENV"
 
+      - name: Fetch the third kernel
+        if: inputs.kernel_run_c != ''
+        run: |
+          set -euo pipefail
+          [[ "$KERNEL_RUN_C" =~ ^[0-9]+$ ]] || { echo "::error::kernel_run_c is a run id, got: $KERNEL_RUN_C"; exit 1; }
+          gh run download "$KERNEL_RUN_C" -R "$GITHUB_REPOSITORY" -p 'vmlinux-*' -D _output/lab/kernel-c
+          k=$(find _output/lab/kernel-c -name vmlinux -type f | head -1)
+          [ -n "$k" ] || { echo "::error::run $KERNEL_RUN_C has no vmlinux artifact"; exit 1; }
+          echo "SPIN_KERNEL_C=$PWD/$k" >> "$GITHUB_ENV"
+
       - name: Take the variables
         run: |
           set -euo pipefail
@@ -120,7 +135,7 @@ jobs:
             [[ "$pair" == *=* && "$key" =~ ^(REPS|TOP|GAP|ONLY|FLAGS|CPUS|WS_MIB|MEMORY_MIB|DEBUG|GRAPH_[A-Z_]+|SHARE_[A-Z_]+|SPIN_[A-Z0-9_]+)$ ]] ||
               { echo "::error::not a variable this workflow passes on: $pair"; exit 1; }
             case "$key" in
-              SPIN_MACHINE_OUTPUT|SPIN_KERNEL_B) echo "::error::$key is set by this workflow"; exit 1 ;;
+              SPIN_MACHINE_OUTPUT|SPIN_KERNEL_B|SPIN_KERNEL_C) echo "::error::$key is set by this workflow"; exit 1 ;;
             esac
             echo "$pair" >> "$GITHUB_ENV"
           done
