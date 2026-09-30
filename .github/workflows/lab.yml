@@ -51,6 +51,10 @@ on:
         description: "A second Kernel workflow run id, compared as SPIN_KERNEL_C (boot:initcalls)"
         required: false
         type: string
+      qemu_run:
+        description: "A QEMU workflow run id whose QEMU and firmware are compared against the release's (SPIN_MACHINE_OUTPUT_B)"
+        required: false
+        type: string
       vars:
         description: "KEY=VALUE; KEY=VALUE for the target, e.g. REPS=20; TOP=40"
         required: false
@@ -74,6 +78,7 @@ jobs:
       RELEASE: ${{ inputs.release }}
       KERNEL_RUN: ${{ inputs.kernel_run }}
       KERNEL_RUN_C: ${{ inputs.kernel_run_c }}
+      QEMU_RUN: ${{ inputs.qemu_run }}
       VARS: ${{ inputs.vars }}
     steps:
       - name: Checkout
@@ -125,6 +130,25 @@ jobs:
           [ -n "$k" ] || { echo "::error::run $KERNEL_RUN_C has no vmlinux artifact"; exit 1; }
           echo "SPIN_KERNEL_C=$PWD/$k" >> "$GITHUB_ENV"
 
+      # The release with another build's QEMU and firmware - qemu.yml uploads both - as a
+      # second tree beside it: the rest is linked, so a change to QEMU or qboot is measured
+      # against the kernel and image it will ship with.
+      - name: Fetch the QEMU to compare
+        if: inputs.qemu_run != ''
+        run: |
+          set -euo pipefail
+          [[ "$QEMU_RUN" =~ ^[0-9]+$ ]] || { echo "::error::qemu_run is a run id, got: $QEMU_RUN"; exit 1; }
+          gh run download "$QEMU_RUN" -R "$GITHUB_REPOSITORY" -p 'qemu-*-linux-amd64' -D _output/lab/qemu-b
+          q=$(find _output/lab/qemu-b -path '*/bin/qemu-system-x86_64' -type f | head -1)
+          [ -n "$q" ] || { echo "::error::run $QEMU_RUN has no qemu-system-x86_64 artifact"; exit 1; }
+          art=$(dirname "$(dirname "$q")")
+          b=$PWD/_output/lab/release-b
+          cp -as "$SPIN_MACHINE_OUTPUT" "$b"
+          rm -rf "$b/bin/qemu-system-x86_64" "$b/qemu"
+          install -m 0755 "$q" "$b/bin/qemu-system-x86_64"
+          cp -r "$art/qemu" "$b/qemu"
+          echo "SPIN_MACHINE_OUTPUT_B=$b" >> "$GITHUB_ENV"
+
       - name: Take the variables
         run: |
           set -euo pipefail
@@ -137,7 +161,7 @@ jobs:
             [[ "$pair" == *=* && "$key" =~ ^(REPS|TOP|GAP|ONLY|FLAGS|CPUS|WS_MIB|MEMORY_MIB|DEBUG|GRAPH_[A-Z_]+|SHARE_[A-Z_]+|SPIN_[A-Z0-9_]+)$ ]] ||
               { echo "::error::not a variable this workflow passes on: $pair"; exit 1; }
             case "$key" in
-              SPIN_MACHINE_OUTPUT|SPIN_KERNEL_B|SPIN_KERNEL_C) echo "::error::$key is set by this workflow"; exit 1 ;;
+              SPIN_MACHINE_OUTPUT|SPIN_MACHINE_OUTPUT_B|SPIN_KERNEL_B|SPIN_KERNEL_C) echo "::error::$key is set by this workflow"; exit 1 ;;
             esac
             echo "$pair" >> "$GITHUB_ENV"
           done
@@ -155,6 +179,7 @@ jobs:
             echo
             echo "- release: $RELEASE"
             echo "- kernel B: ${SPIN_KERNEL_B:+run $KERNEL_RUN}${SPIN_KERNEL_B:-none}"
+            echo "- QEMU B: ${SPIN_MACHINE_OUTPUT_B:+run $QEMU_RUN}${SPIN_MACHINE_OUTPUT_B:-none}"
             echo "- vars: ${VARS:-none}"
             echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
             echo "- load: $(cut -d' ' -f1-3 /proc/loadavg)"

@@ -201,10 +201,11 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # Publishing is skipped for pull requests: a fork's token cannot write packages, and
-      # an unreviewed branch has no business claiming the version tag.
+      # Publishing is for main only: a fork's token cannot write packages, and an unreviewed
+      # branch - a pull request, or one dispatched to build a QEMU for the lab - has no
+      # business claiming the version tag.
       - name: Log in to GitHub Packages
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -225,7 +226,7 @@ jobs:
       # two builds overwriting each other's cache, which is the default behaviour that made
       # every scope in this repository distinct in the first place.
       - name: Publish the runtime image
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
           docker buildx build \
             --file qemu/Dockerfile \

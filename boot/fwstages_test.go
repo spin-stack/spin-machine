@@ -35,6 +35,8 @@ import (
 //	REPS=<n>                 boots (default 10)
 //	FLAGS=<flags>            spin-machine flags for the machine (default: a workspace's shape)
 //	SPIN_PROBE_INITRD=<cpio> as for boot:firmware
+//	SPIN_MACHINE_OUTPUT_B=<dir> the release with another QEMU and firmware (the lab's qemu_run),
+//	                         booted interleaved with it
 func TestFirmwareStages(t *testing.T) {
 	if os.Getenv("SPIN_FIRMWARE_STAGES") == "" {
 		t.Skip("set SPIN_FIRMWARE_STAGES=1: this boots VMs under QEMU's tracing")
@@ -44,17 +46,32 @@ func TestFirmwareStages(t *testing.T) {
 	initrd := probeInitrd(t)
 
 	flags := strings.Fields(orElse("--cpus 1 --memory 512 --max-cpus 16 --max-memory 8192 --hotplug-disks 1", os.Getenv("FLAGS")))
-	args := machineArgs(t, out, append([]string{"--disk", "-", "--initrd", initrd, "--console", "file:/dev/stdout"}, flags...))
-
-	var runs []map[string]stage
-	var spent, starts []map[string]float64
-	for range reps {
-		st, w, qs := traceOneBoot(t, args)
-		runs, spent, starts = append(runs, st), append(spent, w), append(starts, qs)
+	flags = append([]string{"--disk", "-", "--initrd", initrd, "--console", "file:/dev/stdout"}, flags...)
+	cli := filepath.Join(out, "bin", "spin-machine")
+	type variant struct {
+		name   string
+		args   []string
+		runs   []map[string]stage
+		spent  []map[string]float64
+		starts []map[string]float64
 	}
-	t.Log(stageTable(runs))
-	t.Log(waitTable("the firmware's largest waits", spent, 15))
-	t.Log(waitTable("QEMU's start, exec to the firmware's first instruction", starts, 15))
+	vs := []*variant{{name: "release", args: machineArgs(t, cli, out, flags)}}
+	if b := os.Getenv("SPIN_MACHINE_OUTPUT_B"); b != "" {
+		vs = append(vs, &variant{name: "B", args: machineArgs(t, cli, b, flags)})
+	}
+	// Interleaved, so the runner's drift lands on both alike.
+	for range reps {
+		for _, v := range vs {
+			st, w, qs := traceOneBoot(t, v.args)
+			v.runs, v.spent, v.starts = append(v.runs, st), append(v.spent, w), append(v.starts, qs)
+		}
+	}
+	for _, v := range vs {
+		t.Logf("%s: %s", v.name, v.args[0])
+		t.Log(stageTable(v.runs))
+		t.Log(waitTable("the firmware's largest waits", v.spent, 15))
+		t.Log(waitTable("QEMU's start, exec to the firmware's first instruction", v.starts, 15))
+	}
 }
 
 // stage is one step's wall time and the exits to QEMU inside it.
@@ -65,9 +82,9 @@ type stage struct {
 
 // machineArgs is the command line `spin-machine args` prints, one argument per line: QEMU's
 // binary first. Split on lines and not on spaces, because -append's value has them.
-func machineArgs(t *testing.T, out string, flags []string) []string {
+func machineArgs(t *testing.T, cli, release string, flags []string) []string {
 	t.Helper()
-	b, err := exec.Command(filepath.Join(out, "bin", "spin-machine"), append([]string{"args", "--release", out}, flags...)...).Output()
+	b, err := exec.Command(cli, append([]string{"args", "--release", release}, flags...)...).Output()
 	if err != nil {
 		t.Fatalf("spin-machine args: %v", err)
 	}
