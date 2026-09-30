@@ -81,6 +81,12 @@ done
 require qemu/qboot/write-pointer.patch "${SHARE}/qemu/qboot-write-pointer.patch" "qboot's patch"
 require qemu/qboot/pam.patch "${SHARE}/qemu/qboot-pam.patch" "qboot's patch"
 require qemu/qboot/COPYING "${SHARE}/qemu/qboot-COPYING" "qboot's licence"
+# The patches QEMU is built with, for the same reason: a changed GPL source is distributed with
+# its changes. Read from the tree, as qboot's are: the binaries were built from this commit.
+mkdir -p "${SHARE}/qemu/patches"
+for p in qemu/patches/*.patch; do
+  require "$p" "${SHARE}/qemu/patches/$(basename "$p")" "QEMU patch $(basename "$p")"
+done
 
 echo "Kernel:"
 require "${OUTPUT_DIR}/kernel/vmlinux" "${SHARE}/kernel/vmlinux" "the guest kernel" 0644
@@ -148,10 +154,11 @@ QEMU ${QEMU_VERSION}
   binaries: usr/share/spin-stack/bin/qemu-system-x86_64
             usr/share/spin-stack/bin/qemu-system-x86_64-tcg
             usr/share/spin-stack/bin/qemu-img
-  firmware: usr/share/spin-stack/qemu/*, except qboot.bin and the three qboot files below
+  firmware: usr/share/spin-stack/qemu/*, except patches/, qboot.bin and the three qboot files below
   source:   https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz
   sha256:   ${QEMU_SHA256}
-  built by: qemu/Dockerfile, unpatched, with the configure flags in that file
+  built by: qemu/Dockerfile, with usr/share/spin-stack/qemu/patches applied to that source
+            (each says what it changes and why) and the configure flags in that file
 
 qboot ${QBOOT_COMMIT}
   binary:   usr/share/spin-stack/qemu/qboot.bin

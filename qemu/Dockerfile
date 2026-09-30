@@ -104,8 +104,11 @@ RUN --mount=type=cache,sharing=locked,id=qemu-apk,target=/var/cache/apk \
 WORKDIR /build
 
 # Source tarball + extracted tree live in a cache mount, shared across builds. Each step that
-# reads the tree runs qemu/source.sh first, which says why.
+# reads the tree runs qemu/source.sh first and builds the tree it prints, which says why. The
+# patches this QEMU carries are applied there; each says what it changes and what it was
+# measured to be worth, and the release ships them beside the binary (hack/release).
 COPY qemu/source.sh /build/qemu-source.sh
+COPY qemu/patches/ /build/qemu-patches/
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
     sh /build/qemu-source.sh
 
@@ -256,10 +259,11 @@ ENV QEMU_FLAGS="\
 # build above.
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
     --mount=type=cache,sharing=locked,id=qemu-build-kvm-${QEMU_VERSION}-${QEMU_CONFIG_REV},target=/build/qemu-build-kvm \
-    sh /build/qemu-source.sh && \
-    cp /build/spin-devices.mak \
-       "/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/spin.mak" && \
-    mkdir -p qemu-build-kvm && cd qemu-build-kvm && \
+    tree="$(sh /build/qemu-source.sh)" && \
+    cp /build/spin-devices.mak "$tree/configs/devices/x86_64-softmmu/spin.mak" && \
+    key="${tree##*/}" && \
+    mkdir -p qemu-build-kvm && find qemu-build-kvm -mindepth 1 -maxdepth 1 ! -name "$key" -exec rm -rf {} + && \
+    mkdir -p "qemu-build-kvm/$key" && cd "qemu-build-kvm/$key" && \
     cc_now="$(cc -dumpfullversion 2>/dev/null || cc -dumpversion)" && \
     if [ -f config.status ] && [ "$(cat spin-cc-version 2>/dev/null)" != "$cc_now" ]; then \
         echo "the cached build directory was made by cc $(cat spin-cc-version 2>/dev/null || echo unknown), this is $cc_now — starting over"; \
@@ -267,7 +271,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
     fi && \
     if [ ! -f config.status ]; then \
         rm -rf ./* && \
-        /var/cache/qemu/qemu-${QEMU_VERSION}/configure \
+        "$tree/configure" \
             --prefix=/opt/qemu \
             --disable-tcg \
             ${QEMU_FLAGS} && \
@@ -278,10 +282,11 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
 
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
     --mount=type=cache,sharing=locked,id=qemu-build-tcg-${QEMU_VERSION}-${QEMU_CONFIG_REV},target=/build/qemu-build-tcg \
-    sh /build/qemu-source.sh && \
-    cp /build/spin-devices.mak \
-       "/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/spin.mak" && \
-    mkdir -p qemu-build-tcg && cd qemu-build-tcg && \
+    tree="$(sh /build/qemu-source.sh)" && \
+    cp /build/spin-devices.mak "$tree/configs/devices/x86_64-softmmu/spin.mak" && \
+    key="${tree##*/}" && \
+    mkdir -p qemu-build-tcg && find qemu-build-tcg -mindepth 1 -maxdepth 1 ! -name "$key" -exec rm -rf {} + && \
+    mkdir -p "qemu-build-tcg/$key" && cd "qemu-build-tcg/$key" && \
     cc_now="$(cc -dumpfullversion 2>/dev/null || cc -dumpversion)" && \
     if [ -f config.status ] && [ "$(cat spin-cc-version 2>/dev/null)" != "$cc_now" ]; then \
         echo "the cached build directory was made by cc $(cat spin-cc-version 2>/dev/null || echo unknown), this is $cc_now — starting over"; \
@@ -289,7 +294,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
     fi && \
     if [ ! -f config.status ]; then \
         rm -rf ./* && \
-        /var/cache/qemu/qemu-${QEMU_VERSION}/configure \
+        "$tree/configure" \
             --prefix=/opt/qemu-tcg \
             --enable-tcg \
             ${QEMU_FLAGS} && \
@@ -317,9 +322,10 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
 # -nodefaults -nographic) and linuxboot_dma.bin (the option ROM for a bzImage boot, which
 # nothing here does). A caller that adds a device back has to add its ROM back with it.
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
+    tree="$(sh /build/qemu-source.sh)" && \
     mkdir -p /build/pc-bios && \
     for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do \
-        install -m 0644 "/var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/$f" "/build/pc-bios/$f"; \
+        install -m 0644 "$tree/pc-bios/$f" "/build/pc-bios/$f"; \
     done
 
 # Fail the build here, not in a lane three phases later, if this configuration did not
