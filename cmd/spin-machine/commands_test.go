@@ -419,21 +419,24 @@ func TestMemoryAsksForASizeAndSaysWhatWasPlugged(t *testing.T) {
 	refused := `{"error": {"class": "GenericError", "desc": "not a multiple of the block size"}}`
 	for _, tc := range []struct {
 		name    string
+		sizeMB  int
 		replies []string
 		timeout time.Duration
 		want    string
 		wantErr string
 	}{
-		{name: "reached", replies: []string{ok, ok, size(512), size(1024)}, timeout: time.Minute,
+		{name: "grown", sizeMB: 1024, replies: []string{ok, ok, size(512), size(1024)}, timeout: time.Minute,
 			want: "plugged 1024 MiB in"},
-		{name: "stopped short", replies: []string{ok, ok, size(4)},
+		{name: "all given back", sizeMB: 0, replies: []string{ok, ok, size(0)}, timeout: time.Minute,
+			want: "plugged 0 MiB in"},
+		{name: "stopped short", sizeMB: 1024, replies: []string{ok, ok, size(4)},
 			want: "plugged 4 MiB after", wantErr: "reached 4 MiB of the 1024"},
-		{name: "refused", replies: []string{ok, refused}, wantErr: "asking for 1024 MiB"},
+		{name: "refused", sizeMB: 1024, replies: []string{ok, refused}, wantErr: "asking for 1024 MiB"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newMonitor(t, tc.replies...)
 			var out strings.Builder
-			err := memory(memoryFlags{qmp: m.socket, sizeMB: 1024, timeout: tc.timeout}, &out)
+			err := memory(memoryFlags{qmp: m.socket, sizeMB: tc.sizeMB, timeout: tc.timeout}, &out)
 			switch {
 			case tc.wantErr == "" && err != nil:
 				t.Fatal(err)
@@ -446,8 +449,8 @@ func TestMemoryAsksForASizeAndSaysWhatWasPlugged(t *testing.T) {
 			asked := m.commands(t)
 			set := asked[1]
 			if set.Execute != "qom-set" || set.Arguments["path"] != "/machine/peripheral/"+machine.VirtioMemID ||
-				set.Arguments["property"] != "requested-size" || set.Arguments["value"] != float64(1024*mib) {
-				t.Errorf("asked %+v, want requested-size set to 1 GiB on the virtio-mem device", set)
+				set.Arguments["property"] != "requested-size" || set.Arguments["value"] != float64(tc.sizeMB*mib) {
+				t.Errorf("asked %+v, want requested-size set to %d MiB on the virtio-mem device", set, tc.sizeMB)
 			}
 			for _, r := range asked[2:] {
 				if r.Execute != "qom-get" || r.Arguments["property"] != "size" {
@@ -459,6 +462,9 @@ func TestMemoryAsksForASizeAndSaysWhatWasPlugged(t *testing.T) {
 
 	if err := memory(memoryFlags{qmp: "q.sock", sizeMB: -1}, io.Discard); err == nil || !strings.Contains(err.Error(), "--size") {
 		t.Errorf("memory with no size returned %v, want the flags it needs", err)
+	}
+	if err := run([]string{"memory", "--nope"}); err == nil || !strings.Contains(err.Error(), "not defined") {
+		t.Errorf("run memory with a flag it does not take returned %v", err)
 	}
 }
 

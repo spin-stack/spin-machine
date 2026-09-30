@@ -564,7 +564,7 @@ type memoryFlags struct {
 
 func (o *memoryFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
-	fs.IntVar(&o.sizeMB, "size", -1, "MiB above the boot memory to have plugged, 0 to give it all back (required)")
+	fs.IntVar(&o.sizeMB, "size", -1, "MiB above the boot memory to have plugged, 0 to give it all back (required)") // mutate-exempt: any negative default reads as not given, so -2 is the same answer
 	fs.DurationVar(&o.timeout, "timeout", 60*time.Second, "how long the guest has to get there")
 }
 
