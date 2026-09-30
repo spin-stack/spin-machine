@@ -316,7 +316,7 @@ tasks:
       Needs KVM and a built release; SPIN_PROBE_INITRD= names a diagnostic initrd, and
       without it boot/probeinit is built into one.
     cmds:
-      - SPIN_FIRMWARE_PROBE=1 go test ./boot/ -run '^TestFirmwareRunsTheMachine$' -count=1 -v -timeout 20m
+      - SPIN_FIRMWARE_PROBE=1 go test ./boot/ -run '^TestFirmwareRuns$' -count=1 -v -timeout 20m
 
   boot:trace:
     desc: >-

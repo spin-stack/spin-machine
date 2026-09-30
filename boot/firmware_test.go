@@ -44,7 +44,7 @@ import (
 // business. Its /init must mount proc, print any dmesg line matching vmgenid, print
 // SPIN-READY, stay alive, and keep printing new dmesg output so a reseed after restore is
 // visible.
-func TestFirmwareRunsTheMachine(t *testing.T) {
+func TestFirmwareRuns(t *testing.T) {
 	if os.Getenv("SPIN_FIRMWARE_PROBE") == "" {
 		t.Skip("set SPIN_FIRMWARE_PROBE=1: this boots dozens of VMs")
 	}

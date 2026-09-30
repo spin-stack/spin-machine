@@ -37,7 +37,7 @@ part of the firmware - see the toolchain note below.
 
 ## Probe
 
-`task boot:firmware` (`TestFirmwareRunsTheMachine` in `boot/firmware_test.go`) boots qboot
+`task boot:firmware` (`TestFirmwareRuns` in `boot/firmware_test.go`) boots qboot
 with vmgenid off, then with it on: the table published, the guest saved, restored into a new
 QEMU with `guid=auto`, and `crng reseeded due to virtual machine fork` required in the
 restored guest's log. Then it boots SeaBIOS, the fallback. `SPIN_QBOOT=` names another qboot
