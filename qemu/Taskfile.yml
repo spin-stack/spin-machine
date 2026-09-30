@@ -32,7 +32,7 @@ tasks:
           --target extract \
           --platform linux/amd64 \
           --cache-from {{.QEMU_CACHE_FROM}} \
-          --cache-to {{.QEMU_CACHE_TO}} \
+          {{.QEMU_CACHE_TO}} \
           $({{.VERSIONS}} args alpine qemu debian debian-snapshot qboot) \
           --build-arg JOBS={{.QEMU_JOBS}} \
           --output type=local,dest={{.OUTPUT_ABS}} \

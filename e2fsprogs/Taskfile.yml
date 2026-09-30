@@ -16,7 +16,7 @@ tasks:
           --target extract \
           --platform linux/amd64 \
           --cache-from {{.E2FSPROGS_CACHE_FROM}} \
-          --cache-to {{.E2FSPROGS_CACHE_TO}} \
+          {{.E2FSPROGS_CACHE_TO}} \
           $({{.VERSIONS}} args alpine e2fsprogs) \
           --output type=local,dest={{.OUTPUT_ABS}} \
           .

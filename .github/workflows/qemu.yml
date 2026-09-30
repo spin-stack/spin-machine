@@ -147,7 +147,7 @@ jobs:
 
       - name: Build QEMU and verify what came out
         run: |
-          CACHE_BACKEND=gha task qemu:build QEMU_JOBS=4
+          CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task qemu:build QEMU_JOBS=4
 
       # vhost-vsock is a kernel module, and the machine's vsock device cannot be created
       # without /dev/vhost-vsock. The runner has the node and gives the user no access to

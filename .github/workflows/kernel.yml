@@ -101,7 +101,7 @@ jobs:
       # failure is a VM that does not start, in whichever lane boots one next.
       - name: Build the kernel
         run: |
-          CACHE_BACKEND=gha task kernel:build KERNEL_NPROC=4
+          CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task kernel:build KERNEL_NPROC=4
 
       # Compared against the last released machine, which every release publishes as a
       # machine.env asset. The kernel's checksum is one of the two numbers in it that decide
