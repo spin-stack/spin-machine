@@ -196,39 +196,102 @@ func section(w io.Writer, title string, old, new []Row, threshold float64, parti
 	}
 }
 
-// renames pairs a row whose id only one report has with the row of the other that boots the
-// same command line: a row's id is made of the matrix's axes, so an axis added or removed
-// renames every row while the machines they boot stay the same, and a comparison by id alone
-// would call them all new and gone. A pair is made only when it is the one candidate on both
-// sides; anything else is left to read as new and gone.
+// renames pairs a row whose id only one report has with the row of the other that stands for
+// it: a row's id is made of the matrix's axes, so an axis added or removed renames every row,
+// and a comparison by id alone would call them all new and gone.
+//
+// Two rows can stand for each other when they agree on every axis both reports have, and the
+// pair is the two that boot the nearest command lines, each the other's nearest and with no
+// tie. Nearest and not equal, because two releases apart the command line has moved too (a
+// firmware added, say) on every row alike: that is the change being compared, and the dropped
+// axis's value that added nothing to the command line is still the closest. Rows with no axes
+// (the image's variants) pair only on an identical command line. Anything else is left to read
+// as new and gone.
 func renames(old, new []Row) map[string]Row {
 	ids := map[string]bool{}
 	for _, r := range old {
 		ids[r.ID] = true
 	}
 	newIDs := map[string]bool{}
-	byArgs := map[string][]Row{} // new rows no old row has the id of, by command line
 	for _, r := range new {
 		newIDs[r.ID] = true
-		if !ids[r.ID] {
-			k := strings.Join(r.Args, "\x00")
-			byArgs[k] = append(byArgs[k], r)
-		}
 	}
-	oldByArgs := map[string][]Row{}
+	var olds, news []Row
 	for _, r := range old {
 		if !newIDs[r.ID] {
-			k := strings.Join(r.Args, "\x00")
-			oldByArgs[k] = append(oldByArgs[k], r)
+			olds = append(olds, r)
 		}
 	}
+	for _, r := range new {
+		if !ids[r.ID] {
+			news = append(news, r)
+		}
+	}
+	nearest := func(r Row, among []Row) (Row, bool) {
+		var (
+			best       Row
+			n          int
+			found, tie bool
+		)
+		for _, c := range among {
+			if !sameAxes(r, c) {
+				continue
+			}
+			d := distance(r.Args, c.Args)
+			if len(r.Features) == 0 && d != 0 {
+				continue
+			}
+			switch {
+			case !found || d < n:
+				best, n, found, tie = c, d, true, false
+			case d == n:
+				tie = true
+			}
+		}
+		return best, found && !tie
+	}
 	out := map[string]Row{}
-	for k, rs := range byArgs {
-		if o := oldByArgs[k]; len(rs) == 1 && len(o) == 1 {
-			out[rs[0].ID] = o[0]
+	for _, r := range news {
+		o, ok := nearest(r, olds)
+		if !ok {
+			continue
+		}
+		if back, ok := nearest(o, news); ok && back.ID == r.ID {
+			out[r.ID] = o
 		}
 	}
 	return out
+}
+
+// sameAxes says whether two rows made the same choice on every axis both have. A row with no
+// axes has none in common with one that has them.
+func sameAxes(a, b Row) bool {
+	if (len(a.Features) == 0) != (len(b.Features) == 0) {
+		return false
+	}
+	for k, v := range a.Features {
+		if w, ok := b.Features[k]; ok && w != v {
+			return false
+		}
+	}
+	return true
+}
+
+// distance is how many arguments one command line has that the other does not, counting
+// repeats.
+func distance(a, b []string) int {
+	count := map[string]int{}
+	for _, s := range a {
+		count[s]++
+	}
+	for _, s := range b {
+		count[s]--
+	}
+	d := 0
+	for _, n := range count {
+		d += max(n, -n)
+	}
+	return d
 }
 
 func outcome(r Row) string {
