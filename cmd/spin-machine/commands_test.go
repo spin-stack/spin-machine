@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -406,6 +407,58 @@ func TestAttachOpensTheDiskThenPlugsIt(t *testing.T) {
 
 	if err := attach(attachFlags{qmp: "q.sock"}); err == nil || !strings.Contains(err.Error(), "--disk") {
 		t.Errorf("attach with no disk returned %v, want the flags it needs", err)
+	}
+}
+
+// memory, against a monitor that answers as QEMU does: the size is asked of the virtio-mem device
+// by its id, and the plugged size read back until it is that. A guest that stops short is an
+// error that says how far it got, and so is a size QEMU refuses.
+func TestMemoryAsksForASizeAndSaysWhatWasPlugged(t *testing.T) {
+	const mib = 1 << 20
+	size := func(n int) string { return fmt.Sprintf(`{"return": %d}`, n*mib) }
+	refused := `{"error": {"class": "GenericError", "desc": "not a multiple of the block size"}}`
+	for _, tc := range []struct {
+		name    string
+		replies []string
+		timeout time.Duration
+		want    string
+		wantErr string
+	}{
+		{name: "reached", replies: []string{ok, ok, size(512), size(1024)}, timeout: time.Minute,
+			want: "plugged 1024 MiB in"},
+		{name: "stopped short", replies: []string{ok, ok, size(4)},
+			want: "plugged 4 MiB after", wantErr: "reached 4 MiB of the 1024"},
+		{name: "refused", replies: []string{ok, refused}, wantErr: "asking for 1024 MiB"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMonitor(t, tc.replies...)
+			var out strings.Builder
+			err := memory(memoryFlags{qmp: m.socket, sizeMB: 1024, timeout: tc.timeout}, &out)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatal(err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("error %v, want one containing %q", err, tc.wantErr)
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Errorf("memory printed %q, want %q", out.String(), tc.want)
+			}
+			asked := m.commands(t)
+			set := asked[1]
+			if set.Execute != "qom-set" || set.Arguments["path"] != "/machine/peripheral/"+machine.VirtioMemID ||
+				set.Arguments["property"] != "requested-size" || set.Arguments["value"] != float64(1024*mib) {
+				t.Errorf("asked %+v, want requested-size set to 1 GiB on the virtio-mem device", set)
+			}
+			for _, r := range asked[2:] {
+				if r.Execute != "qom-get" || r.Arguments["property"] != "size" {
+					t.Errorf("then asked %+v, want the plugged size", r)
+				}
+			}
+		})
+	}
+
+	if err := memory(memoryFlags{qmp: "q.sock", sizeMB: -1}, io.Discard); err == nil || !strings.Contains(err.Error(), "--size") {
+		t.Errorf("memory with no size returned %v, want the flags it needs", err)
 	}
 }
 

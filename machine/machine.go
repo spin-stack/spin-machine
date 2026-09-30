@@ -154,6 +154,10 @@ const MemoryBackendID = "pc.ram"
 // is made of, this one is empty until somebody asks for it.
 const memGrowthID = "mem.growth"
 
+// VirtioMemID is the virtio-mem device's id: the QOM path a caller grows and shrinks the VM
+// through is /machine/peripheral/<VirtioMemID>, its property requested-size.
+const VirtioMemID = "vmem0"
+
 // Disk is one virtio-blk device.
 type Disk struct {
 	// Path to the image file. QEMU opens it, and every backing file its header
@@ -1205,8 +1209,8 @@ func (s Spec) appendDevices(args []string) []string {
 		growth := s.Memory.MaxMB - s.Memory.SizeMB
 		args = append(args,
 			"-object", fmt.Sprintf("memory-backend-ram,id=%s,size=%dM", memGrowthID, growth),
-			"-device", fmt.Sprintf("virtio-mem-pci,id=vmem0,memdev=%s,requested-size=0,%s,addr=0x%x",
-				memGrowthID, virtioModern, slotMem))
+			"-device", fmt.Sprintf("virtio-mem-pci,id=%s,memdev=%s,requested-size=0,%s,addr=0x%x",
+				VirtioMemID, memGrowthID, virtioModern, slotMem))
 	}
 
 	// The controller disks this machine is given while it runs are added to. See

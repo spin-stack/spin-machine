@@ -56,6 +56,7 @@ Usage:
   spin-machine fingerprint [flags]   print the machine's identity
   spin-machine attach      [flags]   give a running VM a disk while it runs
   spin-machine detach      [flags]   take it back, once the guest has let it go
+  spin-machine memory      [flags]   grow or shrink a running VM between its memory and its ceiling
   spin-machine save        [flags]   stop a running VM and write its state to a file
   spin-machine restore     [flags]   load a saved state into a VM booted with --incoming defer
   spin-machine compare     [flags]   say what changed between two reports of the feature matrix
@@ -111,6 +112,12 @@ func run(argv []string) error {
 			return err
 		}
 		return detach(o)
+	case "memory":
+		var o memoryFlags
+		if err := parse(cmd, argv, o.register); err != nil {
+			return err
+		}
+		return memory(o, os.Stdout)
 	case "save":
 		var o saveFlags
 		if err := parse(cmd, argv, o.register); err != nil {
@@ -547,6 +554,61 @@ func checkTarget(target int) error {
 		return fmt.Errorf("target %d: a machine has targets 0 to %d at most", target, machine.MaxHotplugDisks-1)
 	}
 	return nil
+}
+
+type memoryFlags struct {
+	qmp     string
+	sizeMB  int
+	timeout time.Duration
+}
+
+func (o *memoryFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
+	fs.IntVar(&o.sizeMB, "size", -1, "MiB above the boot memory to have plugged, 0 to give it all back (required)")
+	fs.DurationVar(&o.timeout, "timeout", 60*time.Second, "how long the guest has to get there")
+}
+
+// memory asks the VM's virtio-mem device for a size and waits for the guest to reach it. It
+// prints the size plugged when it stopped and how long that took, also when it did not get
+// there: a guest that cannot give memory back - it sits in blocks the kernel will not offline -
+// is the answer to the question a shrink asks, and it is an error only because the size asked
+// for was not reached.
+//
+// Growing needs the guest to online what is plugged (memhp_default_state=online), and shrinking
+// needs it to offline blocks, which it can only do for blocks holding nothing it cannot move.
+func memory(o memoryFlags, w io.Writer) error {
+	if o.qmp == "" || o.sizeMB < 0 {
+		return errors.New("memory: --qmp and --size are required")
+	}
+	c, err := dialQMP(o.qmp)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+
+	path := "/machine/peripheral/" + machine.VirtioMemID
+	want := uint64(o.sizeMB) << 20
+	start := time.Now()
+	if err := c.run("qom-set", map[string]any{"path": path, "property": "requested-size", "value": want}, nil); err != nil {
+		return fmt.Errorf("asking for %d MiB: %w", o.sizeMB, err)
+	}
+	deadline := start.Add(o.timeout)
+	for {
+		var size uint64
+		if err := c.run("qom-get", map[string]any{"path": path, "property": "size"}, &size); err != nil {
+			return fmt.Errorf("reading the plugged size: %w", err)
+		}
+		took := time.Since(start)
+		if size == want {
+			fmt.Fprintf(w, "plugged %d MiB in %d ms\n", size>>20, took.Milliseconds())
+			return nil
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(w, "plugged %d MiB after %d ms, asked for %d\n", size>>20, took.Milliseconds(), o.sizeMB)
+			return fmt.Errorf("the guest reached %d MiB of the %d asked for within %s", size>>20, o.sizeMB, o.timeout)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 type saveFlags struct {

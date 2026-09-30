@@ -264,6 +264,17 @@ tasks:
     cmds:
       - SPIN_MEMORY_POLICY=1 go test ./boot/ -run '^TestMemoryPolicy$' -count=1 -v -timeout 90m
 
+  boot:memory-unplug:
+    desc: >-
+      How much of what a VM grew by through virtio-mem it gives back once filled, for each way
+      the guest can online that memory (the zone the kernel picks, auto-movable, auto-movable at
+      the ratio a 512 MiB machine growing to 8 GiB needs), and whether the kernel killed
+      anything for memory while it tried. Needs /dev/kvm and a built release; no sudo. REPS=
+      boots per variant, FLAGS= the machine.
+    deps: [tools]
+    cmds:
+      - SPIN_MEMORY_UNPLUG=1 go test ./boot/ -run '^TestMemoryUnplug$' -count=1 -v -timeout 90m
+
   boot:logind:
     desc: >-
       Check first SSH login, reconnect, user services and logout in a disposable guest.

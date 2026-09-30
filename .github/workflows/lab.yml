@@ -36,6 +36,7 @@ on:
           - boot:ssh-load
           - boot:kernel-pages
           - boot:memory-policy
+          - boot:memory-unplug
           - boot:firmware
           - boot:firmware-stages
           - report
