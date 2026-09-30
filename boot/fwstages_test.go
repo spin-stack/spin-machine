@@ -118,7 +118,14 @@ func traceOneBoot(t *testing.T, args []string) map[string]stage {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return stages(string(raw), exec0, ready)
+	st := stages(string(raw), exec0, ready)
+	if len(st) < 3 {
+		// A trace that names no step is a trace this parser does not read - a format QEMU
+		// changed, or events it was not built with - and a table of nothing reads as a finding.
+		lines := strings.SplitN(string(raw), "\n", 21)
+		t.Fatalf("the trace names no firmware step; its first lines:\n%s", strings.Join(lines[:min(len(lines), 20)], "\n"))
+	}
+	return st
 }
 
 // " 12345@1790000000.123456:fw_cfg_select 0x55d0 key 0x0019 'etc/e820', ret: 1"
