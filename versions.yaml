@@ -60,14 +60,17 @@
 
 - name: kernel
   kind: download
-  source: https://cdn.kernel.org/pub/linux/kernel/v{major}.x/linux-{version}.tar.xz
-  version: 7.2.8
-  pin: 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941
+  source: https://git.kernel.org/torvalds/t/linux-{version}.tar.gz
+  version: 7.3-rc5
+  pin: 382d6aa48640351df7da6321e156c39155b4a99b0985d4370f7e608729987453
   track: kernel-stable
   note: >-
     kernel/Dockerfile and the floor kernel in kernel/minimal. A new machine. The configuration
     is kernel/config-<version>-x86_64: rename it to the new version in the same commit, then
     `task kernel:build`, `task boot:bench`. A series that is over is a decision, not a bump.
+    Pinned at 7.3's release candidates, from git.kernel.org, until 7.3.0 is out: the bump to it
+    moves source back to cdn.kernel.org's .tar.xz. Until then `task versions` reports the 7.3
+    series as over, because kernel.org lists no stable 7.3.y yet.
 
 - name: debian
   kind: image
