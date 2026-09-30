@@ -67,14 +67,28 @@ func TestDiff(t *testing.T) {
 	nw.Specs[0].Args = []string{"-m", "4096"}
 	old.Specs[4].Args = []string{"-gone"}
 	nw.Specs[4].Args = []string{"-added"}
-	// An axis dropped from the matrix: the row is renamed and boots what it booted before.
-	renamedOld, renamedNew := row("mem=a,disk=default", "f", 100, 0), row("mem=a", "f", 80, 0)
-	renamedOld.Args, renamedNew.Args = []string{"-renamed"}, []string{"-renamed"}
-	// Two old rows with one new row's command line: which one it was is not known.
-	twinA, twinB, twinNew := row("twin,x=1", "f", 100, 0), row("twin,x=2", "f", 100, 0), row("twin", "f", 100, 0)
-	twinA.Args, twinB.Args, twinNew.Args = []string{"-twin"}, []string{"-twin"}, []string{"-twin"}
-	old.Specs = append(old.Specs, renamedOld, twinA, twinB)
+	// An axis dropped from the matrix, and a firmware added to every command line: the row
+	// is the one whose dropped value added nothing, and not its sibling on the same axes.
+	axes := func(id string, usable float64, feats map[string]string, args ...string) Row {
+		r := row(id, "f", usable, 0)
+		r.Features, r.Args = feats, args
+		return r
+	}
+	renamedOld := axes("mem=a,disk=default", 100, map[string]string{"mem": "a", "disk": "default"}, "-m", "-drive", "d")
+	sibling := axes("mem=a,disk=none", 100, map[string]string{"mem": "a", "disk": "none"}, "-m", "-drive", "d,cache=none")
+	renamedNew := axes("mem=a", 80, map[string]string{"mem": "a"}, "-m", "-drive", "d", "-bios", "q")
+	// Another choice on a shared axis is another row, however close its command line.
+	otherMem := axes("mem=b,disk=default", 100, map[string]string{"mem": "b", "disk": "default"}, "-m", "-drive", "d")
+	// Two old rows as near as each other to one new row: which one it was is not known.
+	twinA := axes("twin,x=1", 100, map[string]string{"twin": "y", "x": "1"}, "-twin", "1")
+	twinB := axes("twin,x=2", 100, map[string]string{"twin": "y", "x": "2"}, "-twin", "2")
+	twinNew := axes("twin", 100, map[string]string{"twin": "y"}, "-twin")
+	old.Specs = append(old.Specs, renamedOld, sibling, otherMem, twinA, twinB)
 	nw.Specs = append(nw.Specs, renamedNew, twinNew)
+	// A variant renamed with its command line changed is not the same variant.
+	old.Variants = append(old.Variants, row("fast", "", 100, 0))
+	nw.Variants = append(nw.Variants, row("faster", "", 90, 0))
+	nw.Variants[1].Args = []string{"-m", "4096"}
 
 	var b bytes.Buffer
 	Diff(&b, old, nw, 0.05)
@@ -90,18 +104,21 @@ func TestDiff(t *testing.T) {
 		"| gone | row gone | 100.0 / 110.0 |",
 		"| sub-millisecond | usable p50 +100.0% |",
 		"| one boot | boots: some → none |",
-		"| mem=a | was mem=a,disk=default, usable p50 -20.0% | 100.0 / 110.0 → 80.0 / 90.0 |",
+		"| mem=a | was mem=a,disk=default, command line, usable p50 -20.0% | 100.0 / 110.0 → 80.0 / 90.0 |",
+		"| mem=a,disk=none | row gone |",
+		"| mem=b,disk=default | row gone |",
 		"| twin | new row |",
 		"| twin,x=1 | row gone |",
 		"| twin,x=2 | row gone |",
-		"### Image variants\n\nNo row changed beyond 5%.",
+		"| faster | new row |",
+		"| fast | row gone |",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the diff has no %q:\n%s", want, got)
 		}
 	}
 	for _, absent := range []string{"qemu_sha256", "just under", "different hosts", "reached differently",
-		"| mem=a,disk=default | row gone", "| mem=a | new row"} {
+		"| mem=a,disk=default | row gone", "| mem=a | new row", "| baseline |"} {
 		if strings.Contains(got, absent) {
 			t.Errorf("the diff names %q, which did not change enough:\n%s", absent, got)
 		}
@@ -113,12 +130,12 @@ func TestDiff(t *testing.T) {
 	b.Reset()
 	Diff(&b, old, nw, 0.9)
 	got = b.String()
-	for _, want := range []string{"## an unreleased tree with --kernel=/k against v1", "No row changed beyond 90%", "different hosts (a, 8 CPUs; b, 4 CPUs)", "reached differently (echo, agetty)"} {
+	for _, want := range []string{"## an unreleased tree with --kernel=/k against v1", "different hosts (a, 8 CPUs; b, 4 CPUs)", "reached differently (echo, agetty)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the diff has no %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "row gone") {
-		t.Errorf("a row a partial run did not ask about is reported gone:\n%s", got)
+	if strings.Contains(got, "row gone") || strings.Contains(got, "| slower |") {
+		t.Errorf("a row a partial run did not ask about is reported gone, or one under the threshold is listed:\n%s", got)
 	}
 }
