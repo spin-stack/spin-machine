@@ -817,10 +817,3 @@ func tail(b []byte, n int) string {
 	}
 	return string(b)
 }
-
-// spread is min / median / max of a column.
-func spread(v []int, unit string) string {
-	s := append([]int(nil), v...)
-	sort.Ints(s)
-	return fmt.Sprintf("min %d %s, median %d %s, max %d %s", s[0], unit, s[len(s)/2], unit, s[len(s)-1], unit)
-}
