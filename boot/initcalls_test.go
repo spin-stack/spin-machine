@@ -281,20 +281,17 @@ func clip(s string) string {
 	return s
 }
 
-// The command lines to compare. The first is the baseline and the one the per-initcall
-// table below is taken from.
+// The command lines to compare: the baseline, which the per-initcall table below is taken
+// from, and a kernel B or C when one is named.
 //
-// Boot parameters only, because they cost nothing: a kernel config change invalidates every
-// template in existence, so it is worth knowing whether the saving is there at all before
-// anybody pays for it. thash_entries and uhash_entries size the TCP and UDP hash tables,
-// which inet_init allocates — 8.7 ms of initcall time, with another 8.2 ms of gap around
-// "IP idents hash table entries: 32768 (order: 6, 262144 bytes, linear)" on a machine that
-// will never hold 32768 connections.
+// Smaller TCP and UDP hash tables (thash_entries=2048 uhash_entries=2048), for inet_init's
+// 8 ms on a machine that will never hold 32768 connections, moved nothing: 85.8 ms against
+// the baseline's 85.7 to "Freeing unused kernel image", inet_init 7.84 against 7.70 (10 and
+// 30 boots, 2026-09-30).
 type cmdlineVariant struct{ label, extra, kernel string }
 
 var cmdlineVariants = []cmdlineVariant{
 	{label: "baseline"},
-	{label: "small hashes", extra: "thash_entries=2048 uhash_entries=2048"},
 }
 
 // initcallsOfInterest are printed side by side for every variant, because a variant that

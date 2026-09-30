@@ -34,28 +34,6 @@ tasks:
           .
       - task: verify
 
-  minimal:
-    desc: >-
-      Build the floor kernel from kernel/minimal/ into _output/kernel-minimal/. An
-      experiment, not a release artefact: no BTF, BPF, ftrace, cgroups, ext4 or virtio, so
-      it cannot mount the base image or run systemd. What it is for is `task boot:floor`,
-      which compares it against the release kernel on a marker both can reach.
-    cmds:
-      - mkdir -p {{.OUTPUT_ABS}}
-      - |
-        docker buildx build \
-          --file kernel/minimal/Dockerfile \
-          --target extract \
-          --platform linux/amd64 \
-          --cache-from {{.KMIN_CACHE_FROM}} \
-          {{.KMIN_CACHE_TO}} \
-          $({{.VERSIONS}} args debian debian-snapshot kernel) \
-          --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
-          --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
-          --output type=local,dest={{.OUTPUT_ABS}} \
-          .
-      - cmd: echo "✓ {{.OUTPUT_ABS}}/kernel-minimal/vmlinux"
-
   verify:
     desc: Assert the built kernel is one QEMU can enter and one this machine can boot.
     cmds:

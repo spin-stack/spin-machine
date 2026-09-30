@@ -128,6 +128,15 @@ func (c Cmdline) String() string {
 	// Unconditional, and not only when there is a ceiling: it costs one token on
 	// a machine with no virtio-mem, and a command line that changes with the
 	// memory configuration is a second thing that has to agree with the first.
+	//
+	// online and not auto-movable, which puts plugged memory in ZONE_MOVABLE so
+	// it can always be unplugged: measured 2026-09-30 (512 MiB growing to 8 GiB,
+	// filled, 200 000 files kept on the disk, then asked for everything back, 3
+	// boots each), online left 14-20 MiB plugged, auto-movable 12, auto-movable
+	// at the 1500% ratio this shape needs for all of it 10, nothing killed. Under
+	// 10 MiB is not worth leaving the kernel's own allocations the boot memory
+	// alone. `spin-machine memory` asks for a size and says where the guest
+	// stopped.
 	parts = append(parts, "memhp_default_state=online")
 
 	// The tick stops when a CPU has nothing to do, which is what CONFIG_NO_HZ_IDLE

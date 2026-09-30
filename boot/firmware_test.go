@@ -17,25 +17,23 @@ import (
 	"github.com/spin-stack/spin-machine/boot"
 )
 
-// Firmware A/B, against a diagnostic initrd.
+// Whether the machine's firmware runs it, against a diagnostic initrd: qboot boots, publishes
+// vmgenid's table and survives a restore with the guest reseeding, and SeaBIOS, the fallback,
+// still boots. What qboot saved over SeaBIOS is recorded at machine.DefaultBIOS; where the
+// time before the kernel goes now is `task boot:firmware-stages`.
 //
-// The firmware is ~10 ms of vCPU 0's work in a boot that reaches a login in a few hundred,
-// so this measures a small line item and says so: what it is for is deciding whether a
-// firmware can run this machine at all, and only then what it saves.
-//
-// Stock qboot cannot. Its ACPI linker-loader implements ALLOCATE, ADD_POINTER and
+// Stock qboot cannot run this machine. Its ACPI linker-loader implements ALLOCATE, ADD_POINTER and
 // ADD_CHECKSUM and stops on anything else, and vmgenid needs WRITE_POINTER to tell QEMU
 // where the GUID lives. The symptom is a vCPU halted inside the firmware with not one byte
 // on the console, not even earlyprintk. The qboot built beside QEMU carries the command
 // (qemu/qboot/write-pointer.patch), and this asserts it: the table published and a restored
-// guest reseeded, before anything is timed.
+// guest reseeded.
 //
-// The inputs are not release artefacts. The firmware is `task qemu:qboot`'s; the initrd is
-// SPIN_PROBE_INITRD's, or boot/probeinit built into one (probe_initrd_test.go):
+// The initrd is not a release artefact: SPIN_PROBE_INITRD's, or boot/probeinit built into one
+// (probe_initrd_test.go):
 //
 //	SPIN_FIRMWARE_PROBE=1        run at all
 //	SPIN_PROBE_INITRD=<cpio>     a diagnostic initrd instead of probeinit's; see below
-//	REPS=<n>                     boots per firmware (default 20)
 //
 // Both firmwares are in the tree's qemu/: bios-256k.bin, the SeaBIOS QEMU ships, and qboot.bin,
 // built beside it with qemu/qboot/'s patches. SPIN_QBOOT names another qboot to try.
@@ -45,14 +43,12 @@ import (
 // The initrd is diagnostic input because what runs as PID 1 is not this repository's
 // business. Its /init must mount proc, print any dmesg line matching vmgenid, print
 // SPIN-READY, stay alive, and keep printing new dmesg output so a reseed after restore is
-// visible. Its own CPU and memory work lands inside every number here, so the same initrd
-// has to be used for both variants or the comparison is between two initrds.
-func TestFirmwareCost(t *testing.T) {
+// visible.
+func TestFirmwareRuns(t *testing.T) {
 	if os.Getenv("SPIN_FIRMWARE_PROBE") == "" {
 		t.Skip("set SPIN_FIRMWARE_PROBE=1: this boots dozens of VMs")
 	}
 	out := releaseDir(t)
-	reps := envInt(t, "REPS", 20)
 
 	bios := map[string]string{
 		"seabios": filepath.Join(out, "qemu", "bios-256k.bin"),
@@ -79,30 +75,11 @@ func TestFirmwareCost(t *testing.T) {
 	// stops on WRITE_POINTER - which is what the patch it is built with is for.
 	p.mustPublishVMGenID(t)
 
-	// Only now, the timing. Interleaved for the reason TestBootCost is: a block schedule
-	// hands one variant a slow minute and reads it as a difference.
-	samples := map[string][]float64{}
-	order := []string{"seabios", "qboot"}
-	for range reps {
-		for _, v := range order {
-			ms, err := p.reach(t, v, withVMGenID, "SPIN-READY", 8*time.Second)
-			if err != nil {
-				t.Fatalf("%s: %v", v, err)
-			}
-			samples[v] = append(samples[v], ms)
-		}
+	// SeaBIOS is kept as the fallback a machine can be told to boot (--bios bios-256k.bin),
+	// and a fallback that no longer boots the machine is not one.
+	if ms := p.mustReach(t, "seabios", withVMGenID, "SPIN-READY"); ms > 0 {
+		t.Logf("seabios, vmgenid on: %.1f ms to SPIN-READY", ms)
 	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "\nmilliseconds from the moment before QEMU is exec'd, p50/p95 over %d boots\n\n", reps)
-	fmt.Fprintf(&b, "%-10s %10s %10s\n", "FIRMWARE", "P50", "P95")
-	for _, v := range order {
-		fmt.Fprintf(&b, "%-10s %10.2f %10.2f\n", v, pct(samples[v], 50), pct(samples[v], 95))
-	}
-	// The difference, stated rather than left to the reader: it is the number the decision
-	// turns on, and it is small enough that a reader who has to subtract will round it up.
-	fmt.Fprintf(&b, "\np50 reduction: %.2f ms\n", pct(samples["seabios"], 50)-pct(samples["qboot"], 50))
-	t.Log(b.String())
 }
 
 const (
