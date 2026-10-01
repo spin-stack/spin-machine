@@ -87,13 +87,22 @@ func pmemCompare(t *testing.T, out string, reps int) {
 	if err := os.Truncate(raw, (fi.Size()+(2<<20)-1)&^((2<<20)-1)); err != nil {
 		t.Fatal(err)
 	}
+	// The same tree as erofs, uncompressed so DAX can map it: built from the raw image mounted
+	// read-only, by mkfs.erofs in a container, since the runner's host has no erofs-utils.
+	mnt := t.TempDir()
+	mustRun(t, "sudo", "mount", "-o", "loop,ro", raw, mnt)
+	mustRun(t, "docker", "run", "--rm", "-v", mnt+":/src:ro", "-v", dir+":/out", "alpine:3.22",
+		"sh", "-c", "apk add -q erofs-utils && mkfs.erofs -q /out/base.erofs /src")
+	mustRun(t, "sudo", "umount", mnt)
+	erofs := filepath.Join(dir, "base.erofs")
+	mustRun(t, "sudo", "sh", "-c", fmt.Sprintf(`s=$(stat -c %%s %[1]s); truncate -s $(( (s + 2097151) / 2097152 * 2097152 )) %[1]s && chmod 0644 %[1]s`, erofs))
 
-	variants := []string{"qcow2 chain", "pmem + DAX"}
+	variants := []string{"qcow2 chain", "pmem + ext4 DAX", "pmem + erofs DAX"}
 	got := map[string][][]pmemStep{}
 	var notes = map[string]string{}
 	for range reps {
 		for _, v := range variants {
-			steps, note := pmemBoot(t, out, v, lower, raw)
+			steps, note := pmemBoot(t, out, v, lower, raw, erofs)
 			got[v] = append(got[v], steps)
 			notes[v] = note
 		}
@@ -128,12 +137,16 @@ func pmemCompare(t *testing.T, out string, reps int) {
 }
 
 // pmemBoot runs the workload once on variant v and measures each step on the host.
-func pmemBoot(t *testing.T, out, v, lower, raw string) ([]pmemStep, string) {
+func pmemBoot(t *testing.T, out, v, lower, raw, erofs string) ([]pmemStep, string) {
 	t.Helper()
 	dir := t.TempDir()
 	qemuImg := filepath.Join(out, "bin", "qemu-img")
 	args := []string{"boot", "--release", out, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout"}
 	cached := raw
+	fstype := "ext4"
+	if v == "pmem + erofs DAX" {
+		cached, fstype = erofs, "erofs"
+	}
 	if v == "qcow2 chain" {
 		overlay := filepath.Join(dir, "overlay.qcow2")
 		mustRun(t, qemuImg, "create", "-f", "qcow2", "-F", "qcow2", "-b", lower, overlay)
@@ -148,8 +161,8 @@ func pmemBoot(t *testing.T, out, v, lower, raw string) ([]pmemStep, string) {
 			t.Fatal(err)
 		}
 		mustRun(t, filepath.Join(out, "bin", "mkfs.ext4"), "-q", "-F", upper)
-		args = append(args, "--pmem", raw, "--disk", upper, "--disk-format", "raw", "--root", "/dev/pmem0",
-			"--append", "init=/sbin/overlay-init ro rootflags=dax=always")
+		args = append(args, "--pmem", cached, "--disk", upper, "--disk-format", "raw", "--root", "/dev/pmem0",
+			"--append", "init=/sbin/overlay-init ro rootfstype="+fstype+" rootflags=dax=always")
 	}
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
