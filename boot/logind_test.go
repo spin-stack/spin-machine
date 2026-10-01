@@ -3,14 +3,8 @@
 package boot_test
 
 import (
-	"bytes"
-	"context"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/spin-stack/spin-machine/machine"
 )
@@ -45,86 +39,11 @@ func TestLogindSessions(t *testing.T) {
 	if os.Getenv("SPIN_LOGIND_NO_SEATS") == "1" {
 		root.remove("/etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf")
 	}
-	for _, name := range []string{"logind-check.sh", "logind-session.sh"} {
-		content, err := os.ReadFile(filepath.Join("testdata", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		root.write("/"+name, string(content))
-	}
-	root.write("/etc/systemd/system/logind-check.service", `[Unit]
-Description=Check on-demand sessions in a disposable guest
-After=multi-user.target
-[Service]
-Type=oneshot
-Environment=LOGIND_EXPECT=`+expectedState+`
-ExecStart=/bin/sh /logind-check.sh
-StandardOutput=journal+console
-StandardError=journal+console
-`)
-	root.write("/etc/systemd/system/logind-check.timer", `[Timer]
-OnBootSec=3s
-AccuracySec=100ms
-`)
-	root.link("/etc/systemd/system/timers.target.wants/logind-check.timer", "/etc/systemd/system/logind-check.timer")
-	spec := rel.Spec()
-	spec.BootCPUs = 2
-	spec.Memory.SizeMB = 1024
-	spec.Disks = []machine.Disk{{Path: root.path, Format: "raw"}}
-	spec.Serial = "stdio"
-	c := machine.DefaultCmdline()
-	c.Root = "/dev/vda"
-	c.Init = "/sbin/init"
-	spec.Cmdline = c
-	args, err := spec.Args()
+	content, err := os.ReadFile("testdata/logind-session.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		spec.QEMU = filepath.Join(out, "bin/qemu-system-x86_64-tcg")
-		for i := range args {
-			if args[i] == "-accel" {
-				args[i+1] = "tcg"
-			}
-			if strings.HasPrefix(args[i], "host,migratable=on") {
-				args[i] = "max" + strings.TrimPrefix(args[i], "host")
-			}
-		}
-		t.Log("TCG: checking functionality only")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, spec.QEMU, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	waited := false
-	stop := func() {
-		cancel()
-		if !waited {
-			_ = cmd.Wait()
-			waited = true
-		}
-	}
-	defer stop()
-	var console bytes.Buffer
-	buf := make([]byte, 4096)
-	for {
-		n, err := stdout.Read(buf)
-		console.Write(buf[:n])
-		if strings.Contains(console.String(), "LOGIND_CHECK_OK") {
-			t.Log(console.String())
-			return
-		}
-		if err != nil || strings.Contains(console.String(), "LOGIND_CHECK_FAILED") {
-			stop()
-			t.Fatalf("guest session check failed: %v\n%s\n%s", err, &console, &stderr)
-		}
-	}
+	root.write("/logind-session.sh", string(content))
+	oneshotAtBoot(t, root, "logind-check", "logind-check.sh", "Environment=LOGIND_EXPECT="+expectedState)
+	t.Log(checkOnConsole(t, out, rel, root, "LOGIND_CHECK_OK", "LOGIND_CHECK_FAILED"))
 }

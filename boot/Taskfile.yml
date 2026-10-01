@@ -69,6 +69,15 @@ tasks:
     cmds:
       - SPIN_LOGIND_TEST=1 go test ./boot/ -run '^TestLogindSessions$' -count=1 -v -timeout 5m
 
+  lockdown:
+    desc: >-
+      Check the guest kernel runs lockdown at confidentiality and the BPF LSM, and has no
+      /dev/mem or /proc/kcore, in a disposable guest. Needs a built release; uses KVM when
+      available, otherwise TCG.
+    deps: [':tools']
+    cmds:
+      - SPIN_LOCKDOWN_TEST=1 go test ./boot/ -run '^TestTheGuestKernelIsLockedDown$' -count=1 -v -timeout 5m
+
   initcalls:
     desc: >-
       Where the kernel's own boot goes, initcall by initcall, as a p50 over REPS boots.

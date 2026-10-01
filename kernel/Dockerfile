@@ -230,6 +230,21 @@ RUN <<EOT
 
     grep -q "CONFIG_EXT4_FS=y" .config || (echo "ERROR: CONFIG_EXT4_FS not enabled (the base image cannot be mounted)!" ; exit 1)
 
+    # The guest defends spin's security from its own root (spin's F2b): the supervisor loads BPF
+    # LSM programs that refuse an agent what its mark does not cover and refuse anybody
+    # detaching them, and lockdown keeps root from reading or writing the kernel those
+    # programs and the supervisor's keys live in. Without any one of these a root that wants
+    # to, gets around them in silence. DEVMEM and PROC_KCORE are the two reads of the kernel's
+    # memory, gone rather than left to lockdown alone.
+    for opt in SECURITY SECURITYFS SECURITY_NETWORK SECURITY_PATH BPF_LSM SECURITY_LOCKDOWN_LSM \
+            SECURITY_LOCKDOWN_LSM_EARLY LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY; do
+        grep -q "^CONFIG_${opt}=y" .config || { echo "ERROR: CONFIG_${opt} is not enabled after olddefconfig!"; exit 1; }
+    done
+    grep -q '^CONFIG_LSM="lockdown,bpf"' .config || { echo "ERROR: the LSMs are not lockdown and bpf!"; grep '^CONFIG_LSM=' .config; exit 1; }
+    for opt in DEVMEM PROC_KCORE MODULES KEXEC; do
+        ! grep -q "^CONFIG_${opt}=y" .config || { echo "ERROR: CONFIG_${opt} lets root reach the kernel's memory!"; exit 1; }
+    done
+
     # No virtual consoles. This machine's QEMU ships no VGA at all and its console is one
     # 16550 on ttyS0, so CONFIG_VT builds 64 tty devices that nothing opens and that udev
     # walks on every boot — a quarter of the 266 devices it coldplugs. olddefconfig drops
