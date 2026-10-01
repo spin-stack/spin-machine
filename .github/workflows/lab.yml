@@ -186,7 +186,7 @@ jobs:
             pair="${pair%"${pair##*[![:space:]]}"}"
             [ -z "$pair" ] && continue
             key="${pair%%=*}"
-            [[ "$pair" == *=* && "$key" =~ ^(REPS|TOP|GAP|ONLY|FLAGS|CPUS|MEMORY_MIB|DEBUG|GRAPH_[A-Z_]+|SHARE_[A-Z_]+|SPIN_[A-Z0-9_]+)$ ]] ||
+            [[ "$pair" == *=* && "$key" =~ ^(REPS|TOP|GAP|ONLY|FLAGS|CPUS|MEMORY_MIB|DEBUG|FILE_MB|CACHE_TIMEOUT_S|GRAPH_[A-Z_]+|SHARE_[A-Z_]+|SPIN_[A-Z0-9_]+)$ ]] ||
               { echo "::error::not a variable this workflow passes on: $pair"; exit 1; }
             case "$key" in
               SPIN_MACHINE_OUTPUT|SPIN_MACHINE_OUTPUT_B|SPIN_KERNEL_B|SPIN_KERNEL_C) echo "::error::$key is set by this workflow"; exit 1 ;;
