@@ -38,9 +38,32 @@ and 5.0 MB of image — 4.55 MB of which is the `.BTF` section, which `strip -s`
 it is allocated and the guest reads it back out of its own image. `ftrace: allocating 41727
 entries` is the new work that shows up in the log.
 
-`BPF_LSM` is deliberately not enabled: it needs `CONFIG_SECURITY`, and what it buys is
-enforcing access policy inside a VM that holds one workload — a boundary drawn inside the
-boundary this machine already is.
+## Lockdown and the BPF LSM
+
+The guest's root is not the kernel's. The kernel runs two LSMs, `lockdown` and `bpf`
+(`CONFIG_LSM="lockdown,bpf"`):
+
+- **Lockdown** is forced to *confidentiality* from the first instruction, and no write to
+  `/sys/kernel/security/lockdown` lowers it. Root can then neither rewrite the running kernel
+  (kexec, `/dev/port`, MSRs, ACPI table overrides) nor read it (kprobes, `bpf_probe_read_kernel`,
+  perf on the kernel).
+- **`/dev/mem` and `/proc/kcore`** are not built at all, rather than left to lockdown.
+- **The BPF LSM** is there so a consumer can enforce policy in the guest with programs it loads
+  before handing the machine to its tenant. Lockdown is what makes such policy hold: without
+  it, root reads or rewrites the kernel those programs live in.
+
+What enforcing the policy is for, and how, is the consumer's. That this kernel does both is
+what `kernel/Dockerfile` checks after olddefconfig, and `task boot:lockdown` asks a booted guest.
+
+Lockdown at confidentiality also takes away the tenant's kernel tracing: kprobes,
+`bpf_probe_read_kernel` and perf on the kernel. User-space tracing and networking eBPF are
+untouched. systemd notices at boot: it logs `use of bpf to read kernel RAM is restricted` and
+carries on, and logins are unaffected (`task boot:logind`).
+
+Measured 2026-10-01, `task boot:initcalls` with `SPIN_KERNEL_B` set to the kernel without these
+options: no cost that can be told from noise. Over 20 interleaved boots each, kernel start to
+`Freeing unused kernel image` had a p50 of 196.3 ms with them and 208.3 ms without, on a host at
+load 6-10, where the p95 was 342 ms.
 
 ## Changing it
 
