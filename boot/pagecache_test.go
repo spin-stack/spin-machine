@@ -38,7 +38,10 @@ import (
 //     blocks in its own page cache and, through QEMU's writeback cache, in the host's as well -
 //     memory the host pays for a copy only the guest reads. The overlay's residency in the host's
 //     cache, read with mincore, after the guest wrote and read a file, with the disk as it is and
-//     with --disk-direct-over-backing (O_DIRECT for the overlay, the base still cached).
+//     with --disk-direct-over-backing (O_DIRECT for the overlay, the base still cached). And what
+//     the copy is worth: the file read again once the guest dropped it, and the first 128 MB of
+//     it split into 8 KiB files and read back in a shuffled order - a build's sources, which the
+//     host's copy serves from memory and O_DIRECT sends to the disk one small read at a time.
 //
 //  3. Whether the guest's page cache comes back: free page reporting returns what the guest
 //     frees, and page cache is not free. QEMU's resident memory at each step of the same boot -
@@ -123,6 +126,8 @@ var cacheStepNames = []string{
 	"idle",
 	"file written",
 	"guest cache full",
+	"8 KiB files written",
+	"8 KiB files read, shuffled",
 	"guest dropped its cache",
 	"file removed",
 }
@@ -130,7 +135,8 @@ var cacheStepNames = []string{
 // cacheWorkload is the guest's side: a unit that runs once the machine is up, takes each step and
 // says so on the console with what the guest sees - its page cache and free memory, in kB - and
 // how long the step's I/O took, then waits for the host to measure before the next. %d is the
-// file's size in MB. The I/O is timed by /proc/uptime, which only goes forward: the wall clock
+// file's size in MB. Each read starts with the guest's cache dropped, so what it reads comes
+// through the disk: from the host's page cache or, with the overlay O_DIRECT, the device. The I/O is timed by /proc/uptime, which only goes forward: the wall clock
 // is chrony's to step as the machine comes up, and on the lab runner it stepped back under a
 // write, which timed it at -183 ms.
 const cacheWorkload = `#!/bin/sh
@@ -143,8 +149,12 @@ t=$(ms); dd if=/dev/zero of=$f bs=1M count=%d conv=fsync status=none || { echo "
 say 1 $(( $(ms) - t ))
 echo 3 > /proc/sys/vm/drop_caches
 t=$(ms); cat $f > /dev/null; say 2 $(( $(ms) - t ))
-echo 3 > /proc/sys/vm/drop_caches; sleep 6; say 3 0
-rm -f $f; fstrim / 2>/dev/null; sync; sleep 6; say 4 0
+d=/var/tmp/pagecache.d; mkdir -p $d
+t=$(ms); head -c 128M $f | split -b 8K -a 5 - $d/ && sync; say 3 $(( $(ms) - t ))
+echo 3 > /proc/sys/vm/drop_caches
+t=$(ms); find $d -type f | shuf | xargs cat > /dev/null; say 4 $(( $(ms) - t ))
+echo 3 > /proc/sys/vm/drop_caches; sleep 6; say 5 0
+rm -rf $f $d; fstrim / 2>/dev/null; sync; sleep 6; say 6 0
 echo PAGECACHE-DONE > /dev/ttyS0
 `
 
@@ -217,6 +227,15 @@ func cacheSteps(t *testing.T, out string, reps, fileMB int) {
 func cacheBoot(t *testing.T, out string, flags []string, fileMB int) []cacheStep {
 	t.Helper()
 	dir := t.TempDir()
+	// On tmpfs the overlay is memory whatever the cache mode, and O_DIRECT a no-op: the two
+	// variants would measure the same thing.
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Type == unix.TMPFS_MAGIC {
+		t.Fatalf("%s is on tmpfs: set TMPDIR to a directory on a disk", dir)
+	}
 	overlay := filepath.Join(dir, "overlay.qcow2")
 	base := filepath.Join(out, "image", "rootfs.qcow2")
 	// The base image's root has little room: the overlay is larger, and the root grown into it
