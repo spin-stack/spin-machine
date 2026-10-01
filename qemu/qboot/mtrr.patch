@@ -1,0 +1,95 @@
+diff --git a/main.c b/main.c
+index afa2200..1a156f6 100644
+--- a/main.c
++++ b/main.c
+@@ -77,6 +77,82 @@ static void extract_e820(void)
+ 	e820_seg = ((uintptr_t) e820) >> 4;
+ }
+ 
++/*
++ * MTRRs: enabled, write-back by default, and the 32-bit PCI hole - from the top of low
++ * RAM to 4 GiB - uncacheable, as SeaBIOS sets them. Left disabled, Linux maps every
++ * range it memremaps write-back but does not know as RAM - a virtio-pmem region, for
++ * one - uncached-minus, and reads it at 8 MB/s. Only this CPU: Linux gives its own
++ * state to the APs it starts. Fixed-range MTRRs stay off, so below 1 MiB is the
++ * default type too.
++ */
++#define MSR_MTRRcap		0xfe
++#define MSR_MTRRdefType		0x2ff
++#define MTRR_PHYSBASE(n)	(0x200 + 2 * (n))
++#define MTRR_PHYSMASK(n)	(0x201 + 2 * (n))
++#define MTRR_TYPE_UC		0
++#define MTRR_TYPE_WB		6
++#define MTRR_DEF_ENABLE		0x800
++#define MTRR_MASK_VALID		0x800
++
++static inline void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
++{
++	asm volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "0"(leaf), "2"(0));
++}
++
++static inline uint64_t rdmsr(uint32_t msr)
++{
++	uint32_t lo, hi;
++	asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
++	return ((uint64_t)hi << 32) | lo;
++}
++
++static inline void wrmsr(uint32_t msr, uint64_t val)
++{
++	asm volatile("wrmsr" : : "c"(msr), "a"((uint32_t)val), "d"((uint32_t)(val >> 32)));
++}
++
++static void setup_mtrr(void)
++{
++	uint32_t a, b, c, d;
++	uint64_t phys_mask, base = lowmem, top = 1ull << 32;
++	int vcnt, n = 0;
++
++	cpuid(1, &a, &b, &c, &d);
++	if (!(d & (1 << 12)) || !(d & (1 << 5)))	/* MTRR, MSR */
++		return;
++	vcnt = rdmsr(MSR_MTRRcap) & 0xff;
++	cpuid(0x80000000, &a, &b, &c, &d);
++	phys_mask = (1ull << 36) - 1;
++	if (a >= 0x80000008) {
++		cpuid(0x80000008, &a, &b, &c, &d);
++		phys_mask = (1ull << (a & 0xff)) - 1;
++	}
++
++	wrmsr(MSR_MTRRdefType, 0);
++	for (n = 0; n < vcnt; n++) {
++		wrmsr(MTRR_PHYSBASE(n), 0);
++		wrmsr(MTRR_PHYSMASK(n), 0);
++	}
++	/* [lowmem, 4G) in naturally aligned powers of two. */
++	for (n = 0; base < top && n < vcnt; n++) {
++		uint64_t size = top - base;
++		while (size & (size - 1))
++			size &= size - 1;
++		while (base & (size - 1))
++			size >>= 1;
++		wrmsr(MTRR_PHYSBASE(n), base | MTRR_TYPE_UC);
++		wrmsr(MTRR_PHYSMASK(n), (~(size - 1) & phys_mask) | MTRR_MASK_VALID);
++		base += size;
++	}
++	/* Not all of the hole fits: leave them off rather than cache MMIO. */
++	if (base < top) {
++		for (n = 0; n < vcnt; n++)
++			wrmsr(MTRR_PHYSMASK(n), 0);
++		return;
++	}
++	wrmsr(MSR_MTRRdefType, MTRR_DEF_ENABLE | MTRR_TYPE_WB);
++}
++
+ int __attribute__ ((section (".text.startup"))) main(void)
+ {
+ 	bool have_pci;
+@@ -98,6 +174,7 @@ int __attribute__ ((section (".text.startup"))) main(void)
+ 	fw_cfg_setup();
+ 	extract_acpi();
+ 	extract_e820();
++	setup_mtrr();
+ 	setup_mptable();
+ 	extract_smbios();
+ 	boot_from_fwcfg();

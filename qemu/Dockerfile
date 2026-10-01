@@ -459,7 +459,7 @@ RUN git clone --quiet --branch "${QBOOT_VERSION}" https://github.com/bonzini/qbo
     git -C upstream archive "${QBOOT_COMMIT}" > upstream.tar && \
     echo "${QBOOT_ARCHIVE_SHA256}  upstream.tar" | sha256sum -c -
 
-COPY qemu/qboot/write-pointer.patch qemu/qboot/pam.patch /build/
+COPY qemu/qboot/write-pointer.patch qemu/qboot/pam.patch qemu/qboot/mtrr.patch /build/
 
 # Upstream's meson.build flags, with -Os fixed rather than taken from a build type.
 RUN set -eux; \
@@ -467,6 +467,7 @@ RUN set -eux; \
     tar -xf upstream.tar -C src; \
     patch -p1 --fuzz=0 -d src < write-pointer.patch; \
     patch -p1 --fuzz=0 -d src < pam.patch; \
+    patch -p1 --fuzz=0 -d src < mtrr.patch; \
     cd src; \
     for f in *.c *.S; do \
         gcc -Os -m32 -march=i386 -mregparm=3 -fno-stack-protector \
@@ -482,12 +483,13 @@ RUN set -eux; \
 # fail here - it fails as a guest that prints nothing - so the size is checked; and the patches,
 # because a patch that applied to nothing still leaves a tree that compiles: without the first
 # the firmware hangs every machine that has vmgenid, without the second it is slower and says
-# nothing.
+# nothing, and without the third every device memory a guest maps reads uncached.
 RUN set -eux; \
     size=$(stat -c%s /build/qboot.bin); \
     test "$size" -eq 65536 || { echo "qboot.bin is $size bytes, not 65536" >&2; exit 1; }; \
     grep -q 'CMD_WRITE_PTR' src/tables.c && grep -q 'fw_cfg_write_file' src/fw_cfg.c || { echo "the WRITE_POINTER patch is not in the tree that was compiled" >&2; exit 1; }; \
     grep -q '0x33333330' src/hwsetup.c || { echo "the PAM patch is not in the tree that was compiled" >&2; exit 1; }; \
+    grep -q 'setup_mtrr();' src/main.c || { echo "the MTRR patch is not in the tree that was compiled" >&2; exit 1; }; \
     sha256sum /build/qboot.bin
 
 FROM ${ALPINE_IMAGE} AS runtime

@@ -9,7 +9,8 @@ https://github.com/bonzini/qboot, commit
 8ca302e86d685fa05b16e2b208888243da319941, under GPL-2.0 (see qemu/qboot/COPYING).
 write-pointer.patch modifies fw_cfg.c, include/fw_cfg.h and tables.c to implement
 WRITE_POINTER, DMA writes and error/bounds checks; pam.patch modifies hwsetup.c to
-set q35's PAM registers in three configuration writes. The firmware built with
+set q35's PAM registers in three configuration writes; mtrr.patch modifies main.c
+to enable the MTRRs, write-back by default and the 32-bit PCI hole uncacheable. The firmware built with
 them ships in releases as qemu/qboot.bin, the patches beside it. The Apache-2.0
 licence does not apply to those patches or COPYING.
 
