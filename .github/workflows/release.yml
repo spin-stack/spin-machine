@@ -167,8 +167,23 @@ jobs:
             > /tmp/verdict.md
 
           cat /tmp/verdict.md
+
+          # What reached the machine since the release before, read from git: the commits by the
+          # part they changed, the pins that moved, the kernel options and the patches. Against
+          # the newest published release that is not this one, as the verdict is.
+          previous=$(gh release list -R "$GITHUB_REPOSITORY" --limit 30 --json tagName -q '.[].tagName' |
+            grep -vx "$VERSION" | head -1 || true)
+          if [ -n "$previous" ]; then
+            go run ./hack/releasenotes -from "$previous" -to HEAD > /tmp/changes.md
+          else
+            echo "The first release: nothing before it to say what changed against." > /tmp/changes.md
+          fi
+          cat /tmp/changes.md
+
           {
             echo 'notes<<RELEASE_NOTES_EOF'
+            cat /tmp/changes.md
+            echo
             cat /tmp/verdict.md
             echo
             echo 'The machine as it stood on this date.'

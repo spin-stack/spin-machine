@@ -30,14 +30,17 @@ combination of the machine's features, booted from the published tarball to a lo
 no API here to promise compatibility about, and the one thing a version could promise —
 that checkpoints still resume — is decided by the fingerprint of the artefacts, not by a
 number anybody chose. Pushing a `v*` tag releases that version; running the workflow by
-hand with no input generates the next sequence for today, tags the commit, and puts the
-three checksums in the release notes.
+hand with no input generates the next sequence for today, tags the commit, and writes the
+notes: what changed since the release before (`hack/releasenotes`: the commits that reached
+the machine by the part they changed, the pins that moved, the kernel options turned on, off
+or changed, and the patches added, changed or removed), whether checkpoints carry over
+(`hack/fingerprint-diff`), and the checksums.
 
 ## The feature matrix
 
 A release also says what it costs. After it publishes, the `report` job boots the tarball it
 just published, on a self-hosted runner labelled `kvm`, through every combination of the
-machine's features (accelerator; memory fixed or with a virtio-mem ceiling; vsock; a hotplug
+machine's features under KVM (memory fixed or with a virtio-mem ceiling; vsock; a hotplug
 controller) and every boot variant of the image. It writes `report.json` beside the tarball: per row, the command
 line, the shape and fingerprint, whether QEMU ran it, and p50/p95 of each boot phase. It then
 appends `spin-machine compare` against the newest earlier release that has a report to the
@@ -53,9 +56,11 @@ task report OUT=exp.json FLAGS='--append mitigations=off'   # or --kernel /path/
 _output/bin/spin-machine compare --old base.json --new exp.json
 ```
 
-`ONLY=<regexp>` runs the rows whose id matches, and `REPS=` sets the boots per row (default 3,
-after one unmeasured boot that warms the page cache). Times compare only between reports taken
-on the same kind of host; `compare` says so when they were not.
+`ONLY=<regexp>` runs the rows whose id matches, and `REPS=` sets the boots per row (default 20,
+after one unmeasured boot that warms the page cache). Twenty, because at three the comparison
+of v20261001.01 with v20260930.02 flagged every KVM row 5-11% slower, and twenty boots of each,
+alternated on one host, put them within 5 ms of each other (2026-10-01). Times compare only
+between reports taken on the same kind of host; `compare` says so when they were not.
 
 `report.yml` is the job, and it runs by hand too: `gh workflow run report.yml -f
 version=<release>` measures any published release and keeps `report.json` and the comparison as
