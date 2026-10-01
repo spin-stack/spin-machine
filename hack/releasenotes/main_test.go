@@ -77,6 +77,7 @@ func TestTheNotesSayWhatChangedInTheMachine(t *testing.T) {
 		"qemu/patches/0001-old.patch":       s("Subject: [PATCH] vl: the old change\n\ndiff\n"),
 		"kernel/patches/0001-keep.patch":    s("Subject: [PATCH 1/2] keep: this one\n stays\n\ndiff\n"),
 		"qemu/qboot/pam.patch":              s("diff --git a/x b/x\n"),
+		"qemu/qboot/README.md":              s("what the patches are\n"),
 		"boot/report_test.go":               s("package boot\n"),
 		"image/mkosi.extra/etc/fstrim.conf": s("weekly\n"),
 		"kernel/patches/0002-changes.patch": s("Subject: [PATCH 2/2] changes: before\n\ndiff\n"),
@@ -95,15 +96,16 @@ func TestTheNotesSayWhatChangedInTheMachine(t *testing.T) {
 	})
 	r.commit("image: fstrim hourly (#76)", map[string]*string{"image/mkosi.extra/etc/fstrim.conf": s("hourly\n")})
 	r.commit("qemu: bump to 11.1.1", map[string]*string{"versions.yaml": s(strings.Replace(versionsAt, "%s", "11.1.1", 1))})
+	r.commit("qboot: say what the patches are", map[string]*string{"qemu/qboot/README.md": s("each patch, and why\n")})
 	r.commit("boot: a probe (#77)", map[string]*string{"boot/report_test.go": s("package boot // more\n")})
 	r.commit("spin-machine: a flag and a lab step", map[string]*string{
 		"cmd/spin-machine/main.go":      s("package main // flag\n"),
 		".github/workflows/release.yml": s("on: workflow_dispatch\n"),
 	})
 
-	var b strings.Builder
-	if err := write(&b, r.dir, "v1", "HEAD"); err != nil {
-		t.Fatal(err)
+	var b, stderr strings.Builder
+	if code := run([]string{"-from", "v1"}, r.dir, &b, &stderr); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
 	notes := b.String()
 	t.Log(notes)
@@ -130,7 +132,7 @@ func TestTheNotesSayWhatChangedInTheMachine(t *testing.T) {
 			t.Errorf("%q is not under %q", want.line, want.under)
 		}
 	}
-	for _, absent := range []string{"alpine", "keep: this one", "qemu: bump to 11.1.1", "first release", "pam.patch"} {
+	for _, absent := range []string{"alpine", "keep: this one", "qemu: bump to 11.1.1", "first release", "pam.patch", "README.md"} {
 		if strings.Contains(notes, absent) {
 			t.Errorf("the notes name %q, which did not change in the machine", absent)
 		}
@@ -146,4 +148,37 @@ func underHeading(from string) string {
 		return from[:next+1]
 	}
 	return from
+}
+
+// What the command answers, and with what exit, for a command line it cannot use, a ref git does
+// not know, and a release built from the same tree as the one before it.
+func TestTheCommandSaysWhyItWroteNothing(t *testing.T) {
+	r := newRepo(t)
+	r.commit("the first release", map[string]*string{"versions.yaml": s("- name: qemu\n  version: 11.1.1\n")})
+	r.git("tag", "v1")
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		code   int
+		stdout string
+		stderr string
+	}{
+		{"no previous release", nil, 2, "", "-from is required"},
+		{"a flag it does not take", []string{"-since", "v1"}, 2, "", "flag provided but not defined"},
+		{"a ref git does not know", []string{"-from", "v0"}, 1, "", "git log"},
+		{"the same tree", []string{"-from", "v1"}, 0, "Nothing: this is the tree v1 was built from.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			if code := run(tc.args, r.dir, &stdout, &stderr); code != tc.code {
+				t.Errorf("exit %d, want %d; stderr: %s", code, tc.code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), tc.stdout) || (tc.stdout == "" && stdout.Len() > 0) {
+				t.Errorf("stdout %q, want %q", stdout.String(), tc.stdout)
+			}
+			if !strings.Contains(stderr.String(), tc.stderr) || (tc.stderr == "" && stderr.Len() > 0) {
+				t.Errorf("stderr %q, want %q", stderr.String(), tc.stderr)
+			}
+		})
+	}
 }

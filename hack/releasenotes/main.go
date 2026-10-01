@@ -26,17 +26,28 @@ import (
 )
 
 func main() {
-	from := flag.String("from", "", "the previous release's tag")
-	to := flag.String("to", "HEAD", "the commit this release is built from")
-	flag.Parse()
+	os.Exit(run(os.Args[1:], ".", os.Stdout, os.Stderr)) // mutate-exempt: os.Args[0] is the program; only a process run by hand sees which of the rest run is given
+}
+
+// run is the command against the repository at dir: 0 with the notes on stdout, 2 for a
+// command line it cannot use, 1 when git could not answer.
+func run(args []string, dir string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("releasenotes", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	from := fs.String("from", "", "the previous release's tag")
+	to := fs.String("to", "HEAD", "the commit this release is built from")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 	if *from == "" {
-		fmt.Fprintln(os.Stderr, "releasenotes: -from is required")
-		os.Exit(2)
+		fmt.Fprintln(stderr, "releasenotes: -from is required")
+		return 2
 	}
-	if err := write(os.Stdout, ".", *from, *to); err != nil {
-		fmt.Fprintln(os.Stderr, "releasenotes:", err)
-		os.Exit(1)
+	if err := write(stdout, dir, *from, *to); err != nil {
+		fmt.Fprintln(stderr, "releasenotes:", err)
+		return 1
 	}
+	return 0
 }
 
 // parts are what a release is made of, in the order the notes list them, each with the paths
@@ -276,10 +287,11 @@ func (g git) commits(from, to string) ([]commit, error) {
 		return nil, err
 	}
 	var cs []commit
+	// Each record is "\x00subject\n\nfile\nfile...": what is before the first is nothing.
 	for _, rec := range strings.Split(out, "\x00")[1:] {
-		lines := strings.Split(strings.TrimSpace(rec), "\n")
-		c := commit{subject: lines[0]}
-		for _, f := range lines[1:] {
+		subject, files, _ := strings.Cut(rec, "\n")
+		c := commit{subject: subject}
+		for f := range strings.Lines(files) {
 			if f = strings.TrimSpace(f); f != "" {
 				c.files = append(c.files, f)
 			}
@@ -302,7 +314,7 @@ func (g git) versions(ref string) (map[string]string, error) {
 		line := sc.Text()
 		if v, ok := strings.CutPrefix(line, "- name: "); ok {
 			name = strings.TrimSpace(v)
-		} else if v, ok := strings.CutPrefix(line, "  version: "); ok && name != "" {
+		} else if v, ok := strings.CutPrefix(line, "  version: "); ok {
 			out[name] = strings.Trim(strings.TrimSpace(v), `"'`)
 		}
 	}
