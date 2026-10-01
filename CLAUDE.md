@@ -85,6 +85,14 @@ not silently become production behaviour.
   CPU affinity), document why it does not.
 - Remove or quarantine an experiment once it no longer has an active question. Keep the
   conclusion and durable evidence, not a permanent switch in the release path.
+- A measurement that decides something is taken on the KVM runner (construct), through
+  `.github/workflows/lab.yml`, one run at a time: its three runners share one machine, and two
+  lab runs side by side measure each other. A laptop has neither the Spin OS kernel nor a quiet
+  host, so its numbers are leads, not findings. Compare with enough boots to beat the noise -
+  three a row moved a p50 by 5-11% between runs of one release (#81) - and alternate the
+  variants rather than running them in blocks.
+- What the guest's memory and disk were measured to cost, and why each default is what it is,
+  is `docs/memory-and-disk.md`: add a result there when it decides something, with its run.
 
 ## Go
 
@@ -148,6 +156,14 @@ machine at start-up.
   verification that belongs to it.
 - **A tarball with something missing is worse than no tarball**: it installs, and the
   missing piece surfaces somewhere else. `hack/release` refuses rather than warning.
+  A list of files to ship is how one goes missing: `hack/release` named qboot's patches one
+  by one, and v20261001.01 shipped a `qboot.bin` without the patch it was built with. Ship
+  what a directory holds.
+- **Ask the kernel for a feature, never for its module.** Spin OS's kernels have no loadable
+  modules: what they have is built in, `modprobe` finds nothing, and a built-in driver without
+  parameters has no `/sys/module` entry. Look for what the feature makes - `/dev/nbd0`,
+  `/dev/vhost-vsock` - and only then load a module. Asking the module said no to features
+  that were there, twice (#56, #82).
 
 ## Trying the machine
 
