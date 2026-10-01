@@ -171,8 +171,10 @@ B: blog), before measuring:
 
 The probes are `go test` behind the `boot/` Task targets, run on construct by
 `gh workflow run lab.yml -f experiment=boot:page-cache -f vars='REPS=3; SPIN_PAGE_CACHE_ONLY=<probe>'`
-(caches, reclaim, reclaimers, cow), optionally with `kernel_run`/`qemu_run` and
-`variant=beside|instead` for a build of a branch. What the lab taught about itself:
+(caches, reclaim), optionally with `kernel_run`/`qemu_run` and
+`variant=beside|instead` for a build of a branch. The cold-boot, `memory.high`, reclaimers and
+first-write probes behind the other tables were deleted once answered; they are in
+`boot/pagecache_test.go`'s history. What the lab taught about itself:
 
 - **Only construct's numbers count.** A laptop has neither the Spin OS kernel nor a quiet host.
 - **One run at a time.** construct has three runners on one machine; two lab runs side by side
