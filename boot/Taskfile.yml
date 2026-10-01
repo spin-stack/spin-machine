@@ -40,8 +40,10 @@ tasks:
       cache first, file by file - against warm; and a guest writing, reading and removing a file,
       with QEMU's memory and the overlay's and the base image's pages in the host's cache at each
       step, and what the host's copy is worth to a guest reading a file and 8 KiB files back;
+      and memory.reclaim asked for a file read once beside a working set read twice;
       the disk as it is against --disk-direct-over-backing. Needs /dev/kvm, a built release
-      and sudo. REPS= boots per variant, FILE_MB= the guest's file.
+      and sudo. REPS= boots per variant, FILE_MB= the guest's file, CACHE_TIMEOUT_S= a boot's
+      limit.
     deps: [':tools']
     cmds:
       - SPIN_PAGE_CACHE=1 go test ./boot/ -run '^TestPageCache$' -count=1 -v -timeout 60m
