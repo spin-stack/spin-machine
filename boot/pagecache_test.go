@@ -328,7 +328,13 @@ var reclaimersProbe = cacheProbe{
 r=$(cat /etc/pagecache-reclaimer)
 lg=/sys/kernel/debug/lru_gen
 # The root memcg's generations on node 0, one "gen:anon/file" per generation, in pages.
-gens() { awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { printf "%%s:%%s/%%s ", $1, $3, $4 }' $lg; }
+# The cache is charged to the memcg of whoever read it - the probe's own service here - and an
+# lru_gen command acts on one memcg, not its children (run 36816203944: root held 12 MB of the
+# 673 MB cached). So every memcg is aged and evicted, and what is reported is node 0's file pages
+# summed over all of them.
+memcgs() { awk '$1 == "memcg" { print $2 }' $lg; }
+maxgen() { awk -v id="$1" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg; }
+gens() { awk '$1 == "node" { n = $2 == 0 } n && $1 ~ /^[0-9]+$/ { f += $4 } END { printf "%%d file pages", f }' $lg; echo " in $(memcgs | wc -l) memcgs"; }
 dr=/sys/module/damon_reclaim/parameters
 fail() { echo "PAGECACHE-FAILED $*" > /dev/ttyS0; exit 1; }
 echo 3 > /proc/sys/vm/drop_caches
@@ -343,20 +349,20 @@ lru_gen)
 	# The image masks sys-kernel-debug.mount, so debugfs is not mounted unless asked for.
 	mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug || fail "mounting debugfs"
 	[ -w $lg ] || fail "no $lg"
-	id=$(awk '$1 == "memcg" && $3 == "/" { print $2; exit }' $lg)
-	max=$(awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg)
-	echo "+ $id 0 $max" > $lg || fail "aging memcg $id gen $max"
+	for id in $(memcgs); do m=$(maxgen $id); [ -n "$m" ] && echo "+ $id 0 $m" > $lg 2>/dev/null; done
 	echo "PAGECACHE-NOTE lru_gen after aging: $(gens)" > /dev/ttyS0 ;;
 esac
 for i in 1 2 3 4 5 6 7 8; do small; sleep 5; done
 case $r in
 memory.reclaim) echo %[1]dM > /sys/fs/cgroup/memory.reclaim 2>/dev/null ;;
 lru_gen)
-	max=$(awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg)
 	echo "PAGECACHE-NOTE lru_gen before evicting: $(gens)" > /dev/ttyS0
-	# swappiness 0: file pages only; nr_to_reclaim in pages, past the file's size.
-	echo "- $id 0 $(( max - 2 )) 0 1000000" > $lg || fail "evicting memcg $id up to gen $(( max - 2 ))"
-	echo "PAGECACHE-NOTE lru_gen after evicting: $(gens)" > /dev/ttyS0 ;;
+	# Every generation but the two youngest, which MGLRU does not evict; swappiness 0, file
+	# pages only; nr_to_reclaim in pages, past the file's size. A memcg with too few
+	# generations refuses, which is not a failure of the probe.
+	no=0
+	for id in $(memcgs); do m=$(maxgen $id); [ -n "$m" ] && { echo "- $id 0 $(( m - 2 )) 0 1000000" > $lg 2>/dev/null || no=$(( no + 1 )); }; done
+	echo "PAGECACHE-NOTE lru_gen after evicting: $(gens), $no memcgs refused" > /dev/ttyS0 ;;
 damon) echo "PAGECACHE-NOTE damon_reclaim $(grep -H . $dr/nr_reclaimed_regions $dr/bytes_reclaimed_regions 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0 ;;
 esac
 sleep 6; say 2 0
