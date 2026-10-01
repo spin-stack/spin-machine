@@ -8,7 +8,7 @@ name: QEMU
 # than in a VM that will not start weeks later.
 
 on:
-# qemu/**, and versions.yaml with the tool that reads it, because that is where the pins are.
+# qemu/**, versions.yaml, where the pins are, and go.mod, which pins the tool that reads it.
 # The root Taskfile is deliberately not listed: it holds only how many jobs to compile with and
 # which cache to use, so listing it would rebuild QEMU, the kernel and the base image for an
 # edit that cannot change any of them.
@@ -23,14 +23,12 @@ on:
     paths:
       - qemu/**
       - versions.yaml
-      - versions/**
       - go.mod
       - .github/workflows/qemu.yml
   pull_request:
     paths:
       - qemu/**
       - versions.yaml
-      - versions/**
       - go.mod
       - .github/workflows/qemu.yml
   workflow_dispatch:
@@ -71,7 +69,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           build=$(hack/touches "$BASE" alpine qemu debian debian-snapshot qboot -- \
-            qemu versions go.mod .github/workflows/qemu.yml)
+            qemu go.mod .github/workflows/qemu.yml)
           echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
 
   build:
