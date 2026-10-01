@@ -64,7 +64,7 @@ import (
 //
 //     SPIN_PAGE_CACHE=1   run at all
 //     SPIN_PAGE_CACHE_ONLY=<regexp>  only the subtests whose name matches: cold boot, caches, reclaim,
-//     reclaimers (which needs a kernel with DAMON; see reclaimersProbe)
+//     reclaimers (which needs a kernel with DAMON; see reclaimersProbe), cow
 //     REPS=<n>            boots per variant (default 5)
 //     FILE_MB=<n>         the file the guest writes and reads (default 512, a quarter of the
 //     guest's memory: the overlay is made 2 GiB and the guest's root grown into it)
@@ -94,6 +94,7 @@ func TestPageCache(t *testing.T) {
 		{"caches", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, cachesProbe) }},
 		{"reclaim", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimProbe) }},
 		{"reclaimers", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimersProbe) }},
+		{"cow", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, cowProbe) }},
 	} {
 		if only.MatchString(sub.name) {
 			t.Run(sub.name, sub.run)
@@ -323,6 +324,8 @@ var reclaimersProbe = cacheProbe{
 	script: cacheCommon + `mkdir -p $d; head -c 128M $f | split -b 8K -a 5 - $d/; sync
 r=$(cat /etc/pagecache-reclaimer)
 lg=/sys/kernel/debug/lru_gen
+# The root memcg's generations on node 0, one "gen:anon/file" per generation, in pages.
+gens() { awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { printf "%s:%s/%s ", $1, $3, $4 }' $lg; }
 dr=/sys/module/damon_reclaim/parameters
 fail() { echo "PAGECACHE-FAILED $*" > /dev/ttyS0; exit 1; }
 echo 3 > /proc/sys/vm/drop_caches
@@ -339,14 +342,18 @@ lru_gen)
 	[ -w $lg ] || fail "no $lg"
 	id=$(awk '$1 == "memcg" && $3 == "/" { print $2; exit }' $lg)
 	max=$(awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg)
-	echo "+ $id 0 $max" > $lg || fail "aging memcg $id gen $max" ;;
+	echo "+ $id 0 $max" > $lg || fail "aging memcg $id gen $max"
+	echo "PAGECACHE-NOTE lru_gen after aging: $(gens)" > /dev/ttyS0 ;;
 esac
 for i in 1 2 3 4 5 6 7 8; do small; sleep 5; done
 case $r in
 memory.reclaim) echo %[1]dM > /sys/fs/cgroup/memory.reclaim 2>/dev/null ;;
 lru_gen)
 	max=$(awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg)
-	echo "- $id 0 $(( max - 2 ))" > $lg || fail "evicting memcg $id up to gen $(( max - 2 ))" ;;
+	echo "PAGECACHE-NOTE lru_gen before evicting: $(gens)" > /dev/ttyS0
+	# swappiness 0: file pages only; nr_to_reclaim in pages, past the file's size.
+	echo "- $id 0 $(( max - 2 )) 0 1000000" > $lg || fail "evicting memcg $id up to gen $(( max - 2 ))"
+	echo "PAGECACHE-NOTE lru_gen after evicting: $(gens)" > /dev/ttyS0 ;;
 damon) echo "PAGECACHE-NOTE damon_reclaim $(grep -H . $dr/nr_reclaimed_regions $dr/bytes_reclaimed_regions 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0 ;;
 esac
 sleep 6; say 2 0
@@ -359,6 +366,39 @@ echo PAGECACHE-DONE > /dev/ttyS0
 		{label: "memory.reclaim", reclaimer: "memory.reclaim"},
 		{label: "DAMON_RECLAIM, 10 s idle", reclaimer: "damon"},
 		{label: "lru_gen aged and evicted", reclaimer: "lru_gen"},
+	},
+}
+
+// cowProbe is what a first write into data the base holds costs: 2000 random 4 KiB overwrites,
+// O_DIRECT in the guest, into the largest file under /usr, each one a cluster the overlay does not
+// have yet - qcow2 copies the rest of the cluster from the base first, 64 KiB by default and 4 KiB
+// with 128k subclusters - and then the same offsets again, which the overlay now has: the
+// difference is the copy. The research's seventh experiment.
+var cowProbe = cacheProbe{
+	title: "untouched; 2000 random 4 KiB overwrites of base data",
+	steps: []string{
+		"idle",
+		"first overwrites",
+		"same offsets again",
+	},
+	script: `#!/bin/sh
+say() { echo "PAGECACHE $1 $(awk '/^Cached:/{c=$2} /^MemFree:/{m=$2} END{print c, m}' /proc/meminfo) $2" > /dev/ttyS0; sleep 4; }
+ms() { awk '{ printf "%%d", $1 * 1000 }' /proc/uptime; }
+b=$(find /usr -xdev -type f -size +20M -printf '%%s %%p\n' | sort -n | tail -1 | cut -d' ' -f2)
+sz=$(stat -c %%s "$b")
+awk -v n=2000 -v s="$sz" 'BEGIN { srand(1); for (i = 0; i < n; i++) print int(rand() * (s / 4096 - 1)) }' > /var/tmp/offsets
+echo "PAGECACHE-NOTE overwriting $b, $(( sz >> 20 )) MB; the file read %[1]d MB is not used" > /dev/ttyS0
+sync; echo 3 > /proc/sys/vm/drop_caches
+say 0 0
+over() { while read -r o; do dd if=/dev/urandom of="$b" bs=4k count=1 seek="$o" conv=notrunc oflag=direct status=none; done < /var/tmp/offsets; sync; }
+t=$(ms); over; say 1 $(( $(ms) - t ))
+t=$(ms); over; say 2 $(( $(ms) - t ))
+echo PAGECACHE-DONE > /dev/ttyS0
+`,
+	variants: []cacheVariant{
+		writeback,
+		{label: "writeback, 128k subclusters", overlayOpts: "extended_l2=on,cluster_size=128k"},
+		direct,
 	},
 }
 
