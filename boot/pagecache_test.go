@@ -461,7 +461,14 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	edit.links = map[string]string{"/etc/systemd/system/multi-user.target.wants/pagecache.service": "../pagecache.service"}
 	editOverlay(t, overlay, edit)
 
-	qmpSock := filepath.Join(dir, "qmp.sock")
+	// Not under dir: a socket's path has 108 bytes, and the lab runner's TMPDIR alone takes 80 of
+	// them, which failed every boot of run 36808388189 before QEMU said a word.
+	sockDir, err := os.MkdirTemp("/tmp", "pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) }) // a socket QEMU made, nothing else
+	qmpSock := filepath.Join(sockDir, "qmp.sock")
 	machine := append([]string{filepath.Join(out, "bin", "spin-machine"), "boot", "--release", out,
 		"--disk", overlay, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout", "--qmp", qmpSock,
 		"--append", strings.TrimSpace("init=/sbin/init " + v.cmdline)}, v.flags...)
