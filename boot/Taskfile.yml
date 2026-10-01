@@ -34,6 +34,17 @@ tasks:
     cmds:
       - SPIN_SSH_LOAD=1 go test ./boot/ -run '^TestSSHUnderLoad$' -count=1 -v -timeout 30m
 
+  page-cache:
+    desc: >-
+      The page caches a machine has: a boot cold - the release's files dropped from the host's
+      cache first, file by file - against warm; and a guest writing, reading and removing a file,
+      with QEMU's memory and the overlay's and the base image's pages in the host's cache at each
+      step, the disk as it is against --disk-direct-over-backing. Needs /dev/kvm, a built release
+      and sudo. REPS= boots per variant, FILE_MB= the guest's file.
+    deps: [':tools']
+    cmds:
+      - SPIN_PAGE_CACHE=1 go test ./boot/ -run '^TestPageCache$' -count=1 -v -timeout 60m
+
   memory-policy:
     desc: >-
       A process that takes memory until something stops it, in a login session of a 1 GiB

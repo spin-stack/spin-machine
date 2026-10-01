@@ -38,6 +38,7 @@ on:
           - boot:unitload
           - boot:ssh-load
           - boot:memory-policy
+          - boot:page-cache
           - boot:firmware
           - boot:firmware-stages
           - report
