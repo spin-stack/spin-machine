@@ -27,8 +27,6 @@
 # summary — and its workings to stderr.
 #
 #   REFERENCE=<tag>   compare against this release instead of the newest published one
-#   EXCLUDE=<tag>     skip this tag when picking the newest one: the release being built,
-#                     on a re-run that already published it
 #
 # The reference is the machine.env that hack/release publishes beside the tarball. A
 # release that did not publish one cannot be compared against, and this says so rather than
@@ -51,11 +49,11 @@ fi
 # The classification this script exists to hold in one place. Adding a file to the
 # fingerprint means adding it here; anything else is a number that is reported and does not
 # bear on whether a checkpoint resumes.
+FP_KEYS=(qemu_sha256 kernel_sha256 bios_sha256 pvh_sha256)
 bears_on_fingerprint() {
-  case "$1" in
-    qemu_sha256 | kernel_sha256 | bios_sha256 | pvh_sha256) return 0 ;;
-    *) return 1 ;;
-  esac
+  local k
+  for k in "${FP_KEYS[@]}"; do [ "$1" = "${k}" ] && return 0; done
+  return 1
 }
 
 value_of() { sed -n "s/^$1=//p" "$2" | head -1; }
@@ -85,9 +83,7 @@ if [ -z "${reference}" ]; then
   fi
   # Newest first, which is the order `gh release list` gives. Twenty is far more than the
   # window in which the previous release is interesting, and bounds the call.
-  reference=$(printf '%s\n' "${releases}" |
-    if [ -n "${EXCLUDE:-}" ]; then grep -vFx -- "${EXCLUDE}"; else cat; fi |
-    head -1)
+  reference=$(printf '%s\n' "${releases}" | head -1)
 fi
 
 if [ -z "${reference}" ]; then
@@ -133,7 +129,7 @@ done
 # Whatever bears on the fingerprint and was never passed in. A caller that builds one
 # artefact — the kernel workflow builds a kernel and no QEMU — can only speak for that one,
 # and a verdict that reads as if it covered both would be worse than no verdict.
-for k in qemu_sha256 kernel_sha256 bios_sha256 pvh_sha256; do
+for k in "${FP_KEYS[@]}"; do
   [ -n "${NEW[${k}]:-}" ] || unchecked_fp+=("${k}")
 done
 
@@ -159,7 +155,7 @@ if [ "${#moved_fp[@]}" -gt 0 ]; then
 elif [ "${#unchecked_fp[@]}" -eq 0 ]; then
   say "### Checkpoints taken against \`${reference}\` still resume on this machine"
   say
-  say "\`qemu_sha256\`, \`kernel_sha256\`, \`bios_sha256\` and \`pvh_sha256\` are unchanged, and they are the whole of what"
+  say "$(printf '`%s` ' "${FP_KEYS[@]}")are unchanged, and they are the whole of what"
   say "this repository contributes to the fingerprint — the initrd and the machine's shape"
   say "come from whoever runs the guests and are untouched by a release."
 else
