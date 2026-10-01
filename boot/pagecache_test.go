@@ -49,6 +49,11 @@ import (
 //     removed - says what a workspace that read a lot costs the host until it lets go, and when it
 //     does.
 //
+//  4. Whether a guest can let go without losing what it works with: memory.reclaim, which a
+//     guest's own software could write when the machine is idle, asked for a file read once
+//     while a working set read twice is cached beside it - what comes back to the host, and
+//     what reading the working set again costs. (reclaimProbe)
+//
 //     SPIN_PAGE_CACHE=1   run at all
 //     REPS=<n>            boots per variant (default 5)
 //     FILE_MB=<n>         the file the guest writes and reads (default 512, a quarter of the
@@ -68,7 +73,8 @@ func TestPageCache(t *testing.T) {
 	fileMB := envInt(t, "FILE_MB", 512)
 
 	t.Run("cold boot", func(t *testing.T) { coldBoots(t, out, reps) })
-	t.Run("caches", func(t *testing.T) { cacheSteps(t, out, reps, fileMB) })
+	t.Run("caches", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, cachesProbe) })
+	t.Run("reclaim", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimProbe) })
 }
 
 // coldBoots boots the baseline cold and warm, interleaved, and logs both and what a cold boot read.
@@ -121,42 +127,86 @@ func coldBoots(t *testing.T, out string, reps int) {
 	t.Log(b.String())
 }
 
-// The steps of the guest's workload, in the order it takes them, and what each is.
-var cacheStepNames = []string{
-	"idle",
-	"file written",
-	"guest cache full",
-	"8 KiB files written",
-	"8 KiB files read, shuffled",
-	"guest dropped its cache",
-	"file removed",
+// cacheProbe is a workload the guest runs once it is up, and the steps it announces, in order.
+type cacheProbe struct {
+	title  string
+	steps  []string
+	script string
 }
 
-// cacheWorkload is the guest's side: a unit that runs once the machine is up, takes each step and
+// The guest's side of each probe: a unit that runs once the machine is up, takes each step and
 // says so on the console with what the guest sees - its page cache and free memory, in kB - and
-// how long the step's I/O took, then waits for the host to measure before the next. %d is the
-// file's size in MB. Each read starts with the guest's cache dropped, so what it reads comes
-// through the disk: from the host's page cache or, with the overlay O_DIRECT, the device. The I/O is timed by /proc/uptime, which only goes forward: the wall clock
-// is chrony's to step as the machine comes up, and on the lab runner it stepped back under a
-// write, which timed it at -183 ms.
-const cacheWorkload = `#!/bin/sh
+// how long the step's I/O took, then waits for the host to measure before the next. The I/O is
+// timed by /proc/uptime, which only goes forward: the wall clock is chrony's to step as the
+// machine comes up, and on the lab runner it stepped back under a write, which timed it at
+// -183 ms. Each script is a format: %[1]d is the file's size in MB.
+const cacheCommon = `#!/bin/sh
 f=/var/tmp/pagecache.bin
+d=/var/tmp/pagecache.d
 say() { echo "PAGECACHE $1 $(awk '/^Cached:/{c=$2} /^MemFree:/{m=$2} END{print c, m}' /proc/meminfo) $2" > /dev/ttyS0; sleep 4; }
 ms() { awk '{ printf "%%d", $1 * 1000 }' /proc/uptime; }
+small() { find $d -type f | shuf | xargs cat > /dev/null; }
 sync; echo 3 > /proc/sys/vm/drop_caches
 say 0 0
-t=$(ms); dd if=/dev/zero of=$f bs=1M count=%d conv=fsync status=none || { echo "PAGECACHE-FAILED $(df -m / | tail -1)" > /dev/ttyS0; exit 1; }
-say 1 $(( $(ms) - t ))
+t=$(ms); dd if=/dev/zero of=$f bs=1M count=%[1]d conv=fsync status=none || { echo "PAGECACHE-FAILED $(df -m / | tail -1)" > /dev/ttyS0; exit 1; }
+`
+
+// cachesProbe is what the guest's disk holds twice, and what the host's copy is worth. Each read
+// starts with the guest's cache dropped, so what it reads comes through the disk: from the
+// host's page cache or, with the overlay O_DIRECT, the device.
+var cachesProbe = cacheProbe{
+	title: "written, read and removed",
+	steps: []string{
+		"idle",
+		"file written",
+		"guest cache full",
+		"8 KiB files written",
+		"8 KiB files read, shuffled",
+		"guest dropped its cache",
+		"file removed",
+	},
+	script: cacheCommon + `say 1 $(( $(ms) - t ))
 echo 3 > /proc/sys/vm/drop_caches
 t=$(ms); cat $f > /dev/null; say 2 $(( $(ms) - t ))
-d=/var/tmp/pagecache.d; mkdir -p $d
+mkdir -p $d
 t=$(ms); head -c 128M $f | split -b 8K -a 5 - $d/ && sync; say 3 $(( $(ms) - t ))
 echo 3 > /proc/sys/vm/drop_caches
-t=$(ms); find $d -type f | shuf | xargs cat > /dev/null; say 4 $(( $(ms) - t ))
+t=$(ms); small; say 4 $(( $(ms) - t ))
 echo 3 > /proc/sys/vm/drop_caches; sleep 6; say 5 0
 rm -rf $f $d; fstrim / 2>/dev/null; sync; sleep 6; say 6 0
 echo PAGECACHE-DONE > /dev/ttyS0
-`
+`,
+}
+
+// reclaimProbe is whether proactive reclaim gives the host back what a guest read once and keeps
+// what it works with: the 8 KiB files read twice - the working set - and then the file read
+// once, the guest's cache holding both. memory.reclaim on the root cgroup asks for the file's
+// size back, which an LRU would take from the older working set and the multi-gen LRU should
+// take from the file, read once; the working set read again says which it took. drop_caches
+// after it is everything back, and the working set's read from the disk what that costs.
+var reclaimProbe = cacheProbe{
+	title: "kept warm and reclaimed",
+	steps: []string{
+		"idle",
+		"cache full, working set read",
+		"memory.reclaim the file's MB",
+		"working set read",
+		"guest dropped its cache",
+		"working set read",
+	},
+	script: cacheCommon + `mkdir -p $d; head -c 128M $f | split -b 8K -a 5 - $d/; sync
+[ -w /sys/fs/cgroup/memory.reclaim ] || { echo "PAGECACHE-FAILED no /sys/fs/cgroup/memory.reclaim" > /dev/ttyS0; exit 1; }
+echo 3 > /proc/sys/vm/drop_caches
+small; t=$(ms); small; w=$(( $(ms) - t )); cat $f > /dev/null; say 1 $w
+# memory.reclaim says EAGAIN when it took less than asked for, which is an answer, not a failure.
+t=$(ms); echo %[1]dM > /sys/fs/cgroup/memory.reclaim 2>/dev/null; w=$(( $(ms) - t )); sleep 6; say 2 $w
+t=$(ms); small; say 3 $(( $(ms) - t ))
+echo 3 > /proc/sys/vm/drop_caches; sleep 6; say 4 0
+t=$(ms); small; say 5 $(( $(ms) - t ))
+rm -rf $f $d
+echo PAGECACHE-DONE > /dev/ttyS0
+`,
+}
 
 const cacheUnit = `[Unit]
 Description=page cache probe
@@ -177,9 +227,9 @@ type cacheStep struct {
 	qemuRSS, overlayCache, baseCache float64
 }
 
-// cacheSteps boots the workload with the disk as it is and with the overlay O_DIRECT, reps times
+// cacheSteps boots probe's workload with the disk as it is and with the overlay O_DIRECT, reps times
 // each, interleaved, and logs each step's p50.
-func cacheSteps(t *testing.T, out string, reps, fileMB int) {
+func cacheSteps(t *testing.T, out string, reps, fileMB int, probe cacheProbe) {
 	variants := []struct {
 		label string
 		flags []string
@@ -190,15 +240,15 @@ func cacheSteps(t *testing.T, out string, reps, fileMB int) {
 	got := map[string][][]cacheStep{}
 	for range reps {
 		for _, v := range variants {
-			got[v.label] = append(got[v.label], cacheBoot(t, out, v.flags, fileMB))
+			got[v.label] = append(got[v.label], cacheBoot(t, out, v.flags, fileMB, probe))
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "\na %d MB file written, read and removed in a 2048 MB guest, p50 over %d boots; MB but the I/O's ms.\n", fileMB, reps)
+	fmt.Fprintf(&b, "\na %d MB file %s in a 2048 MB guest, p50 over %d boots; MB but the I/O's ms.\n", fileMB, probe.title, reps)
 	fmt.Fprintf(&b, "host: QEMU's resident memory, and the overlay's and the base image's pages in the host's page cache\n\n")
 	for _, v := range variants {
-		fmt.Fprintf(&b, "%s\n%-26s %8s %8s %8s %9s %9s %9s\n", v.label, "STEP", "I/O ms", "G.CACHE", "G.FREE", "QEMU RSS", "OVERLAY", "BASE")
-		for i, name := range cacheStepNames {
+		fmt.Fprintf(&b, "%s\n%-30s %8s %8s %8s %9s %9s %9s\n", v.label, "STEP", "I/O ms", "G.CACHE", "G.FREE", "QEMU RSS", "OVERLAY", "BASE")
+		for i, name := range probe.steps {
 			var col [6][]float64
 			for _, run := range got[v.label] {
 				s := run[i]
@@ -206,7 +256,7 @@ func cacheSteps(t *testing.T, out string, reps, fileMB int) {
 					col[j] = append(col[j], x)
 				}
 			}
-			fmt.Fprintf(&b, "%-26s", name)
+			fmt.Fprintf(&b, "%-30s", name)
 			for j, c := range col {
 				p, _ := boot.Percentile(c, 0.5)
 				w := 8
@@ -222,9 +272,9 @@ func cacheSteps(t *testing.T, out string, reps, fileMB int) {
 	t.Log(b.String())
 }
 
-// cacheBoot runs the workload in one machine started with flags, and measures each of its steps
+// cacheBoot runs probe's workload in one machine started with flags, and measures each of its steps
 // on the host as the guest announces it.
-func cacheBoot(t *testing.T, out string, flags []string, fileMB int) []cacheStep {
+func cacheBoot(t *testing.T, out string, flags []string, fileMB int, probe cacheProbe) []cacheStep {
 	t.Helper()
 	dir := t.TempDir()
 	// On tmpfs the overlay is memory whatever the cache mode, and O_DIRECT a no-op: the two
@@ -243,7 +293,7 @@ func cacheBoot(t *testing.T, out string, flags []string, fileMB int) []cacheStep
 	mustRun(t, filepath.Join(out, "bin", "qemu-img"), "create", "-f", "qcow2", "-F", "qcow2", "-b", base, overlay, "2G")
 	v := without()
 	v.setup = `resize2fs "$(findmnt -no SOURCE "$MNT")" >/dev/null`
-	v.files["/usr/local/sbin/pagecache.sh"] = fmt.Sprintf(cacheWorkload, fileMB)
+	v.files["/usr/local/sbin/pagecache.sh"] = fmt.Sprintf(probe.script, fileMB)
 	v.files["/etc/systemd/system/pagecache.service"] = cacheUnit
 	v.links = map[string]string{"/etc/systemd/system/multi-user.target.wants/pagecache.service": "../pagecache.service"}
 	editOverlay(t, overlay, v)
@@ -269,7 +319,7 @@ func cacheBoot(t *testing.T, out string, flags []string, fileMB int) []cacheStep
 
 	// spin-machine execs QEMU in place: its pid is QEMU's.
 	pid := cmd.Process.Pid
-	steps := make([]cacheStep, len(cacheStepNames))
+	steps := make([]cacheStep, len(probe.steps))
 	seen := 0
 	var console strings.Builder
 	sc := bufio.NewScanner(stdout)
