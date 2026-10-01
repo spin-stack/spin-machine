@@ -186,11 +186,7 @@ RUN <<EOT
     # image/ produces and what a writable layer is formatted as; overlayfs stacks them. A
     # base image in a filesystem this kernel cannot mount is a VM that boots and finds no
     # root, so changing image/mkosi.conf to xfs or squashfs starts here, not there.
-    #
-    # erofs was here as the read-only half of a containerd path that qcow2 replaced, and
-    # nothing has mounted one since. It brought CONFIG_EROFS_FS_ZIP with LZMA at 16 streams,
-    # DEFLATE and ZSTD decompressors for an image format this machine never reads. Removed
-    # 2026-09-26; a kernel that needs it again adds the symbol and this assertion together.
+
     # Pressure stall information, /proc/pressure/{cpu,memory,io}: how long tasks in the guest
     # waited for each, which is the question when a busy VM stops answering, and what
     # systemd-oomd acts on. Off, and on by default: a psi=1 on the command line would be one
@@ -233,7 +229,6 @@ RUN <<EOT
     done
 
     grep -q "CONFIG_EXT4_FS=y" .config || (echo "ERROR: CONFIG_EXT4_FS not enabled (the base image cannot be mounted)!" ; exit 1)
-    ! grep -q "CONFIG_EROFS_FS=y" .config || (echo "ERROR: CONFIG_EROFS_FS is back; it is dead weight here (see above)!" ; exit 1)
 
     # No virtual consoles. This machine's QEMU ships no VGA at all and its console is one
     # 16550 on ttyS0, so CONFIG_VT builds 64 tty devices that nothing opens and that udev
