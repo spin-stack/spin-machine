@@ -250,7 +250,7 @@ echo 3 > /proc/sys/vm/drop_caches
 t=$(ms); small; say 4 $(( $(ms) - t ))
 echo 3 > /proc/sys/vm/drop_caches; sleep 6; say 5 0
 rm -rf $f $d
-echo "PAGECACHE-NOTE $(fstrim -v / 2>&1); root $(findmnt -no OPTIONS /); vda discard_max_bytes $(cat /sys/block/vda/queue/discard_max_bytes)" > /dev/ttyS0
+echo "PAGECACHE-NOTE $(fstrim -v / 2>&1); root $(findmnt -no OPTIONS /); vda discard_max_bytes $(cat /sys/block/vda/queue/discard_max_bytes) granularity $(cat /sys/block/vda/queue/discard_granularity) write_zeroes_max_bytes $(cat /sys/block/vda/queue/write_zeroes_max_bytes)" > /dev/ttyS0
 sync; sleep 6; say 6 0
 echo PAGECACHE-DONE > /dev/ttyS0
 `,
@@ -592,6 +592,8 @@ func discardNote(t *testing.T, out, socket, overlay string) string {
 			UnmapBytes      int64 `json:"unmap_bytes"`
 			FailedUnmap     int64 `json:"failed_unmap_operations"`
 			InvalidUnmap    int64 `json:"invalid_unmap_operations"`
+			WrOperations    int64 `json:"wr_operations"`
+			WrBytes         int64 `json:"wr_bytes"`
 		}
 	}
 	if err := json.Unmarshal(q.do(t, "query-blockstats", nil), &stats); err != nil {
@@ -599,7 +601,8 @@ func discardNote(t *testing.T, out, socket, overlay string) string {
 	}
 	var unmap string
 	for _, s := range stats {
-		unmap += fmt.Sprintf(" %d ops %d MB (%d failed, %d invalid)", s.Stats.UnmapOperations, s.Stats.UnmapBytes>>20, s.Stats.FailedUnmap, s.Stats.InvalidUnmap)
+		unmap += fmt.Sprintf(" %d ops %d MB (%d failed, %d invalid), beside %d writes %d MB", s.Stats.UnmapOperations, s.Stats.UnmapBytes>>20,
+			s.Stats.FailedUnmap, s.Stats.InvalidUnmap, s.Stats.WrOperations, s.Stats.WrBytes>>20)
 	}
 	// -U: the image is open in the running QEMU, and this only reads its tables.
 	raw, err := exec.Command(filepath.Join(out, "bin", "qemu-img"), "map", "-U", "--output=json", overlay).Output()
@@ -611,11 +614,14 @@ func discardNote(t *testing.T, out, socket, overlay string) string {
 		Depth  int   `json:"depth"`
 		Zero   bool  `json:"zero"`
 		Data   bool  `json:"data"`
+		// Offset is where in the file a cluster's data is: on a zero cluster, a cluster that
+		// stays allocated (ZERO_ALLOC) rather than one given back.
+		Offset *int64 `json:"offset"`
 	}
 	if err := json.Unmarshal(raw, &extents); err != nil {
 		t.Fatalf("reading qemu-img map: %v", err)
 	}
-	var data, zero int64
+	var data, zero, zeroAlloc int64
 	for _, e := range extents {
 		if e.Depth != 0 {
 			continue // the base's, below the overlay
@@ -623,11 +629,14 @@ func discardNote(t *testing.T, out, socket, overlay string) string {
 		switch {
 		case e.Data:
 			data += e.Length
+		case e.Zero && e.Offset != nil:
+			zeroAlloc += e.Length
 		case e.Zero:
 			zero += e.Length
 		}
 	}
-	return fmt.Sprintf("discards QEMU took:%s; the overlay's own clusters: %d MB data, %d MB zero", unmap, data>>20, zero>>20)
+	return fmt.Sprintf("discards QEMU took:%s; the overlay's own clusters: %d MB data, %d MB zero still allocated, %d MB zero given back",
+		unmap, data>>20, zeroAlloc>>20, zero>>20)
 }
 
 // scopeQEMU is the pid of the QEMU in the scope at cgroup, waited for: systemd-run creates the
