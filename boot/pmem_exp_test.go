@@ -36,6 +36,7 @@ echo "PMEM-NOTE $(findmnt -no SOURCE,FSTYPE,OPTIONS / | tr '\n' ' '); $(findmnt 
 # Whether the pmem region itself is slow, and how the guest maps it: a 256 MB read of the raw
 # device, the region in /proc/iomem, and the uncached and write-combining ranges PAT holds.
 mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug
+echo "PMEM-NOTE mtrr $(cat /proc/mtrr 2>&1 | tr '\n' ' '); $(dmesg | grep -i -m3 'mtrr' | tr -s ' ' | tr '\n' ' ')" > /dev/ttyS0
 echo "PMEM-NOTE raw $(dd if=/dev/pmem0 of=/dev/null bs=1M count=256 2>&1 | tail -1); iomem $(grep -i -E 'pmem|persistent' /proc/iomem | tr -s ' ' | tr '\n' ' '); pat $(grep -i '0x00000001[0-3]' /sys/kernel/debug/x86/pat_memtype_list 2>/dev/null | head -4 | tr '\n' ' '); pat_enabled $(grep -c . /sys/kernel/debug/x86/pat_memtype_list 2>/dev/null) entries, $(grep -o 'x86/PAT.*' /dev/null; dmesg | grep -i -m2 'PAT' | tr '\n' ' ')" > /dev/ttyS0
 sync; echo 3 > /proc/sys/vm/drop_caches
 say 0 0
@@ -114,7 +115,10 @@ func pmemCompare(t *testing.T, out string, reps int) {
 	// Run 36816626039: QEMU maps the region as RAM in a KVM memslot, in every mapping, and it
 	// still reads at 8.3 MB/s. Whether the guest maps it uncached is what nopat says: with PAT
 	// off the guest cannot ask for anything but write-back.
-	variants := []string{"qcow2 chain", "pmem ext4 DAX, share=on,readonly=on", "pmem ext4 DAX nopat, share=on,readonly=on"}
+	// Run 36818224412: the guest's PAT held the whole region uncached-minus, and nopat made it
+	// 1.1 GB/s. Linux turns a write-back request into UC- where the MTRRs do not say write-back,
+	// and the MTRRs are the firmware's: the default firmware against SeaBIOS, with /proc/mtrr.
+	variants := []string{"pmem ext4 DAX, share=on,readonly=on", "pmem ext4 DAX seabios, share=on,readonly=on", "pmem ext4 DAX nopat, share=on,readonly=on"}
 	got := map[string][][]pmemStep{}
 	var notes = map[string]string{}
 	for range reps {
@@ -171,6 +175,9 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemS
 	extra := ""
 	if strings.Contains(v, "nopat") {
 		extra = " nopat"
+	}
+	if strings.Contains(v, "seabios") {
+		args = append(args, "--bios", "bios-256k.bin")
 	}
 	switch v {
 	case "pmem + erofs DAX":
