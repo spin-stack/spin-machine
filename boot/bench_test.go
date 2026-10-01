@@ -5,6 +5,7 @@ package boot_test
 import (
 	"bytes"
 	"cmp"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -718,10 +719,23 @@ func canSudo() bool { return exec.Command("sudo", "-n", "true").Run() == nil }
 // the host's kernel and /dev/nbd0 is not in the container - and qemu-nbd then fails on every
 // boot that edits its overlay.
 func canEditImages() bool {
-	if !canSudo() || exec.Command("sudo", "-n", "modprobe", "nbd", "max_part=8").Run() != nil {
-		return false
+	return canSudo() && loadNBD() == nil
+}
+
+// loadNBD makes the NBD devices be there: on a kernel that builds NBD in - Spin OS's, which has no
+// modules at all, and so no modprobe that could find one - they are from boot, and modprobe is
+// only asked where they are not.
+func loadNBD() error {
+	if _, err := os.Stat("/dev/nbd0"); err == nil {
+		return nil
 	}
-	return nbdAppears("/dev/nbd0")
+	if out, err := exec.Command("sudo", "-n", "modprobe", "nbd", "max_part=8").CombinedOutput(); err != nil {
+		return fmt.Errorf("sudo modprobe nbd max_part=8: %w: %s", err, out)
+	}
+	if !nbdAppears("/dev/nbd0") {
+		return errors.New("/dev/nbd0 did not appear after modprobe nbd")
+	}
+	return nil
 }
 
 // nbdAppears waits for dev. modprobe returns when the module is loaded, and the device nodes
@@ -734,9 +748,8 @@ func canEditImages() bool {
 // and the next is tried.
 func connectNBD(t *testing.T, overlay string) string {
 	t.Helper()
-	mustRun(t, "sudo", "modprobe", "nbd", "max_part=8")
-	if !nbdAppears("/dev/nbd0") {
-		t.Fatal("/dev/nbd0 did not appear after modprobe nbd")
+	if err := loadNBD(); err != nil {
+		t.Fatal(err)
 	}
 	devs, err := filepath.Glob("/sys/block/nbd*")
 	if err != nil {
