@@ -130,11 +130,13 @@ var cacheStepNames = []string{
 // cacheWorkload is the guest's side: a unit that runs once the machine is up, takes each step and
 // says so on the console with what the guest sees - its page cache and free memory, in kB - and
 // how long the step's I/O took, then waits for the host to measure before the next. %d is the
-// file's size in MB.
+// file's size in MB. The I/O is timed by /proc/uptime, which only goes forward: the wall clock
+// is chrony's to step as the machine comes up, and on the lab runner it stepped back under a
+// write, which timed it at -183 ms.
 const cacheWorkload = `#!/bin/sh
 f=/var/tmp/pagecache.bin
 say() { echo "PAGECACHE $1 $(awk '/^Cached:/{c=$2} /^MemFree:/{m=$2} END{print c, m}' /proc/meminfo) $2" > /dev/ttyS0; sleep 4; }
-ms() { date +%%s%%3N; }
+ms() { awk '{ printf "%%d", $1 * 1000 }' /proc/uptime; }
 sync; echo 3 > /proc/sys/vm/drop_caches
 say 0 0
 t=$(ms); dd if=/dev/zero of=$f bs=1M count=%d conv=fsync status=none || { echo "PAGECACHE-FAILED $(df -m / | tail -1)" > /dev/ttyS0; exit 1; }
