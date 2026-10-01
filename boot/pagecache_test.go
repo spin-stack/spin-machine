@@ -7,13 +7,11 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,54 +24,37 @@ import (
 	"github.com/spin-stack/spin-machine/boot"
 )
 
-// TestPageCache asks four questions of the page caches a machine has - the host's, which its disk
+// TestPageCache asks two questions of the page caches a machine has - the host's, which its disk
 // is read through, and the guest's, which is the machine's own memory - that nothing else here
 // measures:
 //
-//  1. What a boot costs cold: the first machine on a host that has just started, or whose cache
-//     something else has taken, reads the base image, the kernel and QEMU from the disk. The
-//     release's files are dropped from the host's cache (POSIX_FADV_DONTNEED, file by file - never
-//     drop_caches, which would take every other runner's cache on the host too) before each cold
-//     boot, and a warm boot follows each; interleaved, p50/p95, and how much of the base image a
-//     cold boot read. A third boot is prefetched: evicted, and then only the pages a boot reads
-//     read back, as a host could as it starts.
-//
-//  2. What the guest's disk holds twice: a workspace that writes and reads its disk has those
-//     blocks in its own page cache and, through QEMU's writeback cache, in the host's as well -
-//     memory the host pays for a copy only the guest reads. The overlay's residency in the host's
+//  1. What the guest's disk holds twice, and whether the guest's cache comes back (cachesProbe):
+//     a workspace that writes and reads its disk has those blocks in its own page cache and,
+//     through QEMU's writeback cache, in the host's as well. The overlay's residency in the host's
 //     cache, read with mincore, after the guest wrote and read a file, with the disk as it is and
-//     with --disk-direct-over-backing (O_DIRECT for the overlay, the base still cached). And what
-//     the copy is worth: the file read again once the guest dropped it, and the first 128 MB of
-//     it split into 8 KiB files and read back in a shuffled order - a build's sources, which the
-//     host's copy serves from memory and O_DIRECT sends to the disk one small read at a time.
-//     Between the two: the overlay with 128k subclusters, and the machine in a scope whose
-//     MemoryHigh bounds the host's copy. The overlay's allocated size and fstrim's own report say
-//     whether the guest's discard reaches the file.
+//     with --disk-direct-over-backing (O_DIRECT for the overlay, the base still cached); what the
+//     copy is worth, as the file read again and as 8 KiB files read back shuffled; QEMU's resident
+//     memory at each step; and, from the overlay's allocated size and fstrim's own report, whether
+//     the guest's discard reaches the file.
 //
-//  3. Whether the guest's page cache comes back: free page reporting returns what the guest
-//     frees, and page cache is not free. QEMU's resident memory at each step of the same boot -
-//     idle, the file written, the guest's cache full of it, the guest dropping its cache, the file
-//     removed - says what a workspace that read a lot costs the host until it lets go, and when it
-//     does.
-//
-//  4. Whether a guest can let go without losing what it works with: memory.reclaim, which a
-//     guest's own software could write when the machine is idle, asked for a file read once
-//     while a working set read twice is cached beside it - what comes back to the host, and
-//     what reading the working set again costs, with free page reporting at its default order and
-//     at lower ones. (reclaimProbe)
+//  2. Whether a guest can let go without losing what it works with (reclaimProbe):
+//     memory.reclaim asked for a file read once while a working set read twice is cached beside
+//     it - what comes back to the host, and what reading the working set again costs, with free
+//     page reporting at its default order and at lower ones.
 //
 //     SPIN_PAGE_CACHE=1   run at all
-//     SPIN_PAGE_CACHE_ONLY=<regexp>  only the subtests whose name matches: cold boot, caches, reclaim,
-//     reclaimers (which needs a kernel with DAMON; see reclaimersProbe), cow
+//     SPIN_PAGE_CACHE_ONLY=<regexp>  only the subtests whose name matches: caches, reclaim
 //     REPS=<n>            boots per variant (default 5)
 //     FILE_MB=<n>         the file the guest writes and reads (default 512, a quarter of the
 //     guest's memory: the overlay is made 2 GiB and the guest's root grown into it)
 //
+// What both answered, and what else was measured and turned down, is docs/memory-and-disk.md.
+//
 // Needs /dev/kvm, a built release and sudo (the guest's workload is a unit written into its
-// overlay, as bench's variants are, and the scopes are systemd's).
+// overlay, as bench's variants are).
 func TestPageCache(t *testing.T) {
 	if os.Getenv("SPIN_PAGE_CACHE") == "" {
-		t.Skip("set SPIN_PAGE_CACHE=1: this boots VMs cold and warm and fills their caches")
+		t.Skip("set SPIN_PAGE_CACHE=1: this boots VMs and fills their caches")
 	}
 	if !canSudo() {
 		t.Skip("the guest's workload is written into its overlay through qemu-nbd, which needs sudo")
@@ -90,96 +71,13 @@ func TestPageCache(t *testing.T) {
 		name string
 		run  func(t *testing.T)
 	}{
-		{"cold boot", func(t *testing.T) { coldBoots(t, out, reps) }},
 		{"caches", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, cachesProbe) }},
 		{"reclaim", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimProbe) }},
-		{"reclaimers", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimersProbe) }},
-		{"cow", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, cowProbe) }},
 	} {
 		if only.MatchString(sub.name) {
 			t.Run(sub.name, sub.run)
 		}
 	}
-}
-
-// coldBoots boots the baseline cold, warm, and prefetched - the tree evicted and then only what a
-// boot reads read back, which a host could do as it starts - interleaved, and logs all three and
-// what a cold boot read.
-func coldBoots(t *testing.T, out string, reps int) {
-	v := labelled("baseline", without())
-	base := filepath.Join(out, "image", "rootfs.qcow2")
-	samples := map[string]map[boot.Phase][]time.Duration{"cold": {}, "warm": {}, "prefetched": {}}
-	var read, prefetchMS, prefetchMB []float64
-	if err := evictTree(out); err != nil {
-		t.Fatal(err)
-	}
-	if run := bootOnce(t, out, v); !run.Reached(boot.Usable) {
-		t.Fatalf("the boot that finds what a boot reads reached no login prompt:\n%s", tail(run.Output, 800))
-	}
-	set, err := bootSet(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range reps {
-		for _, label := range []string{"cold", "warm", "prefetched"} {
-			switch label {
-			case "cold":
-				if err := evictTree(out); err != nil {
-					t.Fatal(err)
-				}
-			case "prefetched":
-				if err := evictTree(out); err != nil {
-					t.Fatal(err)
-				}
-				start := time.Now()
-				mb, err := prefetch(set)
-				if err != nil {
-					t.Fatal(err)
-				}
-				prefetchMS = append(prefetchMS, float64(time.Since(start).Milliseconds()))
-				prefetchMB = append(prefetchMB, mb)
-			}
-			run := bootOnce(t, out, v)
-			if !run.Reached(boot.Usable) {
-				t.Fatalf("%s boot reached no login prompt:\n%s", label, tail(run.Output, 800))
-			}
-			for _, p := range []boot.Phase{boot.Firmware, boot.Kernel, boot.PID1, boot.Usable} {
-				if d, ok := run.At[p]; ok {
-					samples[label][p] = append(samples[label][p], d)
-				}
-			}
-			if label == "cold" {
-				mb, _, err := resident(base)
-				if err != nil {
-					t.Fatal(err)
-				}
-				read = append(read, mb)
-			}
-		}
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "\nmilliseconds from the moment before QEMU is exec'd, p50/p95 over %d boots each, interleaved;\n", reps)
-	fmt.Fprintf(&b, "cold: the release's files dropped from the host's page cache before the boot;\n")
-	fmt.Fprintf(&b, "prefetched: dropped, and then the pages a boot reads read back before it\n\n")
-	fmt.Fprintf(&b, "%-10s %10s %10s %10s %10s\n", "", "FIRMWARE", "KERNEL", "PID1", "USABLE")
-	for _, l := range []string{"cold", "warm", "prefetched"} {
-		fmt.Fprintf(&b, "%-10s", l)
-		for _, p := range []boot.Phase{boot.Firmware, boot.Kernel, boot.PID1, boot.Usable} {
-			fmt.Fprintf(&b, " %10s", cell(samples[l][p]))
-		}
-		fmt.Fprintln(&b)
-	}
-	fi, err := os.Stat(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p50, _ := boot.Percentile(read, 0.5)
-	fmt.Fprintf(&b, "\na cold boot read %.0f MB of the base image's %.0f MB (p50 of the resident pages after it)\n",
-		p50, float64(fi.Size())/(1<<20))
-	ms, _ := boot.Percentile(prefetchMS, 0.5)
-	mb, _ := boot.Percentile(prefetchMB, 0.5)
-	fmt.Fprintf(&b, "the prefetch read %.0f MB of %d files in %.0f ms (p50)\n", mb, len(set), ms)
-	t.Log(b.String())
 }
 
 // cacheProbe is a workload the guest runs once it is up, and the steps it announces, in order.
@@ -196,30 +94,18 @@ type cacheProbe struct {
 // cacheVariant is one way of starting the machine a probe runs in.
 type cacheVariant struct {
 	label string
-	// flags are spin-machine's, cmdline is added to the guest's kernel command line, and
-	// overlayOpts are qemu-img's -o for the overlay.
-	flags       []string
-	cmdline     string
-	overlayOpts string
-	// memoryHighMB, when set, starts the machine in a transient scope with that MemoryHigh: the
-	// guest's RAM and the host's page cache for its disk are charged to it, so the host's copy
-	// of the overlay is bounded per machine instead of by the host's free memory.
-	memoryHighMB int
-	// reclaimer names what gives the guest's cache back in reclaimersProbe.
-	reclaimer string
+	// flags are spin-machine's, and cmdline is added to the guest's kernel command line.
+	flags   []string
+	cmdline string
 }
 
-var (
-	writeback = cacheVariant{label: "writeback"}
-	direct    = cacheVariant{label: "direct overlay", flags: []string{"--disk-direct-over-backing"}}
-)
+var writeback = cacheVariant{label: "writeback"}
 
 // The guest's side of each probe: a unit that runs once the machine is up, takes each step and
 // says so on the console with what the guest sees - its page cache and free memory, in kB - and
 // how long the step's I/O took, then waits for the host to measure before the next. The I/O is
-// timed by /proc/uptime, which only goes forward: the wall clock is chrony's to step as the
-// machine comes up, and on the lab runner it stepped back under a write, which timed it at
-// -183 ms. Each script is a format: %[1]d is the file's size in MB.
+// timed by /proc/uptime, which only goes forward: the wall clock can step as the machine comes
+// up, and on the lab runner it stepped back under a write, which timed it at -183 ms. Each script is a format: %[1]d is the file's size in MB.
 const cacheCommon = `#!/bin/sh
 f=/var/tmp/pagecache.bin
 d=/var/tmp/pagecache.d
@@ -262,15 +148,9 @@ echo "PAGECACHE-NOTE $(fstrim -v / 2>&1); root $(findmnt -no OPTIONS /); vda dis
 sync; sleep 6; say 6 0
 echo PAGECACHE-DONE > /dev/ttyS0
 `,
-	// The memory.high variants bound what the machine holds: its RAM as the guest touched it
-	// (~900 MB at the fullest step) and the host's cache of its disk. 1280 leaves the cache about
-	// 350 MB, 1536 about 600.
 	variants: []cacheVariant{
 		writeback,
-		direct,
-		{label: "writeback, 128k subclusters", overlayOpts: "extended_l2=on,cluster_size=128k"},
-		{label: "writeback, memory.high 1280 MB", memoryHighMB: 1280},
-		{label: "writeback, memory.high 1536 MB", memoryHighMB: 1536},
+		{label: "direct overlay", flags: []string{"--disk-direct-over-backing"}},
 	},
 }
 
@@ -322,109 +202,6 @@ echo PAGECACHE-DONE > /dev/ttyS0
 	},
 }
 
-// reclaimersProbe is what each way of giving the guest's cache back does to a working set that
-// is in use: the working set read every 5 s for 40 s while a file read once sits beside it, and
-// the reclaimer under test working - memory.reclaim at the end, DAMON_RECLAIM throughout (pages
-// idle 10 s and more, anonymous ones skipped, its watermarks opened so free memory does not stop
-// it), or MGLRU aged at the start and its older generations evicted at the end, which sorts the
-// working set's accessed folios out of them first. Then QEMU's memory, and the working set read
-// once more. DAMON and the lru_gen file need a kernel with CONFIG_DAMON_RECLAIM and debugfs:
-// the release's has neither DAMON, so this runs on the lab's kernel_run, variant instead.
-var reclaimersProbe = cacheProbe{
-	title: "read once beside a working set in use for 40 s, and reclaimed",
-	steps: []string{
-		"idle",
-		"cache full, working set read",
-		"40 s in use, reclaimed",
-		"working set read",
-	},
-	script: cacheCommon + `mkdir -p $d; head -c 128M $f | split -b 8K -a 5 - $d/; sync
-r=$(cat /etc/pagecache-reclaimer)
-lg=/sys/kernel/debug/lru_gen
-# The root memcg's generations on node 0, one "gen:anon/file" per generation, in pages.
-# The cache is charged to the memcg of whoever read it - the probe's own service here - and an
-# lru_gen command acts on one memcg, not its children (run 36816203944: root held 12 MB of the
-# 673 MB cached). So every memcg is aged and evicted, and what is reported is node 0's file pages
-# summed over all of them.
-memcgs() { awk '$1 == "memcg" { print $2 }' $lg; }
-maxgen() { awk -v id="$1" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg; }
-gens() { awk '$1 == "node" { n = $2 == 0 } n && $1 ~ /^[0-9]+$/ { f += $4 } END { printf "%%d file pages", f }' $lg; echo " in $(memcgs | wc -l) memcgs"; }
-dr=/sys/module/damon_reclaim/parameters
-fail() { echo "PAGECACHE-FAILED $*" > /dev/ttyS0; exit 1; }
-echo 3 > /proc/sys/vm/drop_caches
-small; t=$(ms); small; w=$(( $(ms) - t )); cat $f > /dev/null; say 1 $w
-case $r in
-damon)
-	[ -d $dr ] || fail "no $dr"
-	echo 10000000 > $dr/min_age; echo Y > $dr/skip_anon
-	echo 1000 > $dr/wmarks_high; echo 999 > $dr/wmarks_mid; echo 0 > $dr/wmarks_low
-	echo Y > $dr/enabled ;;
-lru_gen)
-	# The image masks sys-kernel-debug.mount, so debugfs is not mounted unless asked for.
-	mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug || fail "mounting debugfs"
-	[ -w $lg ] || fail "no $lg"
-	for id in $(memcgs); do m=$(maxgen $id); [ -n "$m" ] && echo "+ $id 0 $m" > $lg 2>/dev/null; done
-	echo "PAGECACHE-NOTE lru_gen after aging: $(gens)" > /dev/ttyS0 ;;
-esac
-for i in 1 2 3 4 5 6 7 8; do small; sleep 5; done
-case $r in
-memory.reclaim) echo %[1]dM > /sys/fs/cgroup/memory.reclaim 2>/dev/null ;;
-lru_gen)
-	echo "PAGECACHE-NOTE lru_gen before evicting: $(gens)" > /dev/ttyS0
-	# Every generation but the two youngest, which MGLRU does not evict; swappiness 0, file
-	# pages only; nr_to_reclaim in pages, past the file's size. A memcg with too few
-	# generations refuses, which is not a failure of the probe.
-	no=0
-	for id in $(memcgs); do m=$(maxgen $id); [ -n "$m" ] && { echo "- $id 0 $(( m - 2 )) 0 1000000" > $lg 2>/dev/null || no=$(( no + 1 )); }; done
-	echo "PAGECACHE-NOTE lru_gen after evicting: $(gens), $no memcgs refused" > /dev/ttyS0 ;;
-damon) echo "PAGECACHE-NOTE damon_reclaim $(grep -H . $dr/nr_reclaimed_regions $dr/bytes_reclaimed_regions 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0 ;;
-esac
-sleep 6; say 2 0
-t=$(ms); small; say 3 $(( $(ms) - t ))
-rm -rf $f $d
-echo PAGECACHE-DONE > /dev/ttyS0
-`,
-	variants: []cacheVariant{
-		{label: "nothing", reclaimer: "none"},
-		{label: "memory.reclaim", reclaimer: "memory.reclaim"},
-		{label: "DAMON_RECLAIM, 10 s idle", reclaimer: "damon"},
-		{label: "lru_gen aged and evicted", reclaimer: "lru_gen"},
-	},
-}
-
-// cowProbe is what a first write into data the base holds costs: 2000 random 4 KiB overwrites,
-// O_DIRECT in the guest, into the largest file under /usr, each one a cluster the overlay does not
-// have yet - qcow2 copies the rest of the cluster from the base first, 64 KiB by default and 4 KiB
-// with 128k subclusters - and then the same offsets again, which the overlay now has: the
-// difference is the copy. The research's seventh experiment.
-var cowProbe = cacheProbe{
-	title: "untouched; 2000 random 4 KiB overwrites of base data",
-	steps: []string{
-		"idle",
-		"first overwrites",
-		"same offsets again",
-	},
-	script: `#!/bin/sh
-say() { echo "PAGECACHE $1 $(awk '/^Cached:/{c=$2} /^MemFree:/{m=$2} END{print c, m}' /proc/meminfo) $2" > /dev/ttyS0; sleep 4; }
-ms() { awk '{ printf "%%d", $1 * 1000 }' /proc/uptime; }
-b=$(find /usr -xdev -type f -size +20M -printf '%%s %%p\n' | sort -n | tail -1 | cut -d' ' -f2)
-sz=$(stat -c %%s "$b")
-awk -v n=2000 -v s="$sz" 'BEGIN { srand(1); for (i = 0; i < n; i++) print int(rand() * (s / 4096 - 1)) }' > /var/tmp/offsets
-echo "PAGECACHE-NOTE overwriting $b, $(( sz >> 20 )) MB; the file read %[1]d MB is not used" > /dev/ttyS0
-sync; echo 3 > /proc/sys/vm/drop_caches
-say 0 0
-over() { while read -r o; do dd if=/dev/urandom of="$b" bs=4k count=1 seek="$o" conv=notrunc oflag=direct status=none; done < /var/tmp/offsets; sync; }
-t=$(ms); over; say 1 $(( $(ms) - t ))
-t=$(ms); over; say 2 $(( $(ms) - t ))
-echo PAGECACHE-DONE > /dev/ttyS0
-`,
-	variants: []cacheVariant{
-		writeback,
-		{label: "writeback, 128k subclusters", overlayOpts: "extended_l2=on,cluster_size=128k"},
-		direct,
-	},
-}
-
 const cacheUnit = `[Unit]
 Description=page cache probe
 After=multi-user.target
@@ -453,7 +230,7 @@ type cacheStep struct {
 }
 
 // cacheRun is one boot's steps, and what it said beside them: the guest's PAGECACHE-NOTE lines
-// and, in a scope, the scope's memory.events.
+// and where its discards went.
 type cacheRun struct {
 	steps []cacheStep
 	notes []string
@@ -518,16 +295,11 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	base := filepath.Join(out, "image", "rootfs.qcow2")
 	// The base image's root has little room: the overlay is larger, and the root grown into it
 	// while the overlay is mounted, so the file is the size asked for. The base is not touched.
-	create := []string{"create", "-f", "qcow2", "-F", "qcow2", "-b", base}
-	if v.overlayOpts != "" {
-		create = append(create, "-o", v.overlayOpts)
-	}
-	mustRun(t, filepath.Join(out, "bin", "qemu-img"), append(create, overlay, "2G")...)
+	mustRun(t, filepath.Join(out, "bin", "qemu-img"), "create", "-f", "qcow2", "-F", "qcow2", "-b", base, overlay, "2G")
 	edit := without()
 	edit.setup = `resize2fs "$(findmnt -no SOURCE "$MNT")" >/dev/null`
 	edit.files["/usr/local/sbin/pagecache.sh"] = fmt.Sprintf(probe.script, fileMB)
 	edit.files["/etc/systemd/system/pagecache.service"] = cacheUnit
-	edit.files["/etc/pagecache-reclaimer"] = v.reclaimer
 	edit.links = map[string]string{"/etc/systemd/system/multi-user.target.wants/pagecache.service": "../pagecache.service"}
 	editOverlay(t, overlay, edit)
 
@@ -542,15 +314,7 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	machine := append([]string{filepath.Join(out, "bin", "spin-machine"), "boot", "--release", out,
 		"--disk", overlay, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout", "--qmp", qmpSock,
 		"--append", strings.TrimSpace("init=/sbin/init " + v.cmdline)}, v.flags...)
-	// A scope is systemd's, so the machine is started through sudo, as root - which changes
-	// nothing the probe measures - and found again by its cgroup; without one, spin-machine
-	// execs QEMU in place and its pid is QEMU's.
-	var scope string
-	if v.memoryHighMB > 0 {
-		scope = fmt.Sprintf("spin-pagecache-%d-%d", os.Getpid(), time.Now().UnixNano())
-		machine = append([]string{"sudo", "systemd-run", "--quiet", "--scope", "--unit", scope,
-			"-p", fmt.Sprintf("MemoryHigh=%dM", v.memoryHighMB), "--"}, machine...)
-	}
+	// spin-machine execs QEMU in place, so its pid is QEMU's.
 	cmd := exec.Command(machine[0], machine[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
@@ -561,9 +325,6 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 		t.Fatalf("launching the machine: %v", err)
 	}
 	kill := func() {
-		if scope != "" {
-			_ = exec.Command("sudo", "systemctl", "kill", "--signal=KILL", scope+".scope").Run()
-		}
 		if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		}
@@ -572,13 +333,6 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	defer func() { timer.Stop(); kill(); _ = cmd.Wait() }()
 
 	pid := cmd.Process.Pid
-	cgroup := ""
-	if scope != "" {
-		cgroup = "/sys/fs/cgroup/system.slice/" + scope + ".scope"
-		if pid, err = scopeQEMU(cgroup); err != nil {
-			t.Fatal(err)
-		}
-	}
 	run := cacheRun{steps: make([]cacheStep, len(probe.steps))}
 	seen := 0
 	var console strings.Builder
@@ -610,16 +364,13 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 		if s.qemuCPU, err = cpuMS(pid); err != nil {
 			t.Fatal(err)
 		}
-		// A scope's QEMU is root's, and its smaps are not this test's to read.
-		if scope == "" {
-			if s.ramRSS, s.ramHuge, err = guestRAM(pid, 2048); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if s.overlayCache, _, err = resident(overlay); err != nil {
+		if s.ramRSS, s.ramHuge, err = guestRAM(pid, 2048); err != nil {
 			t.Fatal(err)
 		}
-		if s.baseCache, _, err = resident(base); err != nil {
+		if s.overlayCache, err = resident(overlay); err != nil {
+			t.Fatal(err)
+		}
+		if s.baseCache, err = resident(base); err != nil {
 			t.Fatal(err)
 		}
 		var ost unix.Stat_t
@@ -632,17 +383,7 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	if seen != len(run.steps) {
 		t.Fatalf("the guest reported %d of %d steps; console tail:\n%s", seen, len(run.steps), tail([]byte(console.String()), 1500))
 	}
-	// A scope's QEMU is root's, and so is its socket.
-	if scope == "" {
-		run.notes = append(run.notes, discardNote(t, out, qmpSock, overlay, probe.trims))
-	}
-	if cgroup != "" {
-		raw, err := os.ReadFile(cgroup + "/memory.events")
-		if err != nil {
-			t.Fatal(err)
-		}
-		run.notes = append(run.notes, "memory.events: "+strings.Join(strings.Fields(string(raw)), " "))
-	}
+	run.notes = append(run.notes, discardNote(t, out, qmpSock, overlay, probe.trims))
 	return run
 }
 
@@ -725,22 +466,6 @@ func discardNote(t *testing.T, out, socket, overlay string, trimmed bool) string
 		unmap, data>>20, zeroAlloc>>20, zero>>20)
 }
 
-// scopeQEMU is the pid of the QEMU in the scope at cgroup, waited for: systemd-run creates the
-// scope and then execs spin-machine, which execs QEMU.
-func scopeQEMU(cgroup string) (int, error) {
-	for range 100 {
-		raw, _ := os.ReadFile(cgroup + "/cgroup.procs")
-		for f := range strings.FieldsSeq(string(raw)) {
-			pid, _ := strconv.Atoi(f)
-			if comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid)); strings.HasPrefix(string(comm), "qemu-system") {
-				return pid, nil
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return 0, fmt.Errorf("no QEMU in %s after 5 s", cgroup)
-}
-
 func kb(s string) float64  { return num(s) / 1024 }
 func num(s string) float64 { n, _ := strconv.ParseFloat(s, 64); return n }
 
@@ -807,121 +532,32 @@ func cpuMS(pid int) (float64, error) {
 	return (num(f[11]) + num(f[12])) * 10, nil
 }
 
-// resident is how many MB of the file at p are in the host's page cache, and the file's size in
-// MB.
-func resident(p string) (float64, float64, error) {
-	vec, size, err := residentPages(p)
-	if err != nil {
-		return 0, 0, err
-	}
-	n := 0
-	for _, in := range vec {
-		if in {
-			n++
-		}
-	}
-	return float64(n*os.Getpagesize()) / (1 << 20), float64(size) / (1 << 20), nil
-}
-
-// residentPages is which pages of the file at p are in the host's page cache, by mincore over a
-// mapping of it, and the file's size in bytes.
-func residentPages(p string) ([]bool, int64, error) {
+// resident is how many MB of the file at p are in the host's page cache, by mincore over a
+// mapping of it.
+func resident(p string) (float64, error) {
 	f, err := os.Open(p)
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
 	defer func() { _ = f.Close() }() // read-only
 	fi, err := f.Stat()
 	if err != nil || fi.Size() == 0 {
-		return nil, 0, err
+		return 0, err
 	}
 	m, err := unix.Mmap(int(f.Fd()), 0, int(fi.Size()), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
-		return nil, 0, fmt.Errorf("mapping %s: %w", p, err)
+		return 0, fmt.Errorf("mapping %s: %w", p, err)
 	}
 	defer func() { _ = unix.Munmap(m) }() // a mapping only read for its residency
 	page := os.Getpagesize()
 	vec := make([]byte, (len(m)+page-1)/page)
 	// x/sys/unix has no Mincore on Linux.
 	if _, _, errno := unix.Syscall(unix.SYS_MINCORE, uintptr(unsafe.Pointer(&m[0])), uintptr(len(m)), uintptr(unsafe.Pointer(&vec[0]))); errno != 0 {
-		return nil, 0, fmt.Errorf("mincore on %s: %w", p, errno)
+		return 0, fmt.Errorf("mincore on %s: %w", p, errno)
 	}
-	in := make([]bool, len(vec))
-	for i, v := range vec {
-		in[i] = v&1 == 1
+	n := 0
+	for _, v := range vec {
+		n += int(v & 1)
 	}
-	return in, fi.Size(), nil
-}
-
-// bootSet is the pages of each file of the release tree at dir that a boot from an evicted tree
-// left in the host's page cache: what a boot reads.
-func bootSet(dir string) (map[string][]bool, error) {
-	set := map[string][]bool{}
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || !d.Type().IsRegular() {
-			return err
-		}
-		vec, _, err := residentPages(p)
-		if err != nil {
-			return err
-		}
-		if slices.Contains(vec, true) {
-			set[p] = vec
-		}
-		return nil
-	})
-	return set, err
-}
-
-// prefetch reads every page of set into the host's page cache, a run of resident pages at a
-// time, and says how many MB that was: what a host would do once, as it starts, so that its
-// first boot is not a cold one.
-func prefetch(set map[string][]bool) (float64, error) {
-	page := int64(os.Getpagesize())
-	var total int64
-	buf := make([]byte, 1<<20)
-	for p, vec := range set {
-		f, err := os.Open(p)
-		if err != nil {
-			return 0, err
-		}
-		for i := 0; i < len(vec); {
-			if !vec[i] {
-				i++
-				continue
-			}
-			j := i
-			for j < len(vec) && vec[j] {
-				j++
-			}
-			for off, end := int64(i)*page, int64(j)*page; off < end; {
-				n, err := f.ReadAt(buf[:min(int64(len(buf)), end-off)], off)
-				off += int64(n)
-				total += int64(n)
-				if err != nil {
-					break // io.EOF at the file's last, partial page
-				}
-			}
-			i = j
-		}
-		_ = f.Close() // read-only
-	}
-	return float64(total) / (1 << 20), nil
-}
-
-// evictTree drops every file of the release tree at dir from the host's page cache: what the
-// first machine on a host that has just started reads from the disk. Not drop_caches, which takes
-// every other runner's cache on the host with it.
-func evictTree(dir string) error {
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || !d.Type().IsRegular() {
-			return err
-		}
-		f, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }() // opened only to advise on
-		return unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
-	})
+	return float64(n*page) / (1 << 20), nil
 }
