@@ -202,6 +202,7 @@ type machineFlags struct {
 	profile bool
 	extra   string
 	pmem    string
+	pmemOpt string
 }
 
 func (o *machineFlags) register(fs *flag.FlagSet) {
@@ -240,6 +241,7 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&o.profile, "profile", false, "boot with initcall profiling: silent console, full ring buffer")
 	fs.StringVar(&o.extra, "append", "", "extra kernel command line arguments")
 	fs.StringVar(&o.pmem, "pmem", "", "EXPERIMENT: a raw filesystem image mapped read-only as /dev/pmem0 (virtio-pmem)")
+	fs.StringVar(&o.pmemOpt, "pmem-opts", "", "EXPERIMENT: the memory-backend-file options for --pmem (default share=on,readonly=on)")
 }
 
 // scratch is whether the disk is the base image under an overlay QEMU makes and
@@ -316,6 +318,7 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 		}}
 	}
 	s.Pmem = o.pmem
+	s.PmemOpts = o.pmemOpt
 
 	c := machine.DefaultCmdline()
 	c.Init = o.init

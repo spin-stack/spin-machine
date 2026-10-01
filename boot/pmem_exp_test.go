@@ -107,7 +107,9 @@ func pmemCompare(t *testing.T, out string, reps int) {
 		mustRun(t, "sudo", "sh", "-c", fmt.Sprintf(`s=$(stat -c %%s %[1]s); truncate -s $(( (s + 2097151) / 2097152 * 2097152 )) %[1]s && chmod 0644 %[1]s`, img))
 	}
 
-	variants := []string{"qcow2 chain", "pmem + ext4 DAX", "pmem + erofs DAX", "pmem + erofs DAX, no inline data"}
+	// Run 36811489671 read /dev/pmem0 at 8.3 MB/s whatever the filesystem: how QEMU maps the
+	// file is the question now, so ext4 only, in each mapping.
+	variants := []string{"qcow2 chain", "pmem ext4 DAX, share=on,readonly=on", "pmem ext4 DAX, share=off", "pmem ext4 DAX, share=on"}
 	got := map[string][][]pmemStep{}
 	var notes = map[string]string{}
 	for range reps {
@@ -154,6 +156,7 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemS
 	args := []string{"boot", "--release", out, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout"}
 	cached := raw
 	fstype := "ext4"
+	_, opts, _ := strings.Cut(v, "DAX, ")
 	switch v {
 	case "pmem + erofs DAX":
 		cached, fstype = erofs, "erofs"
@@ -174,7 +177,7 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemS
 			t.Fatal(err)
 		}
 		mustRun(t, filepath.Join(out, "bin", "mkfs.ext4"), "-q", "-F", upper)
-		args = append(args, "--pmem", cached, "--disk", upper, "--disk-format", "raw", "--root", "/dev/pmem0",
+		args = append(args, "--pmem", cached, "--pmem-opts", opts, "--disk", upper, "--disk-format", "raw", "--root", "/dev/pmem0",
 			"--append", "init=/sbin/overlay-init ro rootfstype="+fstype+" rootflags=dax=always")
 	}
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)

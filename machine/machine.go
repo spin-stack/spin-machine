@@ -25,6 +25,7 @@ package machine
 
 import (
 	"bufio"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -561,6 +562,9 @@ type Spec struct {
 	// guest read-only as /dev/pmem0 through virtio-pmem, shared with every other VM that maps
 	// it. Its size is a multiple of 2 MiB.
 	Pmem string
+	// PmemOpts, EXPERIMENT: how the memory-backend-file maps Pmem; share=on,readonly=on when
+	// empty.
+	PmemOpts string
 
 	// VsockCID, when non-zero, gives the machine a vhost-vsock device with that
 	// context id. It is how anything inside the guest is reached: this machine
@@ -1147,7 +1151,7 @@ func (s Spec) appendDevices(args []string) []string {
 
 	if s.Pmem != "" {
 		args = append(args,
-			"-object", fmt.Sprintf("memory-backend-file,id=pmem0-mem,mem-path=%s,size=%dM,share=on,readonly=on", qemuOpt(s.Pmem), s.pmemMB()),
+			"-object", fmt.Sprintf("memory-backend-file,id=pmem0-mem,mem-path=%s,size=%dM,%s", qemuOpt(s.Pmem), s.pmemMB(), cmp.Or(s.PmemOpts, "share=on,readonly=on")),
 			"-device", fmt.Sprintf("virtio-pmem-pci,id=pmem0,memdev=pmem0-mem,%s,addr=0x%x", virtioModern, slotPmem))
 	}
 
