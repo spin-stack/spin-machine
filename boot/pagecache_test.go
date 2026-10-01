@@ -328,7 +328,7 @@ var reclaimersProbe = cacheProbe{
 r=$(cat /etc/pagecache-reclaimer)
 lg=/sys/kernel/debug/lru_gen
 # The root memcg's generations on node 0, one "gen:anon/file" per generation, in pages.
-gens() { awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { printf "%s:%s/%s ", $1, $3, $4 }' $lg; }
+gens() { awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { printf "%%s:%%s/%%s ", $1, $3, $4 }' $lg; }
 dr=/sys/module/damon_reclaim/parameters
 fail() { echo "PAGECACHE-FAILED $*" > /dev/ttyS0; exit 1; }
 echo 3 > /proc/sys/vm/drop_caches
