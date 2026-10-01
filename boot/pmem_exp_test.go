@@ -31,6 +31,10 @@ say() { echo "PMEM $1 $(awk '/^Cached:/{c=$2} /^MemFree:/{m=$2} END{print c, m}'
 ms() { awk '{ printf "%d", $1 * 1000 }' /proc/uptime; }
 usr() { find /usr -xdev -type f -size -2M 2>/dev/null | head -40000 | xargs cat > /dev/null 2>&1; }
 echo "PMEM-NOTE $(findmnt -no SOURCE,FSTYPE,OPTIONS / | tr '\n' ' '); $(findmnt -no SOURCE,OPTIONS /mnt/oldroot 2>/dev/null)" > /dev/ttyS0
+# Whether the pmem region itself is slow, and how the guest maps it: a 256 MB read of the raw
+# device, the region in /proc/iomem, and the uncached and write-combining ranges PAT holds.
+mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug
+echo "PMEM-NOTE raw $(dd if=/dev/pmem0 of=/dev/null bs=1M count=256 2>&1 | tail -1); iomem $(grep -i -E 'pmem|persistent' /proc/iomem | tr -s ' ' | tr '\n' ' '); pat $(grep -i -E 'uncached|write-combining' /sys/kernel/debug/x86/pat_memtype_list 2>/dev/null | tail -4 | tr '\n' ' ')" > /dev/ttyS0
 sync; echo 3 > /proc/sys/vm/drop_caches
 say 0 0
 t=$(ms); usr; say 1 $(( $(ms) - t ))
@@ -96,16 +100,19 @@ func pmemCompare(t *testing.T, out string, reps int) {
 	mustRun(t, "sudo", "mount", "-o", "loop,ro", raw, mnt)
 	t.Cleanup(func() { _ = exec.Command("sudo", "umount", mnt).Run() }) // before TempDir's RemoveAll
 	mustRun(t, "docker", "run", "--rm", "-v", mnt+":/src:ro", "-v", dir+":/out", "alpine:3.22",
-		"sh", "-c", "apk add -q erofs-utils && mkfs.erofs /out/base.erofs /src >/dev/null")
+		"sh", "-c", "apk add -q erofs-utils && mkfs.erofs /out/base.erofs /src >/dev/null && mkfs.erofs -E noinline_data /out/noinline.erofs /src >/dev/null")
 	erofs := filepath.Join(dir, "base.erofs")
-	mustRun(t, "sudo", "sh", "-c", fmt.Sprintf(`s=$(stat -c %%s %[1]s); truncate -s $(( (s + 2097151) / 2097152 * 2097152 )) %[1]s && chmod 0644 %[1]s`, erofs))
+	noinline := filepath.Join(dir, "noinline.erofs")
+	for _, img := range []string{erofs, noinline} {
+		mustRun(t, "sudo", "sh", "-c", fmt.Sprintf(`s=$(stat -c %%s %[1]s); truncate -s $(( (s + 2097151) / 2097152 * 2097152 )) %[1]s && chmod 0644 %[1]s`, img))
+	}
 
-	variants := []string{"qcow2 chain", "pmem + ext4 DAX", "pmem + erofs DAX"}
+	variants := []string{"qcow2 chain", "pmem + ext4 DAX", "pmem + erofs DAX", "pmem + erofs DAX, no inline data"}
 	got := map[string][][]pmemStep{}
 	var notes = map[string]string{}
 	for range reps {
 		for _, v := range variants {
-			steps, note := pmemBoot(t, out, v, lower, raw, erofs)
+			steps, note := pmemBoot(t, out, v, lower, raw, erofs, noinline)
 			got[v] = append(got[v], steps)
 			notes[v] = note
 		}
@@ -140,15 +147,18 @@ func pmemCompare(t *testing.T, out string, reps int) {
 }
 
 // pmemBoot runs the workload once on variant v and measures each step on the host.
-func pmemBoot(t *testing.T, out, v, lower, raw, erofs string) ([]pmemStep, string) {
+func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemStep, string) {
 	t.Helper()
 	dir := t.TempDir()
 	qemuImg := filepath.Join(out, "bin", "qemu-img")
 	args := []string{"boot", "--release", out, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout"}
 	cached := raw
 	fstype := "ext4"
-	if v == "pmem + erofs DAX" {
+	switch v {
+	case "pmem + erofs DAX":
 		cached, fstype = erofs, "erofs"
+	case "pmem + erofs DAX, no inline data":
+		cached, fstype = noinline, "erofs"
 	}
 	if v == "qcow2 chain" {
 		overlay := filepath.Join(dir, "overlay.qcow2")
@@ -200,7 +210,7 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs string) ([]pmemStep, strin
 			t.Fatalf("%s: %s\n%s", v, line, tail([]byte(console.String()), 1500))
 		}
 		if _, n, ok := strings.Cut(line, "PMEM-NOTE "); ok {
-			note = n
+			note += n + "; "
 			continue
 		}
 		m := pmemLine.FindStringSubmatch(line)
