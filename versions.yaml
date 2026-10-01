@@ -141,6 +141,38 @@
     `task image:build`, then `task shell` and `task boot:bench`: a new mkosi can change the
     tree without failing the build.
 
+- name: task
+  kind: download
+  source: https://github.com/go-task/task/releases/download/v{version}/task_linux_amd64.tar.gz
+  version: 3.45.5
+  pin: e547ea2a47f5240657fdc89ea776baa90d628a1f2748242eaa7478fd92bffd40
+  track: tags https://github.com/go-task/task.git
+  note: >-
+    image/Dockerfile hands it to install-dev-tools.sh, which puts it in the base image's
+    /usr/local/bin for whoever works inside a guest. The pin can be checked against
+    task_checksums.txt beside the tarball. After the bump: `task image:build`.
+
+- name: git-lfs
+  kind: download
+  source: https://github.com/git-lfs/git-lfs/releases/download/v{version}/git-lfs-linux-amd64-v{version}.tar.gz
+  version: 3.7.0
+  pin: e7ebba491af8a54e560be3a00666fa97e4cf2bbbb223178a0934b8ef74cf9bed
+  track: tags https://github.com/git-lfs/git-lfs.git
+  note: >-
+    image/Dockerfile hands it to install-dev-tools.sh, as task. The pin can be checked against
+    sha256sums.asc beside the tarball. After the bump: `task image:build`.
+
+- name: buildkit
+  kind: download
+  source: https://github.com/moby/buildkit/releases/download/v{version}/buildkit-v{version}.linux-amd64.tar.gz
+  version: 0.26.2
+  pin: 1ef7c888f808e7f3f49d9aeeca11f661afe5c0880a4b114cc31c56dee86acd35
+  track: tags https://github.com/moby/buildkit.git
+  note: >-
+    image/Dockerfile hands it to install-dev-tools.sh, as task: buildctl and buildkitd. The
+    release publishes no checksums, only a provenance attestation beside the tarball. After the
+    bump: `task image:build`.
+
 - name: qboot
   kind: git
   source: https://github.com/bonzini/qboot.git

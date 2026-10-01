@@ -3,38 +3,26 @@ set -euo pipefail
 
 echo "Installing development tools..."
 
-# -------------------------------------------------
-# Version configuration
-# -------------------------------------------------
-TASK_VERSION="${TASK_VERSION:-3.45.5}"
-GIT_LFS_VERSION="${GIT_LFS_VERSION:-3.7.0}"
-BUILDKIT_VERSION="${BUILDKIT_VERSION:-0.26.2}"
+# Versions and sha256s from versions.yaml, through image/Dockerfile and mkosi.conf's Environment=.
+: "${TASK_VERSION:?}" "${TASK_SHA256:?}"
+: "${GIT_LFS_VERSION:?}" "${GIT_LFS_SHA256:?}"
+: "${BUILDKIT_VERSION:?}" "${BUILDKIT_SHA256:?}"
 
-# -------------------------------------------------
-# Helper functions
-# -------------------------------------------------
-download_and_verify() {
-    local url="$1"
-    local output="$2"
-    local expected_sha256="$3"
-
+download() {
+    local url="$1" output="$2" sha256="$3"
     echo "Downloading ${url}..."
     curl -fsSL "${url}" -o "${output}"
-
-    if [ -n "${expected_sha256}" ]; then
-        echo "Verifying checksum..."
-        echo "${expected_sha256}  ${output}" | sha256sum -c -
-    fi
+    echo "${sha256}  ${output}" | sha256sum -c -
 }
 
 # -------------------------------------------------
 # Install Task (Taskfile runner)
 # -------------------------------------------------
 echo "Installing Task v${TASK_VERSION}..."
-download_and_verify \
+download \
     "https://github.com/go-task/task/releases/download/v${TASK_VERSION}/task_linux_amd64.tar.gz" \
     "/tmp/task.tar.gz" \
-    ""
+    "${TASK_SHA256}"
 
 tar -xzf /tmp/task.tar.gz -C /tmp
 install -m 755 /tmp/task /usr/local/bin/task
@@ -44,10 +32,10 @@ task --version
 # Install Git LFS
 # -------------------------------------------------
 echo "Installing Git LFS v${GIT_LFS_VERSION}..."
-download_and_verify \
+download \
     "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-linux-amd64-v${GIT_LFS_VERSION}.tar.gz" \
     "/tmp/git-lfs.tar.gz" \
-    ""
+    "${GIT_LFS_SHA256}"
 
 tar -xzf /tmp/git-lfs.tar.gz -C /tmp
 install -m 755 "/tmp/git-lfs-${GIT_LFS_VERSION}/git-lfs" /usr/local/bin/git-lfs
@@ -57,10 +45,10 @@ git-lfs version
 # Install BuildKit
 # -------------------------------------------------
 echo "Installing BuildKit v${BUILDKIT_VERSION}..."
-download_and_verify \
+download \
     "https://github.com/moby/buildkit/releases/download/v${BUILDKIT_VERSION}/buildkit-v${BUILDKIT_VERSION}.linux-amd64.tar.gz" \
     "/tmp/buildkit.tar.gz" \
-    ""
+    "${BUILDKIT_SHA256}"
 
 tar -xzf /tmp/buildkit.tar.gz -C /usr/local
 # Remove QEMU binaries we don't need
@@ -87,8 +75,7 @@ apt-get install -y \
     docker-ce-cli \
     containerd.io \
     docker-buildx-plugin \
-    docker-compose-plugin \
-    isal pigz
+    docker-compose-plugin
 
 # -------------------------------------------------
 # Cleanup
