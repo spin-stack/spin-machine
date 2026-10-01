@@ -2,7 +2,7 @@
 
 ## CI
 
-Five workflows, and the split is about cost. `ci.yml` runs on every push and builds none of
+The workflows are split by cost. `ci.yml` runs on every push and builds none of
 the three artefacts — it is `task lint` and `task test`, which is fast and catches most
 mistakes. It also *pulls* one: `task qemu:fetch` unpacks the published QEMU of the pinned
 version in seconds, and `task verify:args` hands it the command line `machine.Spec.Args`

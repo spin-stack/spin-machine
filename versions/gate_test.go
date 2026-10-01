@@ -26,8 +26,6 @@ func TestVersionsYAMLIsTheOnlyPin(t *testing.T) {
 		// has to rebase the patch and restate both; versions.yaml's note says so.
 		"NOTICE",
 		"qemu/qboot/README.md",
-		// The hashes of the artefacts a measurement was taken with.
-		"qemu/qboot/measurements.json",
 	}}
 	if err := g.Check(); err != nil {
 		t.Error(err)

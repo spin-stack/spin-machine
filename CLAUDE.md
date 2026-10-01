@@ -12,8 +12,8 @@ on its own: whoever runs a guest supplies its init.
 Diagnostic input is different from release content. A test or experiment may use a caller
 supplied initrd, a temporary guest helper, a disposable overlay, or a separately built
 firmware image when it is isolated from `task build` and `task release`. State clearly what
-is diagnostic, who supplies it, and what it is measuring. The qboot probe is the model:
-it does not change a release tree and compares both variants with the same diagnostic initrd.
+is diagnostic, who supplies it, and what it is measuring. `task boot:firmware` is the model:
+it leaves the release tree as it is and boots each firmware with the same diagnostic initrd.
 
 **Keep consumer-specific implementation out of this tree, but record real contracts.** Do
 not copy consumer code, paths, or an ADR as a substitute for an explanation. It is correct to

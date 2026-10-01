@@ -45,7 +45,7 @@ One tarball:
 | `SOURCES` | every upstream source by version, URL and SHA-256, and the written offer |
 | `packages.txt` | every package and exact version in the base image |
 
-`LICENSE` and `NOTICE` sit at the root of the tarball, next to `install.sh`.
+`LICENSE` and `NOTICE` sit at the root of the tarball.
 
 `task build` writes that same tree into `_output/`, byte for byte the layout above, and
 `machine.OpenRelease` reads either. There is one layout: nothing rearranges the files on the way
