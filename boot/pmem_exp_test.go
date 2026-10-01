@@ -62,6 +62,9 @@ type pmemStep struct {
 // pmemCompare boots the workload on the qcow2 chain and on the pmem base, reps times each,
 // interleaved, and logs each step's p50.
 func pmemCompare(t *testing.T, out string, reps int) {
+	// A run that failed between its mount and its umount left the mount behind (run
+	// 36807084946): unmounted here, before anything of this run is made.
+	mustRun(t, "sudo", "sh", "-c", `findmnt -rno TARGET | grep /TestPageCachepmem | while read -r m; do umount "$m"; done; true`)
 	dir := t.TempDir()
 	base := filepath.Join(out, "image", "rootfs.qcow2")
 	qemuImg := filepath.Join(out, "bin", "qemu-img")
@@ -91,9 +94,9 @@ func pmemCompare(t *testing.T, out string, reps int) {
 	// read-only, by mkfs.erofs in a container, since the runner's host has no erofs-utils.
 	mnt := t.TempDir()
 	mustRun(t, "sudo", "mount", "-o", "loop,ro", raw, mnt)
+	t.Cleanup(func() { _ = exec.Command("sudo", "umount", mnt).Run() }) // before TempDir's RemoveAll
 	mustRun(t, "docker", "run", "--rm", "-v", mnt+":/src:ro", "-v", dir+":/out", "alpine:3.22",
-		"sh", "-c", "apk add -q erofs-utils && mkfs.erofs -q /out/base.erofs /src")
-	mustRun(t, "sudo", "umount", mnt)
+		"sh", "-c", "apk add -q erofs-utils && mkfs.erofs /out/base.erofs /src >/dev/null")
 	erofs := filepath.Join(dir, "base.erofs")
 	mustRun(t, "sudo", "sh", "-c", fmt.Sprintf(`s=$(stat -c %%s %[1]s); truncate -s $(( (s + 2097151) / 2097152 * 2097152 )) %[1]s && chmod 0644 %[1]s`, erofs))
 
