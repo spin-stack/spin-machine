@@ -201,6 +201,7 @@ type machineFlags struct {
 	root    string
 	profile bool
 	extra   string
+	pmem    string
 }
 
 func (o *machineFlags) register(fs *flag.FlagSet) {
@@ -238,6 +239,7 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.root, "root", "/dev/vda", "block device the kernel mounts as root; empty to stay on the initrd")
 	fs.BoolVar(&o.profile, "profile", false, "boot with initcall profiling: silent console, full ring buffer")
 	fs.StringVar(&o.extra, "append", "", "extra kernel command line arguments")
+	fs.StringVar(&o.pmem, "pmem", "", "EXPERIMENT: a raw filesystem image mapped read-only as /dev/pmem0 (virtio-pmem)")
 }
 
 // scratch is whether the disk is the base image under an overlay QEMU makes and
@@ -313,6 +315,7 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 			DirectOverBacking: o.directOverBacking,
 		}}
 	}
+	s.Pmem = o.pmem
 
 	c := machine.DefaultCmdline()
 	c.Init = o.init

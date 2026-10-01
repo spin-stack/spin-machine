@@ -95,6 +95,7 @@ func TestPageCache(t *testing.T) {
 		{"reclaim", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimProbe) }},
 		{"reclaimers", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimersProbe) }},
 		{"cow", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, cowProbe) }},
+		{"pmem", func(t *testing.T) { pmemCompare(t, out, reps) }},
 	} {
 		if only.MatchString(sub.name) {
 			t.Run(sub.name, sub.run)

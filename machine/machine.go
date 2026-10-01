@@ -73,6 +73,9 @@ const (
 	// every slot below this one is where it was, so this did not renumber a
 	// single existing device. Fifteen NICs was not a number anything needed.
 	slotMem = 0x1e
+
+	// EXPERIMENT (exp/pmem-base, not for merge): Spec.Pmem's device.
+	slotPmem = 0x1b
 )
 
 // maxDisks and maxNICs bound the fixed slot ranges above. Exceeding either is a
@@ -554,6 +557,11 @@ type Spec struct {
 	// may be given have one fingerprint, and raising the count strands no checkpoint.
 	HotplugDisks int
 
+	// Pmem, EXPERIMENT (exp/pmem-base, not for merge): a raw filesystem image mapped into the
+	// guest read-only as /dev/pmem0 through virtio-pmem, shared with every other VM that maps
+	// it. Its size is a multiple of 2 MiB.
+	Pmem string
+
 	// VsockCID, when non-zero, gives the machine a vhost-vsock device with that
 	// context id. It is how anything inside the guest is reached: this machine
 	// has no serial port for a caller to drive and no network it is required to
@@ -703,7 +711,7 @@ func (s Spec) Shape() Shape {
 		Accel:   accel,
 		CPU:     cpu,
 		SMP:     smpArg(s.BootCPUs, s.MaxCPUs),
-		Memory:  memoryArg(s.Memory.SizeMB, s.Memory.MaxMB),
+		Memory:  memoryArg(s.Memory.SizeMB, s.maxMB()),
 	}
 }
 
@@ -792,6 +800,28 @@ func smpArg(bootCPUs, maxCPUs int) string {
 		return fmt.Sprintf("%d,maxcpus=%d", bootCPUs, maxCPUs)
 	}
 	return fmt.Sprintf("%d", bootCPUs)
+}
+
+// pmemMB is Spec.Pmem's size in MiB; 0 without one, or when it cannot be read, which QEMU then
+// fails on.
+func (s Spec) pmemMB() int {
+	if s.Pmem == "" {
+		return 0
+	}
+	fi, err := os.Stat(s.Pmem)
+	if err != nil {
+		return 0
+	}
+	return int(fi.Size() >> 20)
+}
+
+// maxMB is -m's maxmem: the growth ceiling, and above it room for Spec.Pmem, which is a memory
+// device too.
+func (s Spec) maxMB() int {
+	if p := s.pmemMB(); p > 0 {
+		return max(s.Memory.MaxMB, s.Memory.SizeMB) + p
+	}
+	return s.Memory.MaxMB
 }
 
 // memoryArg formats -m.
@@ -1113,6 +1143,12 @@ func (s Spec) appendDevices(args []string) []string {
 			"-object", fmt.Sprintf("memory-backend-ram,id=%s,size=%dM", memGrowthID, growth),
 			"-device", fmt.Sprintf("virtio-mem-pci,id=%s,memdev=%s,requested-size=0,%s,addr=0x%x",
 				VirtioMemID, memGrowthID, virtioModern, slotMem))
+	}
+
+	if s.Pmem != "" {
+		args = append(args,
+			"-object", fmt.Sprintf("memory-backend-file,id=pmem0-mem,mem-path=%s,size=%dM,share=on,readonly=on", qemuOpt(s.Pmem), s.pmemMB()),
+			"-device", fmt.Sprintf("virtio-pmem-pci,id=pmem0,memdev=pmem0-mem,%s,addr=0x%x", virtioModern, slotPmem))
 	}
 
 	// The controller disks this machine is given while it runs are added to. See

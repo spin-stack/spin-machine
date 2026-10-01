@@ -88,6 +88,9 @@ CONFIG_VHOST_VSOCK=y
 # virtio-mem-pci: how a machine grows past its boot memory. ACPI DIMM slots are not used,
 # which is why the machine string carries no slots=.
 CONFIG_VIRTIO_MEM=y
+# EXPERIMENT (exp/pmem-base, not for merge): virtio-pmem-pci, a base image mapped into the
+# guest with DAX instead of read through virtio-blk and the guest's page cache.
+CONFIG_VIRTIO_PMEM=y
 # vmgenid: how a restored guest learns it was restored, so its random pool is reseeded.
 CONFIG_ACPI_VMGENID=y
 # virtio-scsi-pci and scsi-hd: disks that arrive while the machine runs (Spec.HotplugDisks).
