@@ -82,47 +82,6 @@ tmp_full() {
     rm -f /tmp/sshload-fill
 }
 
-# The logins while a process in spin's session takes memory until something stops it, then how
-# long that took, who stopped it and whether the machine answers afterwards. Last in a run,
-# because the guest may not come out of it.
-grow() {
-    label=$1 hog=$2
-    $SSH "nohup sh -c '$hog' >/dev/null 2>&1 &" </dev/null
-    start=$(date +%s%N)
-    out= gone=
-    while [ $(( ($(date +%s%N) - start) / 1000000000 )) -lt 90 ]; do
-        out="$out $(login)"
-        if ! pgrep -u spin -x tail >/dev/null; then
-            gone=$(( ($(date +%s%N) - start) / 1000000 ))
-            break
-        fi
-    done
-    echo "SSHLOAD $label$out"
-    after=$(login)
-    echo "SSHLOADEXHAUST $label gone_after_ms=${gone:-never} login_after=$after" \
-        "kernel_oom_kills=$(journalctl -k -b --no-pager | grep -c 'Out of memory: Killed')" \
-        "min_ttl_ms=$(cat /sys/kernel/mm/lru_gen/min_ttl_ms 2>/dev/null || echo none)" \
-        "swap_total=$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)MiB" \
-        "victims=$(journalctl -k -b --no-pager | sed -n 's/.*Killed process [0-9]* (\([^)]*\)).*/\1/p' | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
-    pkill -KILL -u spin || true
-    sleep 2
-}
-
-# tail keeping a line that never ends, from a pipe: `tail /dev/zero` seeks to the end of the
-# device, keeps nothing and measured nothing (2026-09-28). At full speed the kernel runs out of
-# anything to reclaim within a second or two and kills it.
-exhaust() {
-    grow exhaust "cat /dev/zero | tail"
-}
-
-# The case that hangs a machine: memory taken slowly, ~80 MB/s, while the session reads its
-# libraries over and over, as a build reads headers. Reclaim keeps finding page cache to evict
-# and the reader keeps faulting it back, so the kernel is never out of options and the OOM
-# killer is never called: the old LRU's thrash.
-exhaust_slow() {
-    grow exhaust-slow "(while :; do cat /usr/lib/x86_64-linux-gnu/*.so* >/dev/null 2>&1; done) & while :; do head -c 8M /dev/zero; sleep 0.1; done | tail"
-}
-
 for c in ${SSHLOAD_CASES:-idle cpu_service cpu_session tmp_full}; do
     case $c in
     idle) measure idle ;;

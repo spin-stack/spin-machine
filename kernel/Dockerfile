@@ -204,7 +204,7 @@ RUN <<EOT
     #                           cache still counts as reclaimable. Measured 2026-09-28, 1 GiB guest,
     #                           memory taken slowly while libraries are re-read, 3 boots: the worst
     #                           SSH login 611-1785 ms without it, 105-106 ms with it, and the
-    #                           process killed ~20% sooner (boot/memory_policy_test.go).
+    #                           process killed ~20% sooner (the memory-policy probe, 337c08d).
     #
     #                           Not ZRAM: in the same test it gave the runaway process more room
     #                           and it was killed later (20 s against 14), with the worst login
