@@ -23,12 +23,23 @@ byte. The values are immediates: once PAM0 is ram, 0xf0000-0x100000 reads zeroes
 `setup_hw` has shadowed the BIOS, so a table in `.rodata` would be read back as zeroes.
 i440fx keeps the loop; this machine is q35 and nothing here boots the other.
 
+## MTRRs
+
+Stock qboot never touches the MTRRs, so the guest boots with them disabled ("MTRRs disabled by
+BIOS"). Linux then maps every range it is asked to map write-back but does not know as RAM
+uncached-minus: a virtio-pmem region read at 8.3 MB/s, against 1.1 GB/s under SeaBIOS, which
+programs them (lab runs 36818224412 and 36818721809, 2026-10-01). `mtrr.patch` does what SeaBIOS
+does, on the boot CPU only - Linux gives its own MTRR state to the CPUs it starts: enabled,
+write-back by default, and the 32-bit PCI hole, from the top of low RAM to 4 GiB, uncacheable in
+naturally aligned power-of-two ranges. Fixed-range MTRRs stay off. If the hole does not fit the
+variable ranges the CPU has, they are left disabled rather than caching MMIO.
+
 ## Build
 
 `task qemu:build` builds it, in the `qboot` stage of `qemu/Dockerfile`, and it lands beside
 the SeaBIOS blobs as `_output/qemu/qboot.bin`, where a release, `task qemu:fetch` and CI all
 find it. The stage clones the pinned commit, verifies the SHA-256 of the tar `git archive`
-writes for it, applies `write-pointer.patch` and then `pam.patch` with no fuzz, and compiles with upstream's
+writes for it, applies `write-pointer.patch`, `pam.patch` and `mtrr.patch` with no fuzz, and compiles with upstream's
 meson.build flags plus `-Os`. It asserts on what came out: 65536 bytes, the ROM window it is
 linked for, and the patch's code in the tree that was compiled.
 
