@@ -158,7 +158,9 @@ jobs:
       # what went unchecked instead of being shown a pass.
       - name: Load vhost_vsock
         run: |
-          sudo modprobe vhost_vsock && sudo chmod 0666 /dev/vhost-vsock ||
+          # The device first: a kernel that builds it in - Spin OS's, which has no modules - has
+          # it from boot, and modprobe there has nothing to find.
+          { [ -c /dev/vhost-vsock ] || sudo modprobe vhost_vsock; } && sudo chmod 0666 /dev/vhost-vsock ||
             echo "no vhost_vsock here; the check will name vhost-vsock-pci as unchecked"
 
       # The other half of what a device allowlist decides. `task qemu:build` ends in
