@@ -155,4 +155,20 @@ for unit in apt-daily.timer apt-daily-upgrade.timer motd-news.timer dpkg-db-back
     ln -sf /dev/null "/etc/systemd/system/$unit"
 done
 
+# fstrim, hourly rather than the distribution's weekly. What a guest deletes stays in its
+# qcow2 overlay, allocated on the host's disk and held in the host's page cache, until a trim
+# reaches it: a 512 MB file written, read and removed kept 657 MB of the overlay in both, and
+# one fstrim took them to 21 MB and 20 MB (spin-machine lab run 36815822140, 2026-10-01). A
+# week is a long time for a host to hold a workspace's deleted build. ext4 only trims the
+# block groups that have freed something since their last trim, so a run with nothing to
+# give back is cheap. RandomizedDelaySec keeps the machines on a host from trimming at once.
+echo "Running fstrim hourly..."
+mkdir -p /etc/systemd/system/fstrim.timer.d
+cat > /etc/systemd/system/fstrim.timer.d/spin.conf <<'UNIT'
+[Timer]
+OnCalendar=
+OnCalendar=hourly
+RandomizedDelaySec=10min
+UNIT
+
 echo "✅ System configuration complete"
