@@ -284,6 +284,7 @@ var reclaimProbe = cacheProbe{
 		"memory.reclaim the file's MB",
 		"working set read",
 		"guest dropped its cache",
+		"a minute later",
 		"working set read",
 	},
 	script: cacheCommon + `mkdir -p $d; head -c 128M $f | split -b 8K -a 5 - $d/; sync
@@ -294,7 +295,11 @@ small; t=$(ms); small; w=$(( $(ms) - t )); cat $f > /dev/null; say 1 $w
 t=$(ms); echo %[1]dM > /sys/fs/cgroup/memory.reclaim 2>/dev/null; w=$(( $(ms) - t )); sleep 6; say 2 $w
 t=$(ms); small; say 3 $(( $(ms) - t ))
 echo 3 > /proc/sys/vm/drop_caches; sleep 6; say 4 0
-t=$(ms); small; say 5 $(( $(ms) - t ))
+# Free page reporting hands back a share of what is free each pass, and only blocks of its order:
+# whether what was freed but not yet reported (run 36879800428: 344 MB of guest RAM resident with
+# 1883 MB free) goes in time, or stays.
+sleep 60; say 5 0
+t=$(ms); small; say 6 $(( $(ms) - t ))
 rm -rf $f $d
 echo PAGECACHE-DONE > /dev/ttyS0
 `,
