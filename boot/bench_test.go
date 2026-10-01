@@ -42,48 +42,6 @@ type variant struct {
 // `systemd.mask=chrony.service` on the command line and `systemctl is-active chrony`
 // answering `active`. Anything concluded from that parameter is concluded from a boot in
 // which nothing was masked.
-// Rule files for hardware this machine cannot have. udev reads 49 of them and evaluates
-// them against the 266 devices it coldplugs; 32 reference cdrom, drm, input, alsa, hidraw,
-// tape, v4l, cameras, joysticks, mice, touchpads, graphics and sound cards, or a ProLiant's
-// power switch. They arrive with the udev package, not with anything this image asked for.
-//
-// Conservative on purpose. Not here and not maskable: 60-block and 60-persistent-storage
-// (vda), 60-serial (ttyS0), 71-seat (logind), the net-naming rules, 50-udev-default,
-// 80-debian-compat and 99-systemd. Masking one of those is a machine that does not boot or
-// a disk with no by-uuid link, and the point of the row is the ones that cannot matter.
-var impossibleRules = []string{
-	"60-cdrom_id.rules",
-	"60-drm.rules",
-	"60-evdev.rules",
-	"60-fido-id.rules",
-	"60-gpiochip.rules",
-	"60-persistent-alsa.rules",
-	"60-persistent-hidraw.rules",
-	"60-persistent-input.rules",
-	"60-persistent-storage-tape.rules",
-	"60-persistent-v4l.rules",
-	"60-sensor.rules",
-	"61-persistent-storage-android.rules",
-	"70-camera.rules",
-	"70-joystick.rules",
-	"70-mouse.rules",
-	"70-touchpad.rules",
-	"71-power-switch-proliant.rules",
-	"78-graphics-card.rules",
-	"78-sound-card.rules",
-}
-
-// maskedRules is what udev's own override mechanism is: a symlink to /dev/null in
-// /etc/udev/rules.d shadows the file of the same name in /usr/lib/udev/rules.d, exactly as
-// it works for units.
-func maskedRules() map[string]string {
-	m := map[string]string{}
-	for _, r := range impossibleRules {
-		m["/etc/udev/rules.d/"+r] = "/dev/null"
-	}
-	return m
-}
-
 // A drop-in on the instance beats one on the template, which is where the image's own TERM
 // drop-in lives, so these override it for one boot without touching the image.
 func gettyDropin(body string) map[string]string {
@@ -127,11 +85,19 @@ func without(units ...string) variant {
 
 func labelled(l string, v variant) variant { v.label = l; return v }
 
-func withFile(m map[string]string, path, content string) map[string]string {
-	m[path] = content
-	return m
-}
-
+// Rows measured against baseline and dropped once they had answered, each with what it found:
+//
+//   - logind out of the boot, and logind put back: 24 ms, now the image's (10-seats.conf,
+//     optimize-systemd.sh).
+//   - tmpfs /tmp against /tmp on the disk: 3 ms, within noise (220/232 against 223/230, 20
+//     boots, 2026-09-26); image/build.sh forbids the disk.
+//   - serial-getty Type=simple instead of Type=idle: within noise of the echo (2026-09-10).
+//   - loop.max_loop=0 8250.nr_uarts=1, and CONFIG_VT=n: no change to a login prompt
+//     (2026-09-26). udev's coldplug overlaps the boot rather than delaying it.
+//   - 19 udev rule files for hardware the machine cannot have, masked: no change, same day.
+//   - 300 more unit files nothing wants: 236 against 246, 12 boots, 2026-09-26. systemd's unit
+//     cache holds names and modification times, so this measures the scan, which is free; it
+//     does not measure parsing, which only units something pulls in pay for.
 var variants = []variant{
 	// The image as it is, with a real agetty rather than the echo every row below uses. It
 	// reads about a second slower and that is agetty's own sleep, not a fault to hunt: the
@@ -139,137 +105,6 @@ var variants = []variant{
 	// TERM=dumb on this unit changes nothing (1229 against 1232, 12 boots, 2026-09-26).
 	{label: "as shipped", cpus: "2", memory: "2048"},
 	{label: "baseline", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho)},
-	// The critical chain into multi-user.target, measured 2026-09-10:
-	//
-	//   multi-user.target @175ms
-	//   └─systemd-logind.service @111ms +63ms
-	//     └─basic.target @102ms
-	//       └─dbus-broker.service @151ms +7ms
-	//         └─sysinit.target @96ms
-	//           └─systemd-udev-trigger.service @60ms +35ms
-	//             └─system.slice @34ms
-	//
-	// logind is the tail and the most expensive single unit. It is a row rather than a
-	// deletion because a unit on the critical chain does not always give its time back when
-	// removed — something else becomes the tail. Which is exactly what happened, 15 boots
-	// each, p50/p95 to a usable machine:
-	//
-	//     baseline    262/296        sin logind   238/247
-	//     sin chrony  252/287        sin ambos    233/260
-	//
-	// logind is +63 ms on the chain and worth 24 ms to remove; chrony was 43 ms in blame and
-	// worth 10 ms; the two together were worth 29 and not 34, because they overlap. Read
-	// `systemd-analyze blame` as a list of suspects, never as a list of savings.
-	//
-	// The chrony rows are kept as the record of what removing it bought, and cannot be run
-	// again: there is no time daemon in the image since 2026-09-10 (see image/mkosi.conf).
-	labelled("sin logind", without("systemd-logind.service")),
-	// The inverse of what the image ships: logind put back into the boot transaction, which
-	// is the configuration this replaced. Since 2026-09-12 the want is overridden with a
-	// /dev/null symlink and the first login starts logind over its Varlink socket instead.
-	// 25 boots of each, same run, measured that day:
-	//
-	//     as shipped, deferred      248/275      logind at boot (this row)   272/294
-	//     deferred, no drop-in      244/264      at boot, with the drop-in   282/322
-	//     masked outright           241/265
-	//
-	// So deferring it is worth 24 ms, of which the drop-in gives 4 back for its fork, and
-	// masking it outright — which breaks every login — would be worth 7 more.
-	//
-	// This row neutralises the drop-in as well, and that is the whole reason it is written
-	// the long way instead of just restoring the want. With the drop-in left in place the
-	// same comparison reads 43 ms, because a service is implicitly ordered after the socket
-	// that triggers it: logind starting at boot then waits for an ExecStartPre fork that the
-	// shipped machine never puts on any path, and the row flatters the change by 19 ms.
-	//
-	// What makes the deferral possible is that drop-in rather than anything here:
-	// pam_systemd decides whether to register a session by calling logind_running(), which
-	// is access("/run/systemd/seats/") — a test for "is this a logind system", not "is
-	// logind up" — and on a false answer it logs "Skipping logind registration as logind is
-	// not running" and returns PAM_SUCCESS. Creating that directory on the Varlink socket,
-	// which carries Service=systemd-logind.service, is what gets pam_systemd as far as the
-	// connection that starts logind.
-	//
-	// Two dead ends on the way, both of which measure well *here* and leave a machine whose
-	// logins have no session, because the echo marker this row watches needs none:
-	//
-	//   - Ordering sshd after logind instead repairs SSH and only SSH, with `su -l` and the
-	//     console getty still landing with XDG_RUNTIME_DIR unset. Ordering the getty after
-	//     logind too repairs those and hands the saving straight back.
-	//   - RuntimeDirectory=systemd/seats on the socket, to make the directory without a
-	//     fork, creates nothing: a unit with no Exec* line never applies its execution
-	//     context. It benchmarked as the fastest row here because it *was* the masked
-	//     machine. ExecStartPre=/bin/true makes the directory appear, which is both the
-	//     proof and the reason the drop-in does not bother avoiding the fork.
-	//
-	// `task boot:logind` is what holds the half of this that a boot time cannot show.
-	{label: "logind at boot", cpus: "2", memory: "2048",
-		files: withFile(gettyDropin(gettyEcho),
-			"/etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf", "[Socket]\n"),
-		links: map[string]string{
-			"/etc/systemd/system/multi-user.target.wants/systemd-logind.service": "/lib/systemd/system/systemd-logind.service",
-		}},
-	// serial-getty is Type=idle, which holds the service until systemd's job queue is quiet.
-	// If that dominates, `usable` has been measuring the queue draining rather than the
-	// machine being ready — and it would have been invisible earlier, because the first test
-	// of Type=simple was run against a real agetty whose sleep(1) buried it.
-	{label: "getty no idle", cpus: "2", memory: "2048",
-		files: gettyDropin("Type=simple\n" + gettyEcho)},
-	// Devices udev does not have to walk. udev coldplugs 266 of them on this machine, and
-	// three families are for hardware it does not have: 64 virtual consoles (CONFIG_VT, on a
-	// machine whose QEMU ships no VGA), 8 unused loop devices, and three of the four 16550s.
-	// This row switches off the two that are boot parameters.
-	//
-	// Neither this nor CONFIG_VT=n, which removes a quarter of the devices, changes the time
-	// to a login prompt — measured 2026-09-26, and the kernel was built to be sure. udev's
-	// work overlaps the boot rather than delaying it, so a ranking of who spent time in early
-	// userspace is not a list of savings either.
-	//
-	// "Not at a login prompt" is the whole claim, and it is not the same as "not at all":
-	// the kernel phase can move by a couple of milliseconds that this harness cannot see,
-	// because it measures through ~139 ms of userspace whose own spread is wider. A
-	// kernel-config change belongs in `task boot:initcalls` first, and only here once it is
-	// large enough that a login prompt could show it.
-	labelled("fewer devices", variant{cpus: "2", memory: "2048",
-		files: gettyDropin(gettyEcho),
-		extra: "loop.max_loop=0 8250.nr_uarts=1"}),
-	// The other half of udev's work: not how many devices, but how many rule files each one
-	// is matched against. 19 of the 49 are for hardware this machine cannot have. No effect
-	// either, measured the same day; see the row above for why.
-	labelled("fewer udev rules", variant{cpus: "2", memory: "2048",
-		files: gettyDropin(gettyEcho),
-		links: maskedRules()}),
-	// What loading a unit file costs, measured by adding some.
-	//
-	// systemd reports "Loaded units and determined initial transaction in 212ms" on this
-	// machine, and what precedes it is "Modification times have changed, need to update cache"
-	// right after /run/systemd/generator.late — the generators write into the search path, so
-	// the cache systemd built moments earlier is stale and it rescans. That is how systemd
-	// starts, not a cache this image failed to pre-build: the persistent ones (ld.so.cache,
-	// the journal catalog, locale-archive) are built at image time and the services that would
-	// rebuild them are masked in optimize-systemd.sh.
-	//
-	// So the question is whether the *number* of units is what costs. The image carries 282 in
-	// /usr/lib/systemd/system and 65 in /etc/systemd/system, and this row adds 300 more that
-	// nothing wants. It costs nothing: 236 against the baseline's 246 over 12 boots,
-	// 2026-09-26, on a run whose p95s were wide enough that a per-unit cost of any size would
-	// still have shown at nearly double the count.
-	//
-	// What that does and does not settle, because the two are easy to confuse. systemd's unit
-	// cache holds names and modification times, not parsed units, and a unit nothing
-	// references is scanned and never loaded. So this measures the scan, and the scan is free.
-	// It does not measure parsing, which happens only for units something pulls in — and
-	// those cannot be added without also starting them, which would measure something else.
-	//
-	// The row stays because "we ship 282 unit files, that must be the boot" is a conclusion
-	// somebody will reach again, and this is the only thing that says it was measured.
-	labelled("300 more units", variant{cpus: "2", memory: "2048",
-		files: gettyDropin(gettyEcho),
-		setup: "for i in $(seq 1 300); do printf '[Unit]\\nDescription=filler %s\\n[Service]\\nType=oneshot\\nExecStart=/bin/true\\n' \"$i\" > \"$MNT/etc/systemd/system/spin-filler-$i.service\"; done"}),
-	// What a tmpfs /tmp and the boot's tmpfiles pass cost against the /tmp on the disk the
-	// image once shipped, which every copy of the disk carried. 20 boots of each, 2026-09-26,
-	// p50/p95 to a usable machine: baseline 223/230, this row 220/232 - 3 ms, within noise.
-	labelled("tmp on disk", without("tmp.mount", "systemd-tmpfiles-setup.service")),
 }
 
 // kernelB is the kernel SPIN_KERNEL_B names, resolved, or "" when it names none. A test
