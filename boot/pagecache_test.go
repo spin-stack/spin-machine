@@ -5,8 +5,10 @@ package boot_test
 import (
 	"bufio"
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -457,8 +459,9 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	edit.links = map[string]string{"/etc/systemd/system/multi-user.target.wants/pagecache.service": "../pagecache.service"}
 	editOverlay(t, overlay, edit)
 
+	qmpSock := filepath.Join(dir, "qmp.sock")
 	machine := append([]string{filepath.Join(out, "bin", "spin-machine"), "boot", "--release", out,
-		"--disk", overlay, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout",
+		"--disk", overlay, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout", "--qmp", qmpSock,
 		"--append", strings.TrimSpace("init=/sbin/init " + v.cmdline)}, v.flags...)
 	// A scope is systemd's, so the machine is started through sudo, as root - which changes
 	// nothing the probe measures - and found again by its cgroup; without one, spin-machine
@@ -541,6 +544,10 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	if seen != len(run.steps) {
 		t.Fatalf("the guest reported %d of %d steps; console tail:\n%s", seen, len(run.steps), tail([]byte(console.String()), 1500))
 	}
+	// A scope's QEMU is root's, and so is its socket.
+	if scope == "" {
+		run.notes = append(run.notes, discardNote(t, out, qmpSock, overlay))
+	}
 	if cgroup != "" {
 		raw, err := os.ReadFile(cgroup + "/memory.events")
 		if err != nil {
@@ -549,6 +556,69 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 		run.notes = append(run.notes, "memory.events: "+strings.Join(strings.Fields(string(raw)), " "))
 	}
 	return run
+}
+
+// discardNote is where the guest's discards went: how many QEMU's block layer took from the
+// guest (query-blockstats' unmap counters), and what the overlay's clusters are now by qemu-img
+// map - data, zeroes, or nothing allocated. The guest trimmed its free space just before.
+func discardNote(t *testing.T, out, socket, overlay string) string {
+	t.Helper()
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatalf("dialling QMP: %v", err)
+	}
+	defer func() { _ = conn.Close() }() // a diagnostic connection
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	q := &qmp{conn: conn, enc: json.NewEncoder(conn), dec: json.NewDecoder(conn)}
+	var greeting struct{ QMP *struct{} }
+	if err := q.dec.Decode(&greeting); err != nil {
+		t.Fatalf("reading the QMP greeting: %v", err)
+	}
+	q.do(t, "qmp_capabilities", nil)
+	var stats []struct {
+		Stats struct {
+			UnmapOperations int64 `json:"unmap_operations"`
+			UnmapBytes      int64 `json:"unmap_bytes"`
+			FailedUnmap     int64 `json:"failed_unmap_operations"`
+			InvalidUnmap    int64 `json:"invalid_unmap_operations"`
+		}
+	}
+	if err := json.Unmarshal(q.do(t, "query-blockstats", nil), &stats); err != nil {
+		t.Fatalf("reading query-blockstats: %v", err)
+	}
+	var unmap string
+	for _, s := range stats {
+		unmap += fmt.Sprintf(" %d ops %d MB (%d failed, %d invalid)", s.Stats.UnmapOperations, s.Stats.UnmapBytes>>20, s.Stats.FailedUnmap, s.Stats.InvalidUnmap)
+	}
+	// -U: the image is open in the running QEMU, and this only reads its tables.
+	raw, err := exec.Command(filepath.Join(out, "bin", "qemu-img"), "map", "-U", "--output=json", overlay).Output()
+	if err != nil {
+		t.Fatalf("qemu-img map: %v", err)
+	}
+	var extents []struct {
+		Length int64 `json:"length"`
+		Depth  int   `json:"depth"`
+		Zero   bool  `json:"zero"`
+		Data   bool  `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &extents); err != nil {
+		t.Fatalf("reading qemu-img map: %v", err)
+	}
+	var data, zero int64
+	for _, e := range extents {
+		if e.Depth != 0 {
+			continue // the base's, below the overlay
+		}
+		switch {
+		case e.Data:
+			data += e.Length
+		case e.Zero:
+			zero += e.Length
+		}
+	}
+	return fmt.Sprintf("discards QEMU took:%s; the overlay's own clusters: %d MB data, %d MB zero", unmap, data>>20, zero>>20)
 }
 
 // scopeQEMU is the pid of the QEMU in the scope at cgroup, waited for: systemd-run creates the
