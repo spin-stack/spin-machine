@@ -83,6 +83,18 @@ RUN --mount=type=cache,sharing=locked,id=image-mkosi-src,target=/var/cache/mkosi
     # Asks the binary just installed which version it is, rather than trusting the tag.
     test "$(mkosi --version)" = "mkosi ${MKOSI_VERSION}"
 
+# What install-dev-tools.sh downloads into the image, by content. It runs inside mkosi's tree,
+# which sees only what mkosi.conf's Environment= passes through, so each is an ENV here.
+ARG TASK_VERSION
+ARG TASK_SHA256
+ARG GIT_LFS_VERSION
+ARG GIT_LFS_SHA256
+ARG BUILDKIT_VERSION
+ARG BUILDKIT_SHA256
+ENV TASK_VERSION=${TASK_VERSION} TASK_SHA256=${TASK_SHA256} \
+    GIT_LFS_VERSION=${GIT_LFS_VERSION} GIT_LFS_SHA256=${GIT_LFS_SHA256} \
+    BUILDKIT_VERSION=${BUILDKIT_VERSION} BUILDKIT_SHA256=${BUILDKIT_SHA256}
+
 COPY image/mkosi.conf image/mkosi.postinst.chroot /work/
 COPY image/mkosi.extra /work/mkosi.extra
 COPY image/build.sh /usr/local/bin/build-base-image

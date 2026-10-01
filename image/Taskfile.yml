@@ -34,7 +34,7 @@ tasks:
           --platform linux/amd64 \
           --cache-from {{.IMAGE_CACHE_FROM}} \
           {{.IMAGE_CACHE_TO}} \
-          $({{.VERSIONS}} args ubuntu mkosi) \
+          $({{.VERSIONS}} args ubuntu mkosi task git-lfs buildkit) \
           --tag {{.IMAGE_BUILDER_TAG}} \
           --load \
           .
