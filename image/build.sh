@@ -368,6 +368,15 @@ for u in apt-daily.timer apt-daily-upgrade.timer motd-news.timer dpkg-db-backup.
         exit 1; }
 done
 
+# fstrim hourly, by configure-system.sh's drop-in, and still enabled: it is how what a guest
+# deletes leaves the host's disk and page cache.
+"$bin/debugfs" -R "cat /etc/systemd/system/fstrim.timer.d/spin.conf" /work/base.raw 2>/dev/null | grep -qx 'OnCalendar=hourly' || {
+    echo "ERROR: fstrim.timer does not run hourly - configure-system.sh's drop-in is missing" >&2
+    exit 1; }
+in_image /etc/systemd/system/timers.target.wants/fstrim.timer || {
+    echo "ERROR: fstrim.timer is not enabled" >&2
+    exit 1; }
+
 # The login banner is this image's own, and pam_motd is enabled for ssh to print it — so
 # whatever is in /etc/update-motd.d now runs on every login. That is the reason to assert
 # both halves rather than only the one that was added: the distribution's scripts reach the
