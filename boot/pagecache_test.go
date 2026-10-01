@@ -61,7 +61,8 @@ import (
 //     at lower ones. (reclaimProbe)
 //
 //     SPIN_PAGE_CACHE=1   run at all
-//     SPIN_PAGE_CACHE_ONLY=<regexp>  only the subtests whose name matches: cold boot, caches, reclaim
+//     SPIN_PAGE_CACHE_ONLY=<regexp>  only the subtests whose name matches: cold boot, caches, reclaim,
+//     reclaimers (which needs a kernel with DAMON; see reclaimersProbe)
 //     REPS=<n>            boots per variant (default 5)
 //     FILE_MB=<n>         the file the guest writes and reads (default 512, a quarter of the
 //     guest's memory: the overlay is made 2 GiB and the guest's root grown into it)
@@ -90,6 +91,7 @@ func TestPageCache(t *testing.T) {
 		{"cold boot", func(t *testing.T) { coldBoots(t, out, reps) }},
 		{"caches", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, cachesProbe) }},
 		{"reclaim", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimProbe) }},
+		{"reclaimers", func(t *testing.T) { cacheSteps(t, out, reps, fileMB, reclaimersProbe) }},
 	} {
 		if only.MatchString(sub.name) {
 			t.Run(sub.name, sub.run)
@@ -197,6 +199,8 @@ type cacheVariant struct {
 	// guest's RAM and the host's page cache for its disk are charged to it, so the host's copy
 	// of the overlay is bounded per machine instead of by the host's free memory.
 	memoryHighMB int
+	// reclaimer names what gives the guest's cache back in reclaimersProbe.
+	reclaimer string
 }
 
 var (
@@ -298,6 +302,62 @@ echo PAGECACHE-DONE > /dev/ttyS0
 	},
 }
 
+// reclaimersProbe is what each way of giving the guest's cache back does to a working set that
+// is in use: the working set read every 5 s for 40 s while a file read once sits beside it, and
+// the reclaimer under test working - memory.reclaim at the end, DAMON_RECLAIM throughout (pages
+// idle 10 s and more, anonymous ones skipped, its watermarks opened so free memory does not stop
+// it), or MGLRU aged at the start and its older generations evicted at the end, which sorts the
+// working set's accessed folios out of them first. Then QEMU's memory, and the working set read
+// once more. DAMON and the lru_gen file need a kernel with CONFIG_DAMON_RECLAIM and debugfs:
+// the release's has neither DAMON, so this runs on the lab's kernel_run, variant instead.
+var reclaimersProbe = cacheProbe{
+	title: "read once beside a working set in use for 40 s, and reclaimed",
+	steps: []string{
+		"idle",
+		"cache full, working set read",
+		"40 s in use, reclaimed",
+		"working set read",
+	},
+	script: cacheCommon + `mkdir -p $d; head -c 128M $f | split -b 8K -a 5 - $d/; sync
+r=$(cat /etc/pagecache-reclaimer)
+lg=/sys/kernel/debug/lru_gen
+dr=/sys/module/damon_reclaim/parameters
+fail() { echo "PAGECACHE-FAILED $*" > /dev/ttyS0; exit 1; }
+echo 3 > /proc/sys/vm/drop_caches
+small; t=$(ms); small; w=$(( $(ms) - t )); cat $f > /dev/null; say 1 $w
+case $r in
+damon)
+	[ -d $dr ] || fail "no $dr"
+	echo 10000000 > $dr/min_age; echo Y > $dr/skip_anon
+	echo 1000 > $dr/wmarks_high; echo 999 > $dr/wmarks_mid; echo 0 > $dr/wmarks_low
+	echo Y > $dr/enabled ;;
+lru_gen)
+	[ -w $lg ] || fail "no $lg"
+	id=$(awk '$1 == "memcg" && $3 == "/" { print $2; exit }' $lg)
+	max=$(awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg)
+	echo "+ $id 0 $max" > $lg || fail "aging memcg $id gen $max" ;;
+esac
+for i in 1 2 3 4 5 6 7 8; do small; sleep 5; done
+case $r in
+memory.reclaim) echo %[1]dM > /sys/fs/cgroup/memory.reclaim 2>/dev/null ;;
+lru_gen)
+	max=$(awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg)
+	echo "- $id 0 $(( max - 2 ))" > $lg || fail "evicting memcg $id up to gen $(( max - 2 ))" ;;
+damon) echo "PAGECACHE-NOTE damon_reclaim $(grep -H . $dr/nr_reclaimed_regions $dr/bytes_reclaimed_regions 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0 ;;
+esac
+sleep 6; say 2 0
+t=$(ms); small; say 3 $(( $(ms) - t ))
+rm -rf $f $d
+echo PAGECACHE-DONE > /dev/ttyS0
+`,
+	variants: []cacheVariant{
+		{label: "nothing", reclaimer: "none"},
+		{label: "memory.reclaim", reclaimer: "memory.reclaim"},
+		{label: "DAMON_RECLAIM, 10 s idle", reclaimer: "damon"},
+		{label: "lru_gen aged and evicted", reclaimer: "lru_gen"},
+	},
+}
+
 const cacheUnit = `[Unit]
 Description=page cache probe
 After=multi-user.target
@@ -393,6 +453,7 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	edit.setup = `resize2fs "$(findmnt -no SOURCE "$MNT")" >/dev/null`
 	edit.files["/usr/local/sbin/pagecache.sh"] = fmt.Sprintf(probe.script, fileMB)
 	edit.files["/etc/systemd/system/pagecache.service"] = cacheUnit
+	edit.files["/etc/pagecache-reclaimer"] = v.reclaimer
 	edit.links = map[string]string{"/etc/systemd/system/multi-user.target.wants/pagecache.service": "../pagecache.service"}
 	editOverlay(t, overlay, edit)
 
