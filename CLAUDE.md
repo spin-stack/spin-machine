@@ -171,8 +171,8 @@ machine at start-up.
 hand. A one-off check goes through it: do not write a Python or shell harness that rebuilds
 its command line, speaks QMP, or makes overlays itself. A harness like that tests itself and
 not the definition, and it is thrown away with what it found. If the CLI cannot do what the
-check needs, and the check is part of the machine's contract (a device on a hotplug port, a
-save, a restore), add it to the CLI. If the check should be repeated, it belongs in `boot/`
+check needs, and the check is part of the machine's contract (a disk hotplugged, a save,
+a restore), add it to the CLI. If the check should be repeated, it belongs in `boot/`
 as a Task target.
 
 - **Rebuild it first.** `_output/bin/spin-machine` is whatever `task tools` last built, so

@@ -243,7 +243,6 @@ func TestAnUnnamedCPUFollowsTheAccelerator(t *testing.T) {
 	}
 }
 
-// A disk arriving at run time is the same modern-only virtio device a disk given at start
 // A disk arriving at run time is a SCSI disk at the target it was asked for, on the machine's
 // controller, and its serial is left out rather than sent empty.
 func TestHotplugDisk(t *testing.T) {
@@ -820,9 +819,8 @@ func TestHostCPUModelReadsThisHost(t *testing.T) {
 	}
 }
 
-// Resuming a VM rather than booting one. The URI form was declared in Spec and
-// never emitted, so `boot -incoming file:/path/state` started a fresh guest and
-// reported success — a restore that silently is not one.
+// Resuming a VM rather than booting one: a URI the command line does not carry is a
+// fresh guest that reports success, a restore that silently is not one.
 func TestIncomingNamesTheSourceOnTheCommandLine(t *testing.T) {
 	for _, tc := range []struct {
 		what string
