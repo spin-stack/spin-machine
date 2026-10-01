@@ -45,7 +45,7 @@ func TestFirmwareStages(t *testing.T) {
 	reps := envInt(t, "REPS", 10)
 	initrd := probeInitrd(t)
 
-	flags := strings.Fields(orElse("--cpus 1 --memory 512 --max-cpus 16 --max-memory 8192 --hotplug-disks 1", os.Getenv("FLAGS")))
+	flags := strings.Fields(cmp.Or(os.Getenv("FLAGS"), "--cpus 1 --memory 512 --max-cpus 16 --max-memory 8192 --hotplug-disks 1"))
 	flags = append([]string{"--disk", "-", "--initrd", initrd, "--console", "file:/dev/stdout"}, flags...)
 	cli := filepath.Join(out, "bin", "spin-machine")
 	type variant struct {
