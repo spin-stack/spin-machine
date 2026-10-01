@@ -371,7 +371,7 @@ tasks:
     deps: [tools]
     vars:
       OUT: '{{.OUT | default (printf "%s/report.json" .OUTPUT_ABS)}}'
-      REPS: '{{.REPS | default "3"}}'
+      REPS: '{{.REPS | default "20"}}'
     cmds:
       # TMPDIR on disk, because the overlays and memory files go there: gigabytes a tmpfs
       # /tmp holds in RAM.

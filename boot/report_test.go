@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spin-stack/spin-machine/boot"
 )
@@ -34,9 +33,9 @@ type choice struct {
 // is the same on every host and every run.
 const diskFile = "/report/disk.qcow2"
 
+// KVM only. The TCG build is for CI runners without /dev/kvm, where a boot is ~4 s of emulation:
+// timing it says nothing about a host, and its rows were most of a report's minutes.
 var axes = []axis{
-	// The KVM build a host runs, and the TCG build that has no /dev/kvm to ask.
-	{"accel", []choice{{"kvm", nil}, {"tcg", []string{"--accel", "tcg"}}}},
 	// RAM fixed at its boot size, or with a ceiling reached through virtio-mem.
 	{"memory", []choice{
 		{"anonymous", nil},
@@ -72,10 +71,10 @@ func combinations() [][]choice {
 //	SPIN_REPORT=<file>         run at all, and where the JSON goes
 //	SPIN_REPORT_FLAGS="..."    spin-machine boot flags added to every boot, recorded
 //	SPIN_REPORT_ONLY=<regexp>  only the rows whose id matches, for iterating on one question
-//	REPS=<n>                   boots per row (default 3)
+//	REPS=<n>                   boots per row (default 20)
 //
 // Needs /dev/kvm and a built release tree (SPIN_MACHINE_OUTPUT, or _output). The vsock rows
-// need /dev/vhost-vsock, the TCG rows the release's TCG build; without them those rows are
+// need /dev/vhost-vsock; without it those rows are
 // listed as skipped rather than reported as failing. With sudo and /dev/nbd0 the getty is
 // replaced by an echo, as in TestBootCost, and every variant of the image runs; without them
 // the usable column carries agetty's second and the variants that edit the image are skipped.
@@ -85,7 +84,7 @@ func TestReport(t *testing.T) {
 		t.Skip("set SPIN_REPORT=<file>: this boots every combination of the machine's features")
 	}
 	out := releaseDir(t)
-	reps := envInt(t, "REPS", 3)
+	reps := envInt(t, "REPS", 20)
 	flags := strings.Fields(os.Getenv("SPIN_REPORT_FLAGS"))
 	only, err := regexp.Compile(os.Getenv("SPIN_REPORT_ONLY"))
 	if err != nil {
@@ -118,9 +117,6 @@ func TestReport(t *testing.T) {
 		missing["vsock=on"] = "no usable /dev/vhost-vsock: " + err.Error()
 	} else {
 		_ = f.Close()
-	}
-	if _, err := os.Stat(filepath.Join(out, "bin/qemu-system-x86_64-tcg")); err != nil {
-		missing["accel=tcg"] = "no TCG build in the release"
 	}
 
 	// One boot nobody measures. The first after the release was written or the host started
@@ -161,9 +157,6 @@ func TestReport(t *testing.T) {
 
 		v := variant{label: row.ID, cpus: "2", memory: "2048", files: login,
 			flags: rowFlags}
-		if row.Features["accel"] == "tcg" {
-			v.timeout = 5 * time.Minute
-		}
 		row.Boot = measure(t, out, v, reps)
 		r.Specs = append(r.Specs, row)
 	}

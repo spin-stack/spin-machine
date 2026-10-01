@@ -34,7 +34,6 @@ type variant struct {
 	profile bool              // boot with `--profile`: initcall profiling, console silent
 	setup   string            // shell run with the overlay mounted, $MNT its root
 	flags   []string          // spin-machine boot flags after the rest: the feature matrix's axes
-	timeout time.Duration     // how long a boot may take before it is a hang; 70 s when zero
 }
 
 // Masks are written into the overlay and never passed as `systemd.mask=`. That parameter is
@@ -540,7 +539,7 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 	// The cap is for a machine that hangs. The normal path is Watch returning at the login
 	// prompt, and then this kills a machine that is working perfectly — which is the point:
 	// nothing after the phase being measured is being measured.
-	timer := time.AfterFunc(cmp.Or(v.timeout, 70*time.Second), kill)
+	timer := time.AfterFunc(70*time.Second, kill)
 	defer func() { timer.Stop(); kill(); _ = cmd.Wait() }()
 
 	run, err := boot.Watch(stdout, t0, time.Now, boot.Usable)

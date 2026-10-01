@@ -80,8 +80,11 @@ echo "Firmware:"
 for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom qboot.bin; do
   require "${OUTPUT_DIR}/qemu/${f}" "${SHARE}/qemu/${f}" "firmware ${f}"
 done
-require qemu/qboot/write-pointer.patch "${SHARE}/qemu/qboot-write-pointer.patch" "qboot's patch"
-require qemu/qboot/pam.patch "${SHARE}/qemu/qboot-pam.patch" "qboot's patch"
+# Every patch in the directory, not a list of them: mtrr.patch was added to the build and not to
+# a list here, and v20261001.01 shipped a qboot.bin without the change it was built with.
+for p in qemu/qboot/*.patch; do
+  require "$p" "${SHARE}/qemu/qboot-$(basename "$p")" "qboot's patch $(basename "$p")"
+done
 require qemu/qboot/COPYING "${SHARE}/qemu/qboot-COPYING" "qboot's licence"
 # The patches QEMU is built with, for the same reason: a changed GPL source is distributed with
 # its changes. Read from the tree, as qboot's are: the binaries were built from this commit.
@@ -156,7 +159,7 @@ QEMU ${QEMU_VERSION}
   binaries: usr/share/spin-stack/bin/qemu-system-x86_64
             usr/share/spin-stack/bin/qemu-system-x86_64-tcg
             usr/share/spin-stack/bin/qemu-img
-  firmware: usr/share/spin-stack/qemu/*, except patches/, qboot.bin and the three qboot files below
+  firmware: usr/share/spin-stack/qemu/*, except patches/, qboot.bin and the qboot files below
   source:   https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz
   sha256:   ${QEMU_SHA256}
   built by: qemu/Dockerfile, with usr/share/spin-stack/qemu/patches applied to that source
@@ -167,8 +170,8 @@ qboot ${QBOOT_COMMIT}
   source:   https://github.com/bonzini/qboot, commit ${QBOOT_COMMIT}; the sha256 of what
             \`git archive\` writes for it is ${QBOOT_ARCHIVE_SHA256}
   licence:  GPL-2.0, usr/share/spin-stack/qemu/qboot-COPYING
-  built by: qemu/Dockerfile's qboot stage, with usr/share/spin-stack/qemu/qboot-write-pointer.patch
-            and then qboot-pam.patch applied to that source, and the compiler flags in that file
+  built by: qemu/Dockerfile's qboot stage, with usr/share/spin-stack/qemu/qboot-*.patch applied
+            to that source in the order that file applies them, and its compiler flags
 
 e2fsprogs ${E2FSPROGS_VERSION}
   binaries: usr/share/spin-stack/bin/mkfs.ext4, debugfs, e2fsck, dumpe2fs
