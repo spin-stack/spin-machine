@@ -251,6 +251,9 @@ echo 3 > /proc/sys/vm/drop_caches
 t=$(ms); small; say 4 $(( $(ms) - t ))
 echo 3 > /proc/sys/vm/drop_caches; sleep 6; say 5 0
 rm -rf $f $d
+# fstrim skips extents ext4 has freed but not yet committed: right after the rm it trimmed only
+# the base's free space and none of the file (run 36812647428). sync commits them first.
+sync
 echo "PAGECACHE-NOTE $(fstrim -v / 2>&1); root $(findmnt -no OPTIONS /); vda discard_max_bytes $(cat /sys/block/vda/queue/discard_max_bytes) granularity $(cat /sys/block/vda/queue/discard_granularity) write_zeroes_max_bytes $(cat /sys/block/vda/queue/write_zeroes_max_bytes)" > /dev/ttyS0
 sync; sleep 6; say 6 0
 echo PAGECACHE-DONE > /dev/ttyS0
