@@ -36,7 +36,7 @@ echo "PMEM-NOTE $(findmnt -no SOURCE,FSTYPE,OPTIONS / | tr '\n' ' '); $(findmnt 
 # Whether the pmem region itself is slow, and how the guest maps it: a 256 MB read of the raw
 # device, the region in /proc/iomem, and the uncached and write-combining ranges PAT holds.
 mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug
-echo "PMEM-NOTE raw $(dd if=/dev/pmem0 of=/dev/null bs=1M count=256 2>&1 | tail -1); iomem $(grep -i -E 'pmem|persistent' /proc/iomem | tr -s ' ' | tr '\n' ' '); pat $(grep -i -E 'uncached|write-combining' /sys/kernel/debug/x86/pat_memtype_list 2>/dev/null | tail -4 | tr '\n' ' ')" > /dev/ttyS0
+echo "PMEM-NOTE raw $(dd if=/dev/pmem0 of=/dev/null bs=1M count=256 2>&1 | tail -1); iomem $(grep -i -E 'pmem|persistent' /proc/iomem | tr -s ' ' | tr '\n' ' '); pat $(grep -i '0x00000001[0-3]' /sys/kernel/debug/x86/pat_memtype_list 2>/dev/null | head -4 | tr '\n' ' '); pat_enabled $(grep -c . /sys/kernel/debug/x86/pat_memtype_list 2>/dev/null) entries, $(grep -o 'x86/PAT.*' /dev/null; dmesg | grep -i -m2 'PAT' | tr '\n' ' ')" > /dev/ttyS0
 sync; echo 3 > /proc/sys/vm/drop_caches
 say 0 0
 t=$(ms); usr; say 1 $(( $(ms) - t ))
@@ -111,7 +111,10 @@ func pmemCompare(t *testing.T, out string, reps int) {
 
 	// Run 36811489671 read /dev/pmem0 at 8.3 MB/s whatever the filesystem: how QEMU maps the
 	// file is the question now, so ext4 only, in each mapping.
-	variants := []string{"qcow2 chain", "pmem ext4 DAX, share=on,readonly=on", "pmem ext4 DAX, share=off", "pmem ext4 DAX, share=on"}
+	// Run 36816626039: QEMU maps the region as RAM in a KVM memslot, in every mapping, and it
+	// still reads at 8.3 MB/s. Whether the guest maps it uncached is what nopat says: with PAT
+	// off the guest cannot ask for anything but write-back.
+	variants := []string{"qcow2 chain", "pmem ext4 DAX, share=on,readonly=on", "pmem ext4 DAX nopat, share=on,readonly=on"}
 	got := map[string][][]pmemStep{}
 	var notes = map[string]string{}
 	for range reps {
@@ -164,7 +167,11 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemS
 	args := []string{"boot", "--release", out, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout", "--qmp", qmpSock}
 	cached := raw
 	fstype := "ext4"
-	_, opts, _ := strings.Cut(v, "DAX, ")
+	_, opts, _ := strings.Cut(v, ", ")
+	extra := ""
+	if strings.Contains(v, "nopat") {
+		extra = " nopat"
+	}
 	switch v {
 	case "pmem + erofs DAX":
 		cached, fstype = erofs, "erofs"
@@ -186,7 +193,7 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemS
 		}
 		mustRun(t, filepath.Join(out, "bin", "mkfs.ext4"), "-q", "-F", upper)
 		args = append(args, "--pmem", cached, "--pmem-opts", opts, "--disk", upper, "--disk-format", "raw", "--root", "/dev/pmem0",
-			"--append", "init=/sbin/overlay-init ro rootfstype="+fstype+" rootflags=dax=always")
+			"--append", "init=/sbin/overlay-init ro rootfstype="+fstype+" rootflags=dax=always"+extra)
 	}
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
