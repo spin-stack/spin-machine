@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,14 +57,26 @@ func (r *repo) commit(subject string, files map[string]*string) {
 
 func s(v string) *string { return &v }
 
+// versionsAt is a versions.yaml with qemu at a version and debian's digest at a pin.
 const versionsAt = `# pins
 - name: qemu
   kind: download
+  source: https://download.qemu.org/qemu-{version}.tar.xz
   version: %s
-- name: alpine
+  pin: 079ffbff8a7111bbc89022107cbabf3bbfd614d5fc9d7cc675991196aca12482
+  track: tags https://gitlab.com/qemu-project/qemu.git
+- name: debian
   kind: image
-  version: "3.22"
+  source: debian
+  version: trixie
+  pin: sha256:%s
+  track: digest
 `
+
+const (
+	digestA = "9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c"
+	digestB = "294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
+)
 
 // The notes say, for one release against the one before it, every way the tree that builds the
 // machine changed: the commits by the part they touched, a pin that moved, a kernel option turned
@@ -72,7 +85,7 @@ const versionsAt = `# pins
 func TestTheNotesSayWhatChangedInTheMachine(t *testing.T) {
 	r := newRepo(t)
 	r.commit("the first release", map[string]*string{
-		"versions.yaml":                     s(strings.Replace(versionsAt, "%s", "11.1.0", 1)),
+		"versions.yaml":                     s(fmt.Sprintf(versionsAt, "11.1.0", digestA)),
 		"kernel/config-7.3-x86_64":          s("CONFIG_DEVMEM=y\n# CONFIG_BPF_LSM is not set\nCONFIG_HZ=100\n"),
 		"qemu/patches/0001-old.patch":       s("Subject: [PATCH] vl: the old change\n\ndiff\n"),
 		"kernel/patches/0001-keep.patch":    s("Subject: [PATCH 1/2] keep: this one\n stays\n\ndiff\n"),
@@ -95,7 +108,8 @@ func TestTheNotesSayWhatChangedInTheMachine(t *testing.T) {
 		"qemu/patches/0001-old.patch":       nil,
 	})
 	r.commit("image: fstrim hourly (#76)", map[string]*string{"image/mkosi.extra/etc/fstrim.conf": s("hourly\n")})
-	r.commit("qemu: bump to 11.1.1", map[string]*string{"versions.yaml": s(strings.Replace(versionsAt, "%s", "11.1.1", 1))})
+	r.commit("qemu: bump to 11.1.1", map[string]*string{"versions.yaml": s(fmt.Sprintf(versionsAt, "11.1.1", digestA))})
+	r.commit("debian: the digest under trixie moved", map[string]*string{"versions.yaml": s(fmt.Sprintf(versionsAt, "11.1.1", digestB))})
 	r.commit("qboot: say what the patches are", map[string]*string{"qemu/qboot/README.md": s("each patch, and why\n")})
 	r.commit("boot: a probe (#77)", map[string]*string{"boot/report_test.go": s("package boot // more\n")})
 	r.commit("spin-machine: a flag and a lab step", map[string]*string{
@@ -118,6 +132,7 @@ func TestTheNotesSayWhatChangedInTheMachine(t *testing.T) {
 		{"### Base image", "- image: fstrim hourly (#76)"},
 		{"### The machine's definition and the spin-machine CLI", "- spin-machine: a flag and a lab step"},
 		{"### Pins (versions.yaml)", "- `qemu` `11.1.0` → `11.1.1`"},
+		{"### Pins (versions.yaml)", "- `debian` `trixie` pin `9cc080028c43` → `294b683cb724`"},
 		{"### Kernel configuration", "- `CONFIG_BPF_LSM` n → y"},
 		{"### Kernel configuration", "- `CONFIG_DEVMEM` y → n"},
 		{"### Kernel configuration", "- `CONFIG_HZ` 100 → 1000"},
@@ -154,7 +169,7 @@ func underHeading(from string) string {
 // not know, and a release built from the same tree as the one before it.
 func TestTheCommandSaysWhyItWroteNothing(t *testing.T) {
 	r := newRepo(t)
-	r.commit("the first release", map[string]*string{"versions.yaml": s("- name: qemu\n  version: 11.1.1\n")})
+	r.commit("the first release", map[string]*string{"versions.yaml": s(fmt.Sprintf(versionsAt, "11.1.1", digestA))})
 	r.git("tag", "v1")
 	for _, tc := range []struct {
 		name   string
