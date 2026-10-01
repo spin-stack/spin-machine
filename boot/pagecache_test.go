@@ -334,6 +334,8 @@ damon)
 	echo 1000 > $dr/wmarks_high; echo 999 > $dr/wmarks_mid; echo 0 > $dr/wmarks_low
 	echo Y > $dr/enabled ;;
 lru_gen)
+	# The image masks sys-kernel-debug.mount, so debugfs is not mounted unless asked for.
+	mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug || fail "mounting debugfs"
 	[ -w $lg ] || fail "no $lg"
 	id=$(awk '$1 == "memcg" && $3 == "/" { print $2; exit }' $lg)
 	max=$(awk -v id="$id" '$1 == "memcg" { m = $2 == id } m && $1 == "node" { n = $2 == 0 } m && n && $1 ~ /^[0-9]+$/ { g = $1 } END { print g }' $lg)
