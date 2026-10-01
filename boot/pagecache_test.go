@@ -290,6 +290,7 @@ var reclaimProbe = cacheProbe{
 		"guest dropped its cache",
 		"a minute later",
 		"working set read",
+		"768 MB touched",
 	},
 	script: cacheCommon + `mkdir -p $d; head -c 128M $f | split -b 8K -a 5 - $d/; sync
 [ -w /sys/fs/cgroup/memory.reclaim ] || { echo "PAGECACHE-FAILED no /sys/fs/cgroup/memory.reclaim" > /dev/ttyS0; exit 1; }
@@ -304,7 +305,11 @@ echo 3 > /proc/sys/vm/drop_caches; sleep 6; say 4 0
 # 1883 MB free) goes in time, or stays.
 sleep 60; say 5 0
 t=$(ms); small; say 6 $(( $(ms) - t ))
+# What a workspace pays to use memory again once it was given back: 768 MB written to a tmpfs,
+# each page of it faulted in on the host - in huge pages where the host still has them whole.
 rm -rf $f $d
+t=$(ms); dd if=/dev/zero of=/dev/shm/touch bs=1M count=768 status=none; say 7 $(( $(ms) - t ))
+rm -f /dev/shm/touch
 echo PAGECACHE-DONE > /dev/ttyS0
 `,
 	// QEMU's memory stayed near 400 MB after the guest freed everything, against 208 MB idle:
@@ -441,6 +446,10 @@ type cacheStep struct {
 	guestCache, guestFree, ms        float64
 	qemuRSS, overlayCache, baseCache float64
 	overlayAlloc, ramRSS             float64
+	// qemuCPU is the CPU QEMU had used by then, in ms, all its threads and the guest's vCPUs
+	// among them: what giving memory back costs is how much more it climbs. ramHuge is how much
+	// of the guest's RAM the host still backs with huge pages, in MB.
+	qemuCPU, ramHuge float64
 }
 
 // cacheRun is one boot's steps, and what it said beside them: the guest's PAGECACHE-NOTE lines
@@ -463,12 +472,12 @@ func cacheSteps(t *testing.T, out string, reps, fileMB int, probe cacheProbe) {
 	fmt.Fprintf(&b, "\na %d MB file %s in a 2048 MB guest, p50 over %d boots; MB but the I/O's ms.\n", fileMB, probe.title, reps)
 	fmt.Fprintf(&b, "host: QEMU's resident memory, the overlay's and the base image's pages in the host's page cache, the overlay's allocated size\n\n")
 	for _, v := range probe.variants {
-		fmt.Fprintf(&b, "%s\n%-30s %8s %8s %8s %9s %9s %9s %9s %9s\n", v.label, "STEP", "I/O ms", "G.CACHE", "G.FREE", "QEMU RSS", "OVERLAY", "BASE", "ALLOC", "GUEST RAM")
+		fmt.Fprintf(&b, "%s\n%-30s %8s %8s %8s %9s %9s %9s %9s %9s %9s %9s\n", v.label, "STEP", "I/O ms", "G.CACHE", "G.FREE", "QEMU RSS", "OVERLAY", "BASE", "ALLOC", "GUEST RAM", "RAM HUGE", "QEMU CPU")
 		for i, name := range probe.steps {
-			var col [8][]float64
+			var col [10][]float64
 			for _, run := range got[v.label] {
 				s := run.steps[i]
-				for j, x := range []float64{s.ms, s.guestCache, s.guestFree, s.qemuRSS, s.overlayCache, s.baseCache, s.overlayAlloc, s.ramRSS} {
+				for j, x := range []float64{s.ms, s.guestCache, s.guestFree, s.qemuRSS, s.overlayCache, s.baseCache, s.overlayAlloc, s.ramRSS, s.ramHuge, s.qemuCPU} {
 					col[j] = append(col[j], x)
 				}
 			}
@@ -598,9 +607,12 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 		if s.qemuRSS, err = rss(pid); err != nil {
 			t.Fatal(err)
 		}
+		if s.qemuCPU, err = cpuMS(pid); err != nil {
+			t.Fatal(err)
+		}
 		// A scope's QEMU is root's, and its smaps are not this test's to read.
 		if scope == "" {
-			if s.ramRSS, err = guestRAM(pid, 2048); err != nil {
+			if s.ramRSS, s.ramHuge, err = guestRAM(pid, 2048); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -747,27 +759,52 @@ func rss(pid int) (float64, error) {
 	return 0, fmt.Errorf("/proc/%d/status has no VmRSS", pid)
 }
 
-// guestRAM is the resident memory, in MB, of pid's mapping that is the guest's RAM: the one
-// anonymous mapping of exactly the machine's memory, sizeMB.
-func guestRAM(pid, sizeMB int) (float64, error) {
+// guestRAM is the resident memory, in MB, of pid's mapping that is the guest's RAM - the one
+// anonymous mapping of exactly the machine's memory, sizeMB - and how much of it the host backs
+// with transparent huge pages.
+func guestRAM(pid, sizeMB int) (resident, huge float64, err error) {
 	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/smaps", pid))
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	var inRAM bool
+	var inRAM, found bool
 	for l := range strings.Lines(string(raw)) {
 		f := strings.Fields(l)
 		switch {
 		case len(f) == 0:
 		case strings.Contains(f[0], "-") && !strings.HasSuffix(f[0], ":"):
+			if inRAM && found {
+				return resident, huge, nil
+			}
 			inRAM = false
 		case f[0] == "Size:" && len(f) > 1:
 			inRAM = num(f[1]) == float64(sizeMB)*1024
 		case f[0] == "Rss:" && inRAM && len(f) > 1:
-			return kb(f[1]), nil
+			resident, found = kb(f[1]), true
+		case f[0] == "AnonHugePages:" && inRAM && len(f) > 1:
+			huge = kb(f[1])
 		}
 	}
-	return 0, fmt.Errorf("/proc/%d/smaps has no mapping of %d MB", pid, sizeMB)
+	if !found {
+		return 0, 0, fmt.Errorf("/proc/%d/smaps has no mapping of %d MB", pid, sizeMB)
+	}
+	return resident, huge, nil
+}
+
+// cpuMS is the CPU pid has used, user and system, in ms: utime and stime of /proc/<pid>/stat,
+// counted in clock ticks of 10 ms.
+func cpuMS(pid int) (float64, error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, err
+	}
+	// The name in parentheses may hold spaces; the fields that follow it do not.
+	_, rest, ok := strings.Cut(string(raw), ") ")
+	f := strings.Fields(rest)
+	if !ok || len(f) < 13 {
+		return 0, fmt.Errorf("reading /proc/%d/stat: %q", pid, raw)
+	}
+	return (num(f[11]) + num(f[12])) * 10, nil
 }
 
 // resident is how many MB of the file at p are in the host's page cache, and the file's size in
