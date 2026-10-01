@@ -8,7 +8,9 @@ package boot_test
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -153,7 +155,13 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemS
 	t.Helper()
 	dir := t.TempDir()
 	qemuImg := filepath.Join(out, "bin", "qemu-img")
-	args := []string{"boot", "--release", out, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout"}
+	sockDir, err := os.MkdirTemp("/tmp", "pm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) }) // a socket QEMU made
+	qmpSock := filepath.Join(sockDir, "q.sock")
+	args := []string{"boot", "--release", out, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout", "--qmp", qmpSock}
 	cached := raw
 	fstype := "ext4"
 	_, opts, _ := strings.Cut(v, "DAX, ")
@@ -223,6 +231,14 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemS
 		i, _ := strconv.Atoi(m[1])
 		s := &steps[i]
 		s.guestCache, s.guestFree, s.ms = kb(m[2]), kb(m[3]), num(m[4])
+		// How many times the guest left for QEMU to emulate an access, idle and after the
+		// first read: a region KVM does not map as memory is one exit per load.
+		if i <= 1 {
+			note += fmt.Sprintf("step %d kvm %s; ", i, kvmExits(pid))
+		}
+		if i == 1 {
+			note += qemuSays(t, qmpSock) + "; "
+		}
 		if s.rssAnon, s.rssFile, err = rssSplit(pid); err != nil {
 			t.Fatal(err)
 		}
@@ -235,6 +251,41 @@ func pmemBoot(t *testing.T, out, v, lower, raw, erofs, noinline string) ([]pmemS
 		t.Fatalf("%s: the guest reported %d of %d steps; console tail:\n%s", v, seen, len(steps), tail([]byte(console.String()), 1500))
 	}
 	return steps, note
+}
+
+// kvmExits is the VM's exit counters from KVM's debugfs, which only root reads.
+func kvmExits(pid int) string {
+	out, _ := exec.Command("sudo", "sh", "-c", fmt.Sprintf(`cd /sys/kernel/debug/kvm/%d-* 2>/dev/null && for f in exits mmio_exits io_exits halt_exits; do printf "%%s=%%s " $f "$(cat $f 2>/dev/null)"; done`, pid)).Output()
+	return strings.TrimSpace(string(out))
+}
+
+// qemuSays is QEMU's own account of the pmem region: the flattened memory tree's lines for it,
+// which say ram or i/o, and the memory devices.
+func qemuSays(t *testing.T, socket string) string {
+	t.Helper()
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		return "no QMP: " + err.Error()
+	}
+	defer func() { _ = conn.Close() }() // a diagnostic connection
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	q := &qmp{conn: conn, enc: json.NewEncoder(conn), dec: json.NewDecoder(conn)}
+	var greeting struct{ QMP *struct{} }
+	if err := q.dec.Decode(&greeting); err != nil {
+		return "no QMP greeting: " + err.Error()
+	}
+	q.do(t, "qmp_capabilities", nil)
+	var says []string
+	for _, cmd := range []string{"info mtree -f", "info memory-devices"} {
+		var text string
+		_ = json.Unmarshal(q.do(t, "human-monitor-command", map[string]any{"command-line": cmd}), &text)
+		for l := range strings.Lines(text) {
+			if strings.Contains(strings.ToLower(l), "pmem") {
+				says = append(says, strings.Join(strings.Fields(l), " "))
+			}
+		}
+	}
+	return "qemu: " + strings.Join(says, " | ")
 }
 
 // rssSplit is the process pid's anonymous and file-backed resident memory in MB.
