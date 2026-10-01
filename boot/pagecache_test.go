@@ -424,11 +424,14 @@ var cacheLine = regexp.MustCompile(`PAGECACHE (\d) (\d+) (\d+) (\d+)`)
 
 // cacheStep is what one step of the workload measured: the guest's cache and free memory, the
 // I/O's time, and on the host, QEMU's resident memory, the overlay's and the base image's pages in
-// the host's page cache and the overlay's allocated size - all in MB but the time.
+// the host's page cache and the overlay's allocated size - all in MB but the time. ramRSS is the
+// part of QEMU's resident memory that is the guest's RAM, the rest being QEMU's own: after the
+// guest frees everything QEMU stayed ~100 MB above where it booted (run 36803912357), and which
+// side that is says whether it is the guest's to give back.
 type cacheStep struct {
 	guestCache, guestFree, ms        float64
 	qemuRSS, overlayCache, baseCache float64
-	overlayAlloc                     float64
+	overlayAlloc, ramRSS             float64
 }
 
 // cacheRun is one boot's steps, and what it said beside them: the guest's PAGECACHE-NOTE lines
@@ -451,12 +454,12 @@ func cacheSteps(t *testing.T, out string, reps, fileMB int, probe cacheProbe) {
 	fmt.Fprintf(&b, "\na %d MB file %s in a 2048 MB guest, p50 over %d boots; MB but the I/O's ms.\n", fileMB, probe.title, reps)
 	fmt.Fprintf(&b, "host: QEMU's resident memory, the overlay's and the base image's pages in the host's page cache, the overlay's allocated size\n\n")
 	for _, v := range probe.variants {
-		fmt.Fprintf(&b, "%s\n%-30s %8s %8s %8s %9s %9s %9s %9s\n", v.label, "STEP", "I/O ms", "G.CACHE", "G.FREE", "QEMU RSS", "OVERLAY", "BASE", "ALLOC")
+		fmt.Fprintf(&b, "%s\n%-30s %8s %8s %8s %9s %9s %9s %9s %9s\n", v.label, "STEP", "I/O ms", "G.CACHE", "G.FREE", "QEMU RSS", "OVERLAY", "BASE", "ALLOC", "GUEST RAM")
 		for i, name := range probe.steps {
-			var col [7][]float64
+			var col [8][]float64
 			for _, run := range got[v.label] {
 				s := run.steps[i]
-				for j, x := range []float64{s.ms, s.guestCache, s.guestFree, s.qemuRSS, s.overlayCache, s.baseCache, s.overlayAlloc} {
+				for j, x := range []float64{s.ms, s.guestCache, s.guestFree, s.qemuRSS, s.overlayCache, s.baseCache, s.overlayAlloc, s.ramRSS} {
 					col[j] = append(col[j], x)
 				}
 			}
@@ -585,6 +588,12 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 		s.guestCache, s.guestFree, s.ms = kb(m[2]), kb(m[3]), num(m[4])
 		if s.qemuRSS, err = rss(pid); err != nil {
 			t.Fatal(err)
+		}
+		// A scope's QEMU is root's, and its smaps are not this test's to read.
+		if scope == "" {
+			if s.ramRSS, err = guestRAM(pid, 2048); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if s.overlayCache, _, err = resident(overlay); err != nil {
 			t.Fatal(err)
@@ -720,6 +729,29 @@ func rss(pid int) (float64, error) {
 		}
 	}
 	return 0, fmt.Errorf("/proc/%d/status has no VmRSS", pid)
+}
+
+// guestRAM is the resident memory, in MB, of pid's mapping that is the guest's RAM: the one
+// anonymous mapping of exactly the machine's memory, sizeMB.
+func guestRAM(pid, sizeMB int) (float64, error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/smaps", pid))
+	if err != nil {
+		return 0, err
+	}
+	var inRAM bool
+	for l := range strings.Lines(string(raw)) {
+		f := strings.Fields(l)
+		switch {
+		case len(f) == 0:
+		case strings.Contains(f[0], "-") && !strings.HasSuffix(f[0], ":"):
+			inRAM = false
+		case f[0] == "Size:" && len(f) > 1:
+			inRAM = num(f[1]) == float64(sizeMB)*1024
+		case f[0] == "Rss:" && inRAM && len(f) > 1:
+			return kb(f[1]), nil
+		}
+	}
+	return 0, fmt.Errorf("/proc/%d/smaps has no mapping of %d MB", pid, sizeMB)
 }
 
 // resident is how many MB of the file at p are in the host's page cache, and the file's size in
