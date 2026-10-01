@@ -663,6 +663,10 @@ func TestValidateRefuses(t *testing.T) {
 			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}}
 			s.Disks = []Disk{{Path: "/a.qcow2", Format: "qcow2", Chain: []Image{{FDSet: 1, Format: "qcow2"}}}}
 		}},
+		{"a chain with a format of its own", func(s *Spec) {
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}}
+			s.Disks = []Disk{{Format: "qcow2", Chain: []Image{{FDSet: 1, Format: "qcow2"}}}}
+		}},
 		{"a chain image in a set nobody gave", func(s *Spec) {
 			s.Disks = []Disk{{Chain: []Image{{FDSet: 9, Format: "qcow2"}}}}
 		}},
@@ -687,10 +691,6 @@ func TestValidateRefuses(t *testing.T) {
 		{"a chain image format that is not one", func(s *Spec) {
 			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 3}}}}
 			s.Disks = []Disk{{Chain: []Image{{FDSet: 1, Format: "vmdk"}}}}
-		}},
-		{"a cache mode that is not one", func(s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw", Cache: "none,aio=threads"}} }},
-		{"a cache mode and O_DIRECT over backing", func(s *Spec) {
-			s.Disks = []Disk{{Path: "/a", Format: "qcow2", Cache: "none", DirectOverBacking: true}}
 		}},
 		{"a CPU model with options", func(s *Spec) { s.CPU = "Skylake-Server-v4,enforce=off" }},
 		{"an accelerator this machine does not run under", func(s *Spec) { s.Accel = "xen" }},

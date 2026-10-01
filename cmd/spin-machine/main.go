@@ -180,8 +180,7 @@ type machineFlags struct {
 	diskFormat string
 	readonly   bool
 	serial     string
-	// diskCache and directOverBacking are machine.Disk's Cache and DirectOverBacking.
-	diskCache         string
+	// directOverBacking is machine.Disk's DirectOverBacking.
 	directOverBacking bool
 
 	memoryMB     int
@@ -215,7 +214,6 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.diskFormat, "disk-format", "qcow2", "format of the disk image; never guessed")
 	fs.BoolVar(&o.readonly, "disk-readonly", false, "open the disk read-only, and mount root ro")
 	fs.StringVar(&o.serial, "disk-serial", "", "serial the guest can resolve the disk by")
-	fs.StringVar(&o.diskCache, "disk-cache", "", "QEMU cache mode for the disk (default: QEMU's, which is writeback)")
 	fs.BoolVar(&o.directOverBacking, "disk-direct-over-backing", false,
 		"open the disk O_DIRECT and its backing chain through the host page cache (the disk must have a backing file)")
 
@@ -309,7 +307,6 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 			Format:            o.diskFormat,
 			Readonly:          o.readonly,
 			Serial:            o.serial,
-			Cache:             o.diskCache,
 			DirectOverBacking: o.directOverBacking,
 		}}
 	}
