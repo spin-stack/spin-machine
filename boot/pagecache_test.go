@@ -663,9 +663,16 @@ func discardNote(t *testing.T, out, socket, overlay string) string {
 		t.Fatalf("reading query-blockstats: %v", err)
 	}
 	var unmap string
+	var unmapOps int64
 	for _, s := range stats {
+		unmapOps += s.Stats.UnmapOperations
 		unmap += fmt.Sprintf(" %d ops %d MB (%d failed, %d invalid), beside %d writes %d MB", s.Stats.UnmapOperations, s.Stats.UnmapBytes>>20,
 			s.Stats.FailedUnmap, s.Stats.InvalidUnmap, s.Stats.WrOperations, s.Stats.WrBytes>>20)
+	}
+	// The guest has just trimmed more than a gigabyte. Upstream virtio-blk counted none of it
+	// until qemu/patches/0002; zero here is a QEMU built without that patch.
+	if unmapOps == 0 {
+		t.Errorf("QEMU counted no discard after the guest's fstrim:%s", unmap)
 	}
 	// -U: the image is open in the running QEMU, and this only reads its tables.
 	raw, err := exec.Command(filepath.Join(out, "bin", "qemu-img"), "map", "-U", "--output=json", overlay).Output()
