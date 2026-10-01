@@ -12,7 +12,7 @@ The four are one thing, and the reason is not tidiness. A VM resumed from a chec
 loads device and CPU state into a machine that has to be the same shape as the one the
 checkpoint was saved on, and nothing checks that at run time. So the machine's identity
 is computed from the things that decide its shape — `machine.Spec.Fingerprint` hashes the
-QEMU binary, the kernel, the initrd and the firmware the guest runs (the BIOS and pvh.bin)
+QEMU binary, the kernel, the initrd and the firmware the guest runs (the BIOS, qboot.bin and pvh.bin)
 *by content*, together with the five arguments that decide what a guest sees. Two machines
 with the same fingerprint can take each other's checkpoints. Two with different
 fingerprints cannot, and a release in which any of those files moved has a different
@@ -37,10 +37,11 @@ One tarball:
 | `bin/qemu-img` | |
 | `bin/mkfs.ext4` | static e2fsprogs; read `e2fsprogs/mke2fs.conf` through `MKE2FS_CONFIG` |
 | `e2fsprogs/mke2fs.conf` | the defaults an ext4 made for this kernel is made with |
-| `qemu/{bios.bin,bios-256k.bin,pvh.bin,kvmvapic.bin,efi-virtio.rom}` | |
+| `qemu/{qboot.bin,bios.bin,bios-256k.bin,pvh.bin,kvmvapic.bin,efi-virtio.rom}` | qboot.bin is the BIOS a machine boots with |
+| `qemu/patches/`, `qemu/qboot-*.patch`, `qemu/qboot-COPYING` | the changes this tree makes to QEMU and qboot, shipped with the binaries built from them |
 | `kernel/vmlinux` | plus `kernel-config` |
 | `image/rootfs.qcow2` | read-only, 0444 |
-| `machine.env` | the version and the three checksums that decide whether a checkpoint resumes |
+| `machine.env` | the version, the commit it was built from, and the checksums that decide whether a checkpoint resumes |
 | `SOURCES` | every upstream source by version, URL and SHA-256, and the written offer |
 | `packages.txt` | every package and exact version in the base image |
 
@@ -89,6 +90,7 @@ in `versions.yaml`: `task versions` says what is behind, `task bump NAME=...` mo
 |---|---|
 | [docs/machine.md](docs/machine.md) | the definition: fixed slots, vmgenid, and what the fingerprint hashes |
 | [docs/migration.md](docs/migration.md) | one VM moved to another host, and why the CPU model decides it |
+| [docs/memory-and-disk.md](docs/memory-and-disk.md) | what a guest's page cache, freed memory and disk cost its host: the defaults, what was measured to choose them, and what was turned down |
 | [docs/releasing.md](docs/releasing.md) | CI, versions, and what a release owes its upstreams |
 | [qemu/](qemu/README.md), [kernel/](kernel/README.md), [image/](image/README.md), [e2fsprogs/](e2fsprogs/README.md) | why each part is built the way it is |
 | [boot/](boot/phases.go) | what a boot costs, measured from the host |
