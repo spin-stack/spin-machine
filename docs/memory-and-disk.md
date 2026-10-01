@@ -146,7 +146,7 @@ B: blog), before measuring:
 
 - **Reclaim in the guest, then free page reporting** is what everyone does. E2B freezes the
   user cgroup and runs `fstrim`, `sync`, `drop_caches` and `compact_memory` before a pause
-  ([reclaim.go](https://github.com/e2b-dev/infra/blob/23f7a0f89dc3645afc5a3026c363bdd6c6f281c1/packages/orchestrator/pkg/sandbox/reclaim.go), VS);
+  ([reclaim.go](https://github.com/e2b-dev/infra/blob/23f7a0f89dc3/packages/orchestrator/pkg/sandbox/reclaim.go), VS);
   Meta's Senpai/TMO paces reclaim by PSI ([TMO](https://engineering.fb.com/2022/06/20/data-infrastructure/transparent-memory-offloading-more-memory-at-a-fraction-of-the-cost-and-power/), D);
   ChromeOS inflates the balloon by `guest cache - target` under host pressure
   ([balloon_policy.cc](https://cos.googlesource.com/third_party/platform2/+/refs/heads/release-R113/vm_tools/concierge/balloon_policy.cc), VS).
