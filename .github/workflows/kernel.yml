@@ -17,14 +17,12 @@ on:
     paths:
       - kernel/**
       - versions.yaml
-      - versions/**
       - go.mod
       - .github/workflows/kernel.yml
   pull_request:
     paths:
       - kernel/**
       - versions.yaml
-      - versions/**
       - go.mod
       - .github/workflows/kernel.yml
   workflow_dispatch:
@@ -62,7 +60,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           build=$(hack/touches "$BASE" debian debian-snapshot kernel moby-check-config -- \
-            kernel versions go.mod .github/workflows/kernel.yml)
+            kernel go.mod .github/workflows/kernel.yml)
           echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
 
   build:
