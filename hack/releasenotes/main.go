@@ -13,7 +13,6 @@
 package main
 
 import (
-	"bufio"
 	"cmp"
 	"flag"
 	"fmt"
@@ -23,6 +22,8 @@ import (
 	"path"
 	"slices"
 	"strings"
+
+	"github.com/spin-stack/go-tools/versions"
 )
 
 func main() {
@@ -66,7 +67,7 @@ var parts = []struct {
 var patchDirs = []string{"qemu/patches", "qemu/qboot", "kernel/patches"}
 
 func write(w io.Writer, repo, from, to string) error {
-	g := gitAt(repo)
+	g := git{repo}
 	commits, err := g.commits(from, to)
 	if err != nil {
 		return err
@@ -123,7 +124,8 @@ func write(w io.Writer, repo, from, to string) error {
 	return nil
 }
 
-// writeVersions lists the pins of versions.yaml whose version moved, appeared or went.
+// writeVersions lists the pins of versions.yaml that moved, appeared or went. A pin can move
+// under a version that stays: debian's digest under trixie, qboot's commit under master.
 func writeVersions(w io.Writer, g git, from, to string) error {
 	old, err := g.versions(from)
 	if err != nil {
@@ -139,15 +141,23 @@ func writeVersions(w io.Writer, g git, from, to string) error {
 		n, inNew := cur[name]
 		switch {
 		case !inOld:
-			lines = append(lines, fmt.Sprintf("- `%s` added at `%s`", name, n))
+			lines = append(lines, fmt.Sprintf("- `%s` added at `%s`", name, n.Version))
 		case !inNew:
-			lines = append(lines, fmt.Sprintf("- `%s` removed (was `%s`)", name, o))
-		case o != n:
-			lines = append(lines, fmt.Sprintf("- `%s` `%s` → `%s`", name, o, n))
+			lines = append(lines, fmt.Sprintf("- `%s` removed (was `%s`)", name, o.Version))
+		case o.Version != n.Version:
+			lines = append(lines, fmt.Sprintf("- `%s` `%s` → `%s`", name, o.Version, n.Version))
+		case o.Pin != n.Pin:
+			lines = append(lines, fmt.Sprintf("- `%s` `%s` pin `%s` → `%s`", name, n.Version, short(o.Pin), short(n.Pin)))
 		}
 	}
 	section(w, "Pins (versions.yaml)", lines)
 	return nil
+}
+
+// short is a pin as far as a reader tells two apart: a digest's or a commit's first 12.
+func short(pin string) string {
+	pin = strings.TrimPrefix(pin, "sha256:")
+	return pin[:min(len(pin), 12)]
 }
 
 // writeKernelConfig lists the options the kernel's configuration turned on, off or changed.
@@ -264,8 +274,6 @@ func (c commit) only(file string) bool {
 
 type git struct{ dir string }
 
-func gitAt(dir string) git { return git{dir} }
-
 func (g git) run(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = g.dir
@@ -302,23 +310,20 @@ func (g git) commits(from, to string) ([]commit, error) {
 }
 
 // versions are versions.yaml's entries at ref, by name; none where the file is not there.
-func (g git) versions(ref string) (map[string]string, error) {
-	out := map[string]string{}
+func (g git) versions(ref string) (map[string]versions.Entry, error) {
+	out := map[string]versions.Entry{}
 	body, err := g.run("show", ref+":versions.yaml")
 	if err != nil {
 		return out, nil //nolint:nilerr // a tree from before versions.yaml pins nothing to compare
 	}
-	name := ""
-	sc := bufio.NewScanner(strings.NewReader(body))
-	for sc.Scan() {
-		line := sc.Text()
-		if v, ok := strings.CutPrefix(line, "- name: "); ok {
-			name = strings.TrimSpace(v)
-		} else if v, ok := strings.CutPrefix(line, "  version: "); ok {
-			out[name] = strings.Trim(strings.TrimSpace(v), `"'`)
-		}
+	v, err := versions.Parse([]byte(body))
+	if err != nil {
+		return nil, fmt.Errorf("versions.yaml at %s: %w", ref, err)
 	}
-	return out, sc.Err()
+	for _, e := range v.Entries {
+		out[e.Name] = e
+	}
+	return out, nil
 }
 
 // kernelConfig is the kernel configuration the tree builds at ref, option by option without its
@@ -357,7 +362,7 @@ func (g git) kernelConfig(ref string) (map[string]string, error) {
 	return out, nil
 }
 
-func sortedKeys(maps ...map[string]string) []string {
+func sortedKeys[V any](maps ...map[string]V) []string {
 	var keys []string
 	for _, m := range maps {
 		for k := range m {
