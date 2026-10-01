@@ -48,16 +48,6 @@ tasks:
     cmds:
       - SPIN_PAGE_CACHE=1 go test ./boot/ -run '^TestPageCache$' -count=1 -v -timeout 60m
 
-  memory-policy:
-    desc: >-
-      A process that takes memory until something stops it, in a login session of a 1 GiB
-      guest: logins while it grows, how long until it is gone and what killed it, with the image
-      as built and without MGLRU's min_ttl_ms. Needs /dev/kvm and a built release; no sudo.
-      REPS= boots per variant.
-    deps: [':tools']
-    cmds:
-      - SPIN_MEMORY_POLICY=1 go test ./boot/ -run '^TestMemoryPolicy$' -count=1 -v -timeout 90m
-
   logind:
     desc: >-
       Check first SSH login, reconnect, user services and logout in a disposable guest.
@@ -87,17 +77,6 @@ tasks:
     deps: [':tools']
     cmds:
       - SPIN_INITCALL_PROBE=1 go test ./boot/ -run TestKernelInitcalls -count=1 -v -timeout 30m
-
-  unitload:
-    desc: >-
-      What systemd spends loading units and building the initial transaction, from its own
-      instrumentation: `systemd --test` reports it at LOG_INFO where a real boot logs it at
-      LOG_DEBUG. Many runs inside one boot, so there is no boot-to-boot noise, and it
-      measures the generators by masking two that cannot do anything on this machine. Needs
-      KVM, a built release and sudo.
-    deps: [':tools']
-    cmds:
-      - SPIN_UNITLOAD_PROBE=1 go test ./boot/ -run TestUnitLoadCost -count=1 -v -timeout 15m
 
   userspace:
     desc: >-

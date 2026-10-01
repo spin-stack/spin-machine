@@ -35,9 +35,7 @@ on:
           - boot:initcalls
           - boot:userspace
           - boot:systemd
-          - boot:unitload
           - boot:ssh-load
-          - boot:memory-policy
           - boot:page-cache
           - boot:firmware
           - boot:firmware-stages

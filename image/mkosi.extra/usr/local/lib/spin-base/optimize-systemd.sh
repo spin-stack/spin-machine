@@ -167,7 +167,7 @@ DISABLE_GENERATORS=(
     # runs on a machine systemd itself logs as not booted in EFI mode.
     #
     # Worth 1.0 ms of the 26 ms systemd spends loading units and building the initial
-    # transaction — measured 2026-09-26 with `task boot:unitload`, which asks systemd for that
+    # transaction — measured 2026-09-26 with the unitload probe (ad05544), which asks systemd for that
     # number through `systemd --test` rather than reading it out of a debug-logged boot. The
     # same number read from a debug boot is 212 ms, and that difference is the logging.
     systemd-tpm2-generator
