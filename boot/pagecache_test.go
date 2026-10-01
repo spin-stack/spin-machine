@@ -188,6 +188,9 @@ type cacheProbe struct {
 	steps    []string
 	script   string
 	variants []cacheVariant
+	// trims is a script that ends in fstrim after removing what it wrote, so QEMU must have
+	// counted discards.
+	trims bool
 }
 
 // cacheVariant is one way of starting the machine a probe runs in.
@@ -233,6 +236,7 @@ t=$(ms); dd if=/dev/zero of=$f bs=1M count=%[1]d conv=fsync status=none || { ech
 // host's page cache or, with the overlay O_DIRECT, the device.
 var cachesProbe = cacheProbe{
 	title: "written, read and removed",
+	trims: true,
 	steps: []string{
 		"idle",
 		"file written",
@@ -618,7 +622,7 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	}
 	// A scope's QEMU is root's, and so is its socket.
 	if scope == "" {
-		run.notes = append(run.notes, discardNote(t, out, qmpSock, overlay))
+		run.notes = append(run.notes, discardNote(t, out, qmpSock, overlay, probe.trims))
 	}
 	if cgroup != "" {
 		raw, err := os.ReadFile(cgroup + "/memory.events")
@@ -632,8 +636,8 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 
 // discardNote is where the guest's discards went: how many QEMU's block layer took from the
 // guest (query-blockstats' unmap counters), and what the overlay's clusters are now by qemu-img
-// map - data, zeroes, or nothing allocated. The guest trimmed its free space just before.
-func discardNote(t *testing.T, out, socket, overlay string) string {
+// map - data, zeroes, or nothing allocated. trimmed is a guest that ran fstrim just before.
+func discardNote(t *testing.T, out, socket, overlay string, trimmed bool) string {
 	t.Helper()
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
@@ -663,9 +667,16 @@ func discardNote(t *testing.T, out, socket, overlay string) string {
 		t.Fatalf("reading query-blockstats: %v", err)
 	}
 	var unmap string
+	var unmapOps int64
 	for _, s := range stats {
+		unmapOps += s.Stats.UnmapOperations
 		unmap += fmt.Sprintf(" %d ops %d MB (%d failed, %d invalid), beside %d writes %d MB", s.Stats.UnmapOperations, s.Stats.UnmapBytes>>20,
 			s.Stats.FailedUnmap, s.Stats.InvalidUnmap, s.Stats.WrOperations, s.Stats.WrBytes>>20)
+	}
+	// The caches probe trims more than a gigabyte. Upstream virtio-blk counted none of it until
+	// qemu/patches/0002; zero there is a QEMU built without that patch.
+	if trimmed && unmapOps == 0 {
+		t.Errorf("QEMU counted no discard after the guest's fstrim:%s", unmap)
 	}
 	// -U: the image is open in the running QEMU, and this only reads its tables.
 	raw, err := exec.Command(filepath.Join(out, "bin", "qemu-img"), "map", "-U", "--output=json", overlay).Output()
