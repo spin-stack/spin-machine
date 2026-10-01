@@ -39,7 +39,8 @@ tasks:
       The page caches a machine has: a boot cold - the release's files dropped from the host's
       cache first, file by file - against warm; and a guest writing, reading and removing a file,
       with QEMU's memory and the overlay's and the base image's pages in the host's cache at each
-      step, the disk as it is against --disk-direct-over-backing. Needs /dev/kvm, a built release
+      step, and what the host's copy is worth to a guest reading a file and 8 KiB files back;
+      the disk as it is against --disk-direct-over-backing. Needs /dev/kvm, a built release
       and sudo. REPS= boots per variant, FILE_MB= the guest's file.
     deps: [':tools']
     cmds:
