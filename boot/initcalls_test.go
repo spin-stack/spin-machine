@@ -3,12 +3,12 @@
 package boot_test
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,7 +111,7 @@ WantedBy=multi-user.target
 		checkName = name
 	}
 	dump = strings.Replace(dump, "FORMATCHECK ", check+" ", 1)
-	cvs := slices.Clone(cmdlineVariants)
+	cvs := []cmdlineVariant{{label: "baseline"}}
 	if k := kernelB(t); k != "" {
 		cvs = append(cvs, cmdlineVariant{label: "kernel B", kernel: k})
 	}
@@ -128,8 +128,8 @@ WantedBy=multi-user.target
 	}
 
 	base := variant{
-		cpus:   orElse("2", os.Getenv("CPUS")),
-		memory: orElse("2048", os.Getenv("MEMORY_MIB")),
+		cpus:   cmp.Or(os.Getenv("CPUS"), "2"),
+		memory: cmp.Or(os.Getenv("MEMORY_MIB"), "2048"),
 		flags:  strings.Fields(os.Getenv("FLAGS")),
 		files: map[string]string{
 			"/etc/systemd/system/spin-dmesg.service": dump,
@@ -282,17 +282,13 @@ func clip(s string) string {
 }
 
 // The command lines to compare: the baseline, which the per-initcall table below is taken
-// from, and a kernel B or C when one is named.
+// from, and a kernel B or C, or a command line B, when one is named.
 //
 // Smaller TCP and UDP hash tables (thash_entries=2048 uhash_entries=2048), for inet_init's
 // 8 ms on a machine that will never hold 32768 connections, moved nothing: 85.8 ms against
 // the baseline's 85.7 to "Freeing unused kernel image", inet_init 7.84 against 7.70 (10 and
 // 30 boots, 2026-09-30).
 type cmdlineVariant struct{ label, extra, kernel string }
-
-var cmdlineVariants = []cmdlineVariant{
-	{label: "baseline"},
-}
 
 // initcallsOfInterest are printed side by side for every variant, because a variant that
 // moved the total is only interesting once it is clear which initcall moved.

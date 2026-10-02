@@ -3,6 +3,7 @@
 package boot_test
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -115,13 +116,13 @@ func (p *probe) start(t *testing.T, variant string, gen bool, incoming, kernel, 
 	args := []string{
 		"-L", p.firmware,
 		"-machine", "q35,sata=off,smbus=off",
-		"-accel", "kvm", "-cpu", orElse("host", cpu),
+		"-accel", "kvm", "-cpu", cmp.Or(cpu, "host"),
 		"-m", "2048", "-smp", "2",
 		"-nodefaults", "-display", "none", "-serial", "stdio", "-monitor", "none",
 		"-qmp", "unix:" + qmp + ",server=on,wait=off",
 		"-bios", p.bios[variant],
-		"-kernel", orElse(p.kernel, kernel),
-		"-initrd", orElse(p.initrd, initrd),
+		"-kernel", cmp.Or(kernel, p.kernel),
+		"-initrd", cmp.Or(initrd, p.initrd),
 		"-append", "console=ttyS0 quiet loglevel=3 pci=lastbus=0 no_timer_check " +
 			"tsc=reliable rcupdate.rcu_expedited=1 TERM=dumb rdinit=/init",
 	}
@@ -396,13 +397,4 @@ func mustCwd(t *testing.T) string {
 func pct(v []float64, p int) float64 {
 	x, _ := boot.Percentile(v, float64(p)/100)
 	return x
-}
-
-// orElse is the override or the default, and exists so that a probe varying one argument
-// of the machine line does not need a second copy of the whole line.
-func orElse(dflt, override string) string {
-	if override != "" {
-		return override
-	}
-	return dflt
 }
