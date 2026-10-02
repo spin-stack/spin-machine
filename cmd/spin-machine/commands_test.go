@@ -228,7 +228,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 	every.Cmdline.Console = ""
 
 	deferred := defaults
-	deferred.IncomingDefer = true
+	deferred.Incoming = "defer"
 
 	emulated := defaults
 	emulated.Accel, emulated.QEMU = "tcg", filepath.Join(dir, "bin/qemu-system-x86_64-tcg")

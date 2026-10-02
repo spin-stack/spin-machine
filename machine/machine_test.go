@@ -723,7 +723,6 @@ func TestValidateRefuses(t *testing.T) {
 		{"a NIC with a 64-bit MAC", func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "02:00:5e:10:00:00:00:01"}} }},
 		// Both forms of -incoming: QEMU takes the flag once, and which source a VM
 		// restores from is not something to guess at on the caller's behalf.
-		{"both forms of -incoming", func(s *Spec) { s.IncomingDefer, s.Incoming = true, "file:/state" }},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			s := spec(t)
@@ -830,7 +829,7 @@ func TestIncomingNamesTheSourceOnTheCommandLine(t *testing.T) {
 		want string
 	}{
 		{"a URI at exec time", func(s *Spec) { s.Incoming = "file:/state" }, "file:/state"},
-		{"deferred to QMP", func(s *Spec) { s.IncomingDefer = true }, "defer"},
+		{"deferred to QMP", func(s *Spec) { s.Incoming = "defer" }, "defer"},
 		{"a boot", func(*Spec) {}, ""},
 	} {
 		t.Run(tc.what, func(t *testing.T) {

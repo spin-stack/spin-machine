@@ -124,7 +124,7 @@ const virtioModern = "disable-legacy=on"
 // qemuOpt escapes a value for a QEMU option string, which splits on a single comma
 // and reads a doubled one as a literal. Every free-form value a caller supplies goes
 // through it: a disk path "a,readonly=off" is otherwise a second option, not part of
-// the path. A value picked from a fixed set — a disk's format and cache mode, the
+// the path. A value picked from a fixed set — a disk's format, the
 // accelerator, a CPU model name — is not escaped but refused by validate when it is not
 // one of the set, because an escaped "qcow2,,x" is still not a format.
 func qemuOpt(v string) string { return strings.ReplaceAll(v, ",", ",,") }
@@ -588,16 +588,12 @@ type Spec struct {
 	// what the line is made of.
 	Cmdline Cmdline
 
-	// IncomingDefer starts QEMU with no machine state, waiting to be told over
-	// QMP where to load it from (migrate-incoming): how a checkpoint is resumed by
-	// a caller that starts the machine before it has the state in hand, or wants a
-	// word with QEMU before the first byte is read. Whoever drives that owns the
-	// lifecycle; this is the machine argument they need.
-	IncomingDefer bool
-
-	// Incoming names that source at exec time instead — a migration URI, most
-	// usefully "file:/path/to/state". It is how a VM saved on one machine is
-	// resumed, rather than booted, on another.
+	// Incoming is -incoming: where the machine's state comes from when it is resumed
+	// rather than booted. A migration URI names it at exec time, most usefully
+	// "file:/path/to/state". "defer", QEMU's own word, starts QEMU with no state,
+	// waiting to be told over QMP where to load it from (migrate-incoming): how a
+	// checkpoint is resumed by a caller that starts the machine before it has the
+	// state in hand, or wants a word with QEMU before the first byte is read.
 	//
 	// The guest does not know this happened: it continues from the instruction it
 	// was stopped at, with the memory, the devices and the clock it had. Which is
@@ -828,8 +824,6 @@ func (s Spec) validate() error {
 	// The two forms of -incoming are one flag, and QEMU takes it once. A spec carrying
 	// both is a caller that has not decided whether the source is named at exec time or
 	// over QMP afterwards, and guessing for them is how a VM restores from the wrong one.
-	case s.IncomingDefer && s.Incoming != "":
-		return fmt.Errorf("both IncomingDefer and Incoming %q: -incoming takes one form", s.Incoming)
 	case s.Memory.SizeMB < 1:
 		return fmt.Errorf("memory is %d MB", s.Memory.SizeMB)
 	case len(s.Disks) > maxDisks:
@@ -1196,11 +1190,7 @@ func (s Spec) appendFDSets(args []string) []string {
 
 // appendIncoming is -incoming, when the machine is to be restored rather than booted.
 func (s Spec) appendIncoming(args []string) []string {
-	// -incoming, in whichever of its two forms this machine was given. validate has
-	// already refused a spec carrying both.
-	if s.IncomingDefer {
-		args = append(args, "-incoming", "defer")
-	} else if s.Incoming != "" {
+	if s.Incoming != "" {
 		args = append(args, "-incoming", s.Incoming)
 	}
 	return args
@@ -1275,25 +1265,10 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 		}
 		write(f.name, sum)
 	}
-	ident, err := s.identity(hostCPU)
-	if err != nil {
-		return "", err
-	}
-	write("identity", ident)
 
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// identity is everything the fingerprint hashes except the contents of those five
-// files: the machine's shape, its device topology, and the host's own CPU when the
-// guest is being shown it.
-func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
+	// The machine's shape, its device topology, and the host's own CPU when the guest is
+	// being shown it.
 	shape := s.Shape()
-
-	var b strings.Builder
-	write := func(key, value string) {
-		_, _ = fmt.Fprintf(&b, "%s=%d:%s\n", key, len(value), value)
-	}
 	write("machine", shape.Machine)
 	write("accel", shape.Accel)
 	write("cpu", shape.CPU)
@@ -1323,7 +1298,7 @@ func (s Spec) identity(hostCPU func() (string, error)) (string, error) {
 		write("host-cpu", cpu)
 	}
 
-	return b.String(), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // topology is the machine's device list — which models, at which slots — with

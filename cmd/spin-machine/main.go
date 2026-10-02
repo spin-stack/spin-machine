@@ -287,12 +287,7 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 	if o.qmp != "" {
 		s.Monitors = []machine.Monitor{{Socket: o.qmp}}
 	}
-	// defer is QEMU's own word for "the source comes over QMP": see restore.
-	if o.incoming == "defer" {
-		s.IncomingDefer = true
-	} else {
-		s.Incoming = o.incoming
-	}
+	s.Incoming = o.incoming
 	s.Serial = o.console
 
 	disk := o.disk
@@ -664,7 +659,7 @@ func (o *restoreFlags) register(fs *flag.FlagSet) {
 //
 // `boot --incoming file:PATH` loads the same file in one step. This is the other
 // form, and the one a caller that resumes checkpoints uses: the machine is started
-// with -incoming defer (Spec.IncomingDefer), and the state is named over QMP once
+// with -incoming defer (Spec.Incoming "defer"), and the state is named over QMP once
 // the caller is ready for it. Driving that by hand is what this command is for.
 func restore(o restoreFlags) error {
 	if o.qmp == "" || o.from == "" {
