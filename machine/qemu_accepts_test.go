@@ -175,7 +175,7 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 			s.Disks = []Disk{
 				{Path: rawDisk(t, "base.raw"), Format: "raw", Readonly: true, Serial: "base"},
 				{Path: qcow2In(t, qemu, t.TempDir(), "overlay.qcow2", ""), Format: "qcow2",
-					Serial: "overlay", Locking: true, Cache: "writeback"},
+					Serial: "overlay", Locking: true},
 			}
 			return s
 		},

@@ -134,9 +134,6 @@ func qemuOpt(v string) string { return strings.ReplaceAll(v, ",", ",,") }
 // nobody here has thought about the safety of.
 var diskFormats = []string{"qcow2", "raw"}
 
-// cacheModes are QEMU's -drive cache= values.
-var cacheModes = []string{"none", "writeback", "writethrough", "directsync", "unsafe"}
-
 // memGrowthID names the memory a virtio-mem device hands out. It is a separate
 // region from pc.ram, the memory the guest boots with: this one is empty until
 // somebody asks for it.
@@ -176,20 +173,6 @@ type Disk struct {
 	// writable disk, and only worth setting when something outside QEMU takes
 	// the same lock to find out whether a VM is running on the image.
 	Locking bool
-	// Cache overrides how the host caches this disk. Empty leaves QEMU's default,
-	// which is what this machine wants and is worth saying why.
-	//
-	// The usual advice for a production VM is cache=none — bypass the host page
-	// cache, because the guest caches the same blocks and holding them twice
-	// wastes RAM. It is the wrong advice here. The read-only base image is one
-	// file that *every* VM on the host maps through a backing chain, so one copy
-	// in the host's page cache is one copy shared by all of them; with O_DIRECT
-	// each VM would fault its own. The overlay is the part that would benefit,
-	// and it shares a -drive with the base.
-	//
-	// cache=none also fails outright on a filesystem with no O_DIRECT — tmpfs,
-	// which is where a scratch overlay usually lands.
-	Cache string
 	// DirectOverBacking opens this image with O_DIRECT and leaves every image
 	// under it in its backing chain on the host page cache: cache.direct=on for
 	// this node, and backing.cache.direct=off, which the deeper backing files
@@ -335,12 +318,14 @@ func encodeNode(n any) string {
 // without one then fails with "Could not open backing file: Must specify either driver
 // or file". A restore that wants every layer left alone declares its chain; see
 // Disk.Chain.
+//
+// No cache=: QEMU's default, writeback, is what this machine wants. The read-only base is
+// one file every VM on the host maps through a backing chain, so one copy in the host's
+// page cache serves all of them, where O_DIRECT would have each VM fault its own; and
+// cache=none fails outright on tmpfs. The overlay alone is DirectOverBacking's to decide.
 func (d Disk) driveArg(i int) string {
 	drive := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s,aio=io_uring,discard=unmap,file.drop-cache=off",
 		qemuOpt(d.Path), i, d.Format)
-	if d.Cache != "" {
-		drive += ",cache=" + d.Cache
-	}
 	if d.DirectOverBacking {
 		drive += ",cache.direct=on,backing.cache.direct=off"
 	}
@@ -940,14 +925,8 @@ func (d Disk) validate(sets map[int]bool) error {
 		return fmt.Errorf("%s has no format: it is not guessed", d.Path)
 	case d.Path != "" && !slices.Contains(diskFormats, d.Format):
 		return fmt.Errorf("%s: format %q is not one of %v", d.Path, d.Format, diskFormats)
-	case len(d.Chain) != 0 && (d.Cache != "" || d.Format != ""):
-		return errors.New("a chain carries a format per image and takes QEMU's caching")
-	case d.Cache != "" && !slices.Contains(cacheModes, d.Cache):
-		return fmt.Errorf("cache mode %q is not one of %v", d.Cache, cacheModes)
-	// cache= is itself a setting of cache.direct, so the two together are one option
-	// given twice with nothing to say which wins.
-	case d.Cache != "" && d.DirectOverBacking:
-		return fmt.Errorf("cache=%s and DirectOverBacking both decide cache.direct", d.Cache)
+	case len(d.Chain) != 0 && d.Format != "":
+		return errors.New("a chain carries a format per image")
 	}
 	for j, img := range d.Chain {
 		switch {

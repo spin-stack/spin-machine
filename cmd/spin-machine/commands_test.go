@@ -220,7 +220,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 	every.Incoming = "file:/s"
 	every.Serial = ""
 	every.Disks = []machine.Disk{{Path: "/d", Format: "raw", Readonly: true, Serial: "ser",
-		Cache: "none", DirectOverBacking: true}}
+		DirectOverBacking: true}}
 	every.Cmdline = machine.DefaultCmdline()
 	every.Cmdline.Init, every.Cmdline.Root, every.Cmdline.RootReadonly = "/bin/sh", "/dev/vdb", true
 	every.Cmdline = every.Cmdline.Profiling()
@@ -245,7 +245,7 @@ func TestFlagsAreTheSpec(t *testing.T) {
 	}{
 		{"nothing given", nil, defaults, true},
 		{"everything given", []string{"--qemu", "/q", "--kernel", "/k", "--initrd", "/i", "--firmware", "/f", "--bios", "bios-256k.bin",
-			"--disk", "/d", "--disk-format", "raw", "--disk-readonly", "--disk-serial", "ser", "--disk-cache", "none",
+			"--disk", "/d", "--disk-format", "raw", "--disk-readonly", "--disk-serial", "ser",
 			"--disk-direct-over-backing", "--accel", "tcg", "--memory", "1024", "--max-memory", "4096", "--cpu", "Skylake-Server-v4",
 			"--cpus", "3", "--max-cpus", "8", "--hotplug-disks", "2",
 			"--vsock-cid", "7", "--qmp", "/qmp", "--incoming", "file:/s", "--console", "", "--init", "/bin/sh",
