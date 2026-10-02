@@ -124,7 +124,7 @@ const virtioModern = "disable-legacy=on"
 // qemuOpt escapes a value for a QEMU option string, which splits on a single comma
 // and reads a doubled one as a literal. Every free-form value a caller supplies goes
 // through it: a disk path "a,readonly=off" is otherwise a second option, not part of
-// the path. A value picked from a fixed set — a disk's format and cache mode, the
+// the path. A value picked from a fixed set — a disk's format, the
 // accelerator, a CPU model name — is not escaped but refused by validate when it is not
 // one of the set, because an escaped "qcow2,,x" is still not a format.
 func qemuOpt(v string) string { return strings.ReplaceAll(v, ",", ",,") }
