@@ -155,29 +155,25 @@ jobs:
           manifest="_output/release/${name}/usr/share/spin-stack/machine.env"
           cat "$manifest"
 
-          # EXCLUDE so that a re-run of a version that already published compares against
-          # its predecessor rather than against itself, which would report every release as
-          # breaking nothing.
-          EXCLUDE="$VERSION" hack/fingerprint-diff \
-            "qemu_sha256=$(sed -n 's/^qemu_sha256=//p' "$manifest")" \
-            "kernel_sha256=$(sed -n 's/^kernel_sha256=//p' "$manifest")" \
-            "bios_sha256=$(sed -n 's/^bios_sha256=//p' "$manifest")" \
-            "pvh_sha256=$(sed -n 's/^pvh_sha256=//p' "$manifest")" \
-            "image_sha256=$(sed -n 's/^image_sha256=//p' "$manifest")" \
-            > /tmp/verdict.md
+          # The release before this one, for both the verdict and the notes: the newest published
+          # one that is not this version, so a re-run of a version that already published compares
+          # against its predecessor rather than against itself. A listing that fails fails the
+          # step - read as "no releases", it would announce a first release that is not one.
+          releases=$(gh release list -R "$GITHUB_REPOSITORY" --limit 30 --json tagName -q '.[].tagName')
+          previous=$(printf '%s\n' "$releases" | grep -vFx -- "$VERSION" | head -1 || true)
 
-          cat /tmp/verdict.md
-
-          # What reached the machine since the release before, read from git: the commits by the
-          # part they changed, the pins that moved, the kernel options and the patches. Against
-          # the newest published release that is not this one, as the verdict is.
-          previous=$(gh release list -R "$GITHUB_REPOSITORY" --limit 30 --json tagName -q '.[].tagName' |
-            grep -vx "$VERSION" | head -1 || true)
           if [ -n "$previous" ]; then
+            # machine.env's lines are the script's key=value arguments, as they are.
+            # shellcheck disable=SC2046
+            REFERENCE="$previous" hack/fingerprint-diff $(grep '_sha256=' "$manifest") > /tmp/verdict.md
+            # What reached the machine since: the commits by the part they changed, the pins
+            # that moved, the kernel options and the patches, read from git.
             go run ./hack/releasenotes -from "$previous" -to HEAD > /tmp/changes.md
           else
+            echo "Nothing to compare against: this is the first published release." > /tmp/verdict.md
             echo "The first release: nothing before it to say what changed against." > /tmp/changes.md
           fi
+          cat /tmp/verdict.md
           cat /tmp/changes.md
 
           {
