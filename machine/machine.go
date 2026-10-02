@@ -64,14 +64,12 @@ const (
 	slotNICMax  = 0x19
 
 	// The SCSI controller disks that arrive while the machine runs are added to. Taken
-	// off the top of the NIC range, the way slotMem was: every slot below is where it
-	// was, and ten NICs is still more than anything asks for. 0x1b-0x1d, which held
-	// the root ports this replaced, are free.
+	// off the top of the NIC range, so no slot below it moved; ten NICs is still more
+	// than anything asks for. 0x1b-0x1d are free.
 	slotHotplug = 0x1a
 
-	// Taken off the top of the NIC range rather than inserted anywhere earlier:
-	// every slot below this one is where it was, so this did not renumber a
-	// single existing device. Fifteen NICs was not a number anything needed.
+	// Taken off the top of the NIC range rather than inserted anywhere earlier, so
+	// no existing device was renumbered.
 	slotMem = 0x1e
 )
 
@@ -584,7 +582,7 @@ type Spec struct {
 	Monitors []Monitor
 
 	// FDSets are the descriptor sets the command line names: a Disk's Chain,
-	// SerialFDSet.
+	// SerialFDSet, KVMFDSet.
 	FDSets []FDSet
 
 	// SerialFDSet is the console as a descriptor set QEMU writes to, instead of
@@ -835,11 +833,10 @@ func (s Spec) validate() error {
 		return fmt.Errorf("BootCPUs is %d", s.BootCPUs)
 	case s.MaxCPUs != 0 && s.MaxCPUs < s.BootCPUs:
 		return fmt.Errorf("MaxCPUs %d is below BootCPUs %d", s.MaxCPUs, s.BootCPUs)
-	// The same check as the one above it, and it was missing: memoryArg only writes
-	// maxmem= when the ceiling is above the boot size, so a spec asking for 2048 MB with
-	// a ceiling of 512 got -m 2048, no virtio-mem device and no complaint — a caller that
-	// asked for a machine that can grow was handed one that cannot. Equal is not an error:
-	// it is how a machine says it has no room to grow.
+	// memoryArg only writes maxmem= when the ceiling is above the boot size, so a
+	// ceiling below it would be a machine that cannot grow, handed without complaint to a
+	// caller that asked for one that can. Equal is not an error: it is how a machine says
+	// it has no room to grow.
 	case s.Memory.MaxMB != 0 && s.Memory.MaxMB < s.Memory.SizeMB:
 		return fmt.Errorf("Memory.MaxMB %d is below Memory.SizeMB %d",
 			s.Memory.MaxMB, s.Memory.SizeMB)
@@ -1222,11 +1219,6 @@ func (s Spec) appendFDSets(args []string) []string {
 func (s Spec) appendIncoming(args []string) []string {
 	// -incoming, in whichever of its two forms this machine was given. validate has
 	// already refused a spec carrying both.
-	//
-	// The URI form was declared and never emitted: Spec.Incoming was read by nobody, so
-	// `boot -incoming file:/path/state` started a machine with no state and said nothing
-	// about it. A resume that silently boots a fresh guest is the failure this package is
-	// otherwise built to make impossible.
 	if s.IncomingDefer {
 		args = append(args, "-incoming", "defer")
 	} else if s.Incoming != "" {
@@ -1313,7 +1305,7 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// identity is everything the fingerprint hashes except the contents of those three
+// identity is everything the fingerprint hashes except the contents of those five
 // files: the machine's shape, its device topology, and the host's own CPU when the
 // guest is being shown it.
 func (s Spec) identity(hostCPU func() (string, error)) (string, error) {

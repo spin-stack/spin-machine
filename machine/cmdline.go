@@ -95,10 +95,8 @@ func (c Cmdline) String() string {
 	// that this is the mechanism and not a coincidence.
 	//
 	// It bounds only that search for peer host bridges. A bus behind a bridge on
-	// bus 0 is still enumerated through the bridge: a disk on a hotplug root
-	// port comes up at 01:00.0 under this flag, whether it was there at boot or
-	// device_add'ed later (checked 2026-09-27). A second host bridge would not
-	// be found.
+	// bus 0 is still enumerated through the bridge; a second host bridge would
+	// not be found.
 	parts = append(parts, "pci=lastbus=0")
 
 	// Panic rather than sit at a prompt nobody is watching. A VM is cattle and

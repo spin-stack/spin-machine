@@ -50,7 +50,7 @@ type Release struct {
 // It checks rather than trusting, because a release with one file absent is
 // worse than no release: it installs, and the gap surfaces later as a QEMU that
 // exits for want of an option ROM or a kernel that is the previous version. The
-// cost of finding out here is four stats.
+// cost of finding out here is five stats.
 //
 // The TCG binary and the root filesystem are not required. A host that only ever
 // runs guests under KVM needs neither, and refusing to start for the want of a
