@@ -148,7 +148,7 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 		// where to load it from.
 		name: "restore target",
 		spec: func(s Spec) Spec {
-			s.IncomingDefer = true
+			s.Incoming = "defer"
 			return s
 		},
 	}, {

@@ -5,9 +5,9 @@ A checkpoint is one state file — memory, device state and CPU state, written b
 
 Stopping a VM here and resuming it there is a lifecycle, and this repository does not
 implement one — it builds the machine that lifecycle runs on, and offers the arguments it
-needs: `Incoming` (a state to load at exec time, `-incoming file:…`) and `IncomingDefer`
-(start with no state and wait to be told where it is, over QMP, for a caller that starts the
-machine before it has the state in hand).
+needs: `Incoming`, either a state to load at exec time (`-incoming file:…`) or `defer` (start
+with no state and wait to be told where it is, over QMP, for a caller that starts the machine
+before it has the state in hand).
 
 `spin-machine save --qmp … --to state` is the first half by hand, and the second is either
 `spin-machine boot --incoming file:state` or `boot --incoming defer` followed by
