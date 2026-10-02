@@ -3,10 +3,11 @@
 # Whether this build is still the machine the fleet's checkpoints were taken against.
 #
 # `machine.Spec.Fingerprint` hashes by content the files a guest runs - QEMU, the kernel, the
-# initrd and the firmware - together with the machine's shape. The initrd is brought by whoever
-# runs guests and the shape is decided per VM, so between two releases the question collapses
-# to the checksums bears_on_fingerprint names below: **checkpoints carry over if and only if
-# none of them changed.**
+# initrd and the firmware - together with the machine's shape and devices, as machine/ defines
+# them. The initrd is brought by whoever runs guests, so between two releases the question
+# collapses to the checksums FP_KEYS names below, fingerprint_sha256 among them - Fingerprint
+# itself, of one fixed machine, which also moves when machine/ changes what it hashes or how:
+# **checkpoints carry over if and only if none of them changed.**
 #
 # image_sha256 is deliberately not one of them. The base image is mapped read-only through
 # a backing chain and is not hashed into the fingerprint - a checkpoint resumes with its own
@@ -21,7 +22,7 @@
 # exactly once here already: a comment edited in kernel/Dockerfile, a rebuilt vmlinux, and a
 # fleet-wide invalidation that nothing announced.
 #
-#   hack/fingerprint-diff qemu_sha256=<hex> [kernel_sha256=<hex>] [bios_sha256=<hex>] [pvh_sha256=<hex>] [image_sha256=<hex>]
+#   hack/fingerprint-diff qemu_sha256=<hex> [kernel_sha256=<hex>] [bios_sha256=<hex>] [pvh_sha256=<hex>] [fingerprint_sha256=<hex>] [image_sha256=<hex>]
 #
 # Writes a Markdown verdict to stdout — meant to be pasted into release notes or a step
 # summary — and its workings to stderr.
@@ -49,7 +50,7 @@ fi
 # The classification this script exists to hold in one place. Adding a file to the
 # fingerprint means adding it here; anything else is a number that is reported and does not
 # bear on whether a checkpoint resumes.
-FP_KEYS=(qemu_sha256 kernel_sha256 bios_sha256 pvh_sha256)
+FP_KEYS=(qemu_sha256 kernel_sha256 bios_sha256 pvh_sha256 fingerprint_sha256)
 bears_on_fingerprint() {
   local k
   for k in "${FP_KEYS[@]}"; do [ "$1" = "${k}" ] && return 0; done
@@ -156,7 +157,7 @@ elif [ "${#unchecked_fp[@]}" -eq 0 ]; then
   say "### Checkpoints taken against \`${reference}\` still resume on this machine"
   say
   say "$(printf '`%s` ' "${FP_KEYS[@]}")are unchanged, and they are the whole of what"
-  say "this repository contributes to the fingerprint — the initrd and the machine's shape"
+  say "this repository contributes to the fingerprint — the initrd and each VM's own sizes"
   say "come from whoever runs the guests and are untouched by a release."
 else
   say "### Nothing compared here moves the fingerprint"

@@ -110,10 +110,19 @@ require "${OUTPUT_DIR}/packages.txt" "${SHARE}/packages.txt" "the image's packag
 require "${OUTPUT_DIR}/licenses.txt" "${SHARE}/licenses.txt" "the image's licence texts"
 
 # What this release is, in a form something other than a human can read. The qemu, kernel,
-# bios and pvh checksums are the machine's identity — the same numbers
-# `machine.Spec.Fingerprint` hashes (with the initrd's, which is not in this tarball) to decide
-# whether a checkpoint may be resumed; the image's is reported beside them and is not. A host
-# wondering why its checkpoints stopped resuming diffs this against the previous release's.
+# bios and pvh checksums are the files `machine.Spec.Fingerprint` hashes (with the initrd's,
+# which is not in this tarball) to decide whether a checkpoint may be resumed; the image's is
+# reported beside them and is not. fingerprint_sha256 is Fingerprint itself, of the machine
+# `spin-machine fingerprint` describes with a named CPU, so no runner's own CPU enters it: it
+# moves with those files and also with machine/ - its devices, its shape, how it hashes - which
+# a consumer builds from this release's commit. A host wondering why its checkpoints stopped
+# resuming diffs this against the previous release's.
+fingerprint=$(go run ./cmd/spin-machine fingerprint --release "${SHARE}" --cpu Skylake-Server-v4 |
+  sed -n 's/^  "fingerprint": "\([0-9a-f]\{64\}\)",$/\1/p')
+if [ -z "${fingerprint}" ]; then
+  echo "ERROR: spin-machine fingerprint gave no fingerprint for ${SHARE}" >&2
+  exit 1
+fi
 {
   echo "version=${VERSION}"
   # Which tree this came out of. The version alone does not answer it: for a tagged
@@ -129,6 +138,7 @@ require "${OUTPUT_DIR}/licenses.txt" "${SHARE}/licenses.txt" "the image's licenc
   echo "kernel_sha256=$(sha256sum "${SHARE}/kernel/vmlinux" | cut -d' ' -f1)"
   echo "bios_sha256=$(sha256sum "${SHARE}/qemu/qboot.bin" | cut -d' ' -f1)"
   echo "pvh_sha256=$(sha256sum "${SHARE}/qemu/pvh.bin" | cut -d' ' -f1)"
+  echo "fingerprint_sha256=${fingerprint}"
   echo "image_sha256=$(sha256sum "${SHARE}/image/rootfs.qcow2" | cut -d' ' -f1)"
 } > "${SHARE}/machine.env"
 echo "Manifest:"
