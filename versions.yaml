@@ -20,6 +20,8 @@
 #            git:      a repository built here; version the branch it is on, pin the commit.
 #            download: a file; source its URL with {version} (and {major}), pin its sha256.
 #            date:     a point in time; version the date, no pin.
+#            module:   a Go command; source its package, version the module's, no pin (the
+#                      checksum database holds it to its bytes).
 #   track    how check finds the newest:
 #            digest          the tag's digest now: the version stays, the image moves
 #            today           today's date
@@ -29,6 +31,8 @@
 #            commit <repo> <branch>
 #                            the commit <branch> of <repo> is at now: a download whose version is
 #                            a commit, from a project whose releases do not carry the file
+#            github-release <repo>
+#                            the newest release of a GitHub repository
 #   note     why it is pinned where it is, and what a bump has to be checked with.
 
 - name: qemu

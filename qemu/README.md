@@ -27,5 +27,5 @@ deliberately not shipped — it exports a disk over NBD, which nothing here does
 
 **PVH, not BIOS.** The kernel is an ELF `vmlinux` with Xen PVH notes and QEMU enters it
 through `pvh.bin`. There is no bootloader and no UEFI: the same guest under UEFI + Secure
-Boot was measured at +356 ms and rejected. Replacing SeaBIOS with qboot was measured too and
-cannot run this machine; see [qboot/README.md](qboot/README.md).
+Boot was measured at +356 ms and rejected. The BIOS is qboot, patched and built here, with
+SeaBIOS shipped as the fallback; see [qboot/README.md](qboot/README.md).
