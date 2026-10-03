@@ -67,6 +67,24 @@ By hand, `spin-machine` (`task tools`) boots one, prints its command line or its
 fingerprint, attaches, detaches or saves on a running one, and restores a saved one; `spin-machine <command> -h`
 lists each command's flags.
 
+To run a command inside a throwaway guest and read what it printed, boot it
+non-interactively. The guest's console is on stdin/stdout, so a script on stdin is
+what the guest's shell runs; `poweroff -f` ends the boot.
+
+```sh
+task build                                   # once; a boot reads _output/
+printf '\n\n\n\n\n\n\n\n\n\nmount -t proc proc /proc\necho hello from $(uname -r)\npoweroff -f\n' |
+  _output/bin/spin-machine boot --release _output \
+    --init /bin/sh --console stdio --memory 1024 --cpus 2
+```
+
+`--init /bin/sh` skips systemd and runs the commands as PID 1 with nothing mounted,
+so the script mounts `/proc` itself — `poweroff` refuses without it. The leading blank
+lines are load-bearing: the guest's shell is not reading its console when QEMU starts
+feeding it, so the first bytes of the first line are lost, and the blanks absorb that
+instead of the first real command. Nothing touches the base image — without `--disk`,
+QEMU boots it under a throwaway overlay (`-snapshot`).
+
 ## Building
 
 ```
