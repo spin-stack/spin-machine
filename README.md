@@ -36,6 +36,7 @@ One tarball:
 | `bin/qemu-system-x86_64-tcg` | for CI, which has no `/dev/kvm` |
 | `bin/qemu-img` | |
 | `bin/mkfs.ext4` | static e2fsprogs; read `e2fsprogs/mke2fs.conf` through `MKE2FS_CONFIG` |
+| `bin/debugfs`, `bin/e2fsck`, `bin/dumpe2fs` | the same e2fsprogs build; the `boot/` probes edit a copy of the base image with this `debugfs` |
 | `e2fsprogs/mke2fs.conf` | the defaults an ext4 made for this kernel is made with |
 | `qemu/{qboot.bin,bios.bin,bios-256k.bin,pvh.bin,kvmvapic.bin,efi-virtio.rom}` | qboot.bin is the BIOS a machine boots with |
 | `qemu/patches/`, `qemu/qboot-*.patch`, `qemu/qboot-COPYING` | the changes this tree makes to QEMU and qboot, shipped with the binaries built from them |
@@ -48,10 +49,12 @@ One tarball:
 `LICENSE` and `NOTICE` sit at the root of the tarball.
 
 `task build` writes that same tree into `_output/`, byte for byte the layout above, and
-`machine.OpenRelease` reads either. There is one layout: nothing rearranges the files on the way
-out of a build, into a tarball or into a consumer. Let the three differ and what falls out
-of the translation between them is a path that exists and holds the previous release's
-kernel.
+`machine.OpenRelease` reads either. `_output/bin/` holds one thing more: `spin-machine`,
+which `task tools` builds for working in this repository and `hack/release` does not ship —
+a release is the machine, not the tool that boots it. There is one layout: nothing rearranges
+the files on the way out of a build, into a tarball or into a consumer. Let the three differ
+and what falls out of the translation between them is a path that exists and holds the
+previous release's kernel.
 
 ## Using it
 
@@ -85,6 +88,19 @@ feeding it, so the first bytes of the first line are lost, and the blanks absorb
 instead of the first real command. Nothing touches the base image — without `--disk`,
 QEMU boots it under a throwaway overlay (`-snapshot`).
 
+Read the output by grepping a marker, since the guest's prompt and the kernel's boot
+chatter share stdout: `| grep -a MARKER`. The exit status is QEMU's, so a script that
+ends in `poweroff -f` returns 0.
+
+What the guest answers is a property of the machine, not of the host that ran it.
+`uname -r` reports `kernel/vmlinux`'s version, not the host kernel's. `grep -c -E 'vmx|svm'
+/proc/cpuinfo` is 0 because the machine removes both from the CPU it shows (`-cpu
+host,migratable=on,-vmx,-svm`: nothing inside a guest may nest, and exposing the flags
+would hand a guest's root the host's nested-virtualisation code), and there is no
+`/dev/kvm` to open because this kernel is built without KVM and without loadable modules.
+So a check run inside a guest can prove things about the guest and can never establish
+anything about its host's KVM — read those on the host.
+
 ## Building
 
 ```
@@ -96,6 +112,15 @@ task verify:args   # and whether the QEMU in _output/ accepts what it produces
 task fingerprint   # this machine's identity
 task release       # one tarball, one version
 ```
+
+`task` is [taskfile.dev](https://taskfile.dev), not GNU task. The part builds run in
+containers (`qemu/Dockerfile`, `kernel/Dockerfile`, `e2fsprogs/Dockerfile`,
+`image/Dockerfile`), so a container engine is needed to build; a boot is not, and neither
+is `task build` — a consumer points `--release` at an unpacked release tree instead.
+A boot needs `/dev/kvm` readable and writable by whoever runs it, the same requirement
+`docs/releasing.md` states for the lab runner; a host without it boots the release's TCG
+build with `--accel tcg`, at perhaps fifty times the cost, which is why it is stated and
+never silently fallen back to.
 
 Each part's targets live beside what they build — `task qemu:build` is next to
 `qemu/Dockerfile` — and the root `Taskfile.yml` holds the vars every part reads and the
