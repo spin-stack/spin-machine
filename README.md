@@ -48,8 +48,13 @@ One tarball:
 
 `LICENSE` and `NOTICE` sit at the root of the tarball.
 
-`task build` writes that same tree into `_output/`, byte for byte the layout above, and
-`machine.OpenRelease` reads either. `_output/bin/` holds one thing more: `spin-machine`,
+`task build` writes that same tree into `_output/`, and `machine.OpenRelease` reads
+either. What a release has beyond a build directory is what `hack/release` creates or
+copies when it names one: `machine.env` and `SOURCES` it writes, and the QEMU and qboot
+patches under `qemu/` it takes from this repository, not from the build. A tree without
+a manifest is still a release for every purpose except being named — the fingerprint
+decides whether checkpoints resume, and it is computed from the files, not from
+`machine.env`. `_output/bin/` holds one thing more: `spin-machine`,
 which `task tools` builds for working in this repository and `hack/release` does not ship —
 a release is the machine, not the tool that boots it. There is one layout: nothing rearranges
 the files on the way out of a build, into a tarball or into a consumer. Let the three differ
@@ -85,8 +90,10 @@ printf '\n\n\n\n\n\n\n\n\n\nmount -t proc proc /proc\necho hello from $(uname -r
 so the script mounts `/proc` itself — `poweroff` refuses without it. The leading blank
 lines are load-bearing: the guest's shell is not reading its console when QEMU starts
 feeding it, so the first bytes of the first line are lost, and the blanks absorb that
-instead of the first real command. Nothing touches the base image — without `--disk`,
-QEMU boots it under a throwaway overlay (`-snapshot`).
+instead of the first real command. How far that window reaches is host timing, not a
+line count — a quiet host may lose nothing — so treat the number of blanks as
+insurance, not a figure to trim: a blank costs one prompt. Nothing touches the base
+image — without `--disk`, QEMU boots it under a throwaway overlay (`-snapshot`).
 
 Read the output by grepping a marker, since the guest's prompt and the kernel's boot
 chatter share stdout: `| grep -a MARKER`. The exit status is QEMU's, so a script that

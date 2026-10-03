@@ -191,6 +191,12 @@ spin-machine attach --qmp /tmp/q.sock --target 0 --disk disk.raw   # sda, in the
 spin-machine detach --qmp /tmp/q.sock --target 0
 ```
 
+`detach` returns when QEMU reports the device free, but the guest notices the
+ejection asynchronously: a check that greps for the node inside the guest runs
+immediately after it can still see it, and saw it gone seconds later (measured
+2026-10-03). Leave the guest a moment before treating a visible node as a
+hot-unplug failure.
+
 A one-off check needs no socket and no QMP: the shell's console is stdin/stdout, so
 a script on stdin is what the guest runs, and `poweroff -f` ends the boot. `--init
 /bin/sh` runs the script as PID 1 with nothing mounted, so it mounts `/proc` and
@@ -204,7 +210,9 @@ printf '\n\n\n\n\n\n\n\n\n\nmount -t proc proc /proc\ncat /proc/cpuinfo | head -
 The leading blank lines are load-bearing: the guest's shell is not reading its console
 when QEMU starts feeding it, so the first bytes of the first line are lost, and a
 leading `sleep` would be the thing eaten — `mount` arrived as `unt` and `sleep` as
-`ep` before the blanks absorbed it.
+`ep` before the blanks absorbed it. How far the window reaches is host timing, not a
+line count, so keep the number of blanks generous rather than tuning it; a blank
+costs only a prompt.
 
 ## Taskfiles
 
