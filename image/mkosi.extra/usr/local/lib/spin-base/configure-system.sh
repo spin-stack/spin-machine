@@ -27,12 +27,13 @@ sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_con
 # image build time there is no host to ask. The supervisor writes it from the registration
 # response, which is where it learns which host it is running on. sshd re-reads the file per
 # authentication, so a workspace on a host with no CA simply has no file here and accepts no
-# certificates — reachable by the keys in authorized_keys, which is the failure that locks
-# people out rather than in.
+# certificates.
 #
-# Without this line the control plane signs five-minute certificates that nothing on earth
-# accepts, and every login quietly falls back to a long-lived key in authorized_keys that
-# nothing ever rewrites. It is invisible when it happens, because logins keep working.
+# A certificate is the only way in. At every launch spin's handoff writes a drop-in read before
+# this one (00-spin-owner.conf): no authorized_keys, no password, and the principal a
+# certificate may log in as asked of the supervisor, which answers it only for a key the
+# workspace owner's signed word lists. Without this line nothing logs in at all, which is the
+# failure that locks people out rather than in.
 mkdir -p /etc/ssh/sshd_config.d
 cat <<'EOF' > /etc/ssh/sshd_config.d/10-spin-user-ca.conf
 TrustedUserCAKeys /etc/ssh/spin_user_ca.pub
