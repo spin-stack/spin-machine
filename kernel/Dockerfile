@@ -298,13 +298,6 @@ RUN <<EOT
     # patches/0003 takes another 9.0 ms from event tracing, which BPF_EVENTS needs: the eval map
     # rewrite of every event format, now done on first use. All three: 109.9 -> 78.5 ms; with
     # patches/0004 (PCI configuration through ECAM, one trap an access), 73.7.
-    # BPF_LSM is deliberately NOT enabled, and this is where the decision is written down
-    # so it is not made again by accident. It depends on CONFIG_SECURITY, which is off here
-    # and would put LSM hooks on paths this kernel is tuned for boot time on — and what it
-    # buys is the ability to enforce access policy *inside* a VM that holds one workload,
-    # which is a boundary drawn inside the boundary this machine already is. Somebody who
-    # needs to develop BPF LSM programs turns on CONFIG_SECURITY and this, deliberately,
-    # with a measurement, and accepts that it is a different machine.
 
     # Boot performance: the RAID6 PQ benchmark probes all SIMD implementations at boot to
     # pick the fastest. It must stay disabled. (RAID6_PQ itself is not selected today, so
