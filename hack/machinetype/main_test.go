@@ -105,6 +105,14 @@ func TestCompatIsThePinnedTypesArrays(t *testing.T) {
 	}
 }
 
+// An array is its declaration to its closing brace and semicolon, and not a byte past them.
+func TestAnArrayIsItsDeclarationWhole(t *testing.T) {
+	got, err := array("before GlobalProperty a_1[] = { { \"x\", \"y\", \"z\" },\n};\nafter", "a_1")
+	if err != nil || got != "GlobalProperty a_1[] = { { \"x\", \"y\", \"z\" },\n};" {
+		t.Fatalf("array: %q, %v", got, err)
+	}
+}
+
 // The command: check prints the notice and passes, fails on a pin that does not stand or a QEMU
 // that cannot be asked; compat prints the arrays; anything else is no command.
 func TestTheCommand(t *testing.T) {
