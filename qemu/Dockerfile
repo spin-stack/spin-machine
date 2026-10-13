@@ -89,17 +89,12 @@ ARG QEMU_CONFIG_REV=6
 
 SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 
-# Every -static package is load-bearing: with --static, a dependency present only as a .so
-# fails at link time after the whole tree has compiled. liburing and libaio ship their .a
-# inside the -dev package rather than a separate one, which is why they look inconsistent.
+# qemu/apk.list says what, and why; qemu/apk.lock the version of everything installed, so the
+# libraries a static QEMU links are a commit's and not the mirror's of the day. A version the
+# mirror no longer has fails here: task apk:lock moves the lock, which is a new machine.
+COPY qemu/apk.list qemu/apk.lock /tmp/apk/
 RUN --mount=type=cache,sharing=locked,id=qemu-apk,target=/var/cache/apk \
-    apk add --cache-dir /var/cache/apk \
-        build-base meson ninja pkgconf python3 py3-setuptools bash coreutils curl xz \
-        linux-headers bison flex perl git acpica \
-        glib-dev glib-static pcre2-dev pcre2-static libffi-dev \
-        pixman-dev pixman-static zlib-dev zlib-static \
-        libseccomp-dev libseccomp-static libcap-ng-dev libcap-ng-static \
-        liburing-dev libaio-dev gettext-dev gettext-static
+    apk add --cache-dir /var/cache/apk $(grep -v '^#' /tmp/apk/apk.list) $(cat /tmp/apk/apk.lock)
 
 WORKDIR /build
 

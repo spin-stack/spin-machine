@@ -128,6 +128,22 @@ tasks:
   # Build
   # ==========================================================================
 
+  apk:lock:
+    desc: Pin every package QEMU's and e2fsprogs' builders install (each part's apk.list) at what the pinned Alpine's mirror has today, into its apk.lock.
+    # A fresh install of the list on the pinned Alpine, its database read back: the versions the
+    # mirror serves now, which is what a bump means. A new lock is a new QEMU or e2fsprogs build,
+    # and a changed QEMU is a changed machine: hack/fingerprint-diff says so in the release.
+    cmds:
+      - for: [qemu, e2fsprogs]
+        cmd: |
+          set -euo pipefail
+          db=$(mktemp)
+          docker run --rm -v {{.ROOT_DIR}}/{{.ITEM}}/apk.list:/apk.list:ro $({{.VERSIONS}} ref alpine) \
+            sh -c 'apk add --no-cache $(grep -v "^#" /apk.list) > /dev/null && cat /lib/apk/db/installed' > "$db"
+          go run ./hack/apklock "$db" > {{.ITEM}}/apk.lock
+          rm -f "$db"
+          echo "{{.ITEM}}/apk.lock: $(wc -l < {{.ITEM}}/apk.lock) packages"
+
   build:
     desc: Build QEMU, the guest kernel, e2fsprogs, the base image and the tools into _output/
     cmds:

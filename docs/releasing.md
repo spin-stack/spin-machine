@@ -62,7 +62,14 @@ recorded - the apk databases QEMU and e2fsprogs were statically linked in (each 
 component with no version fails the release. It is inside the tarball at
 `usr/share/spin-stack/sbom/machine.cdx.json`, beside it as `<tarball>.cdx.json`, and attested
 over the tarball as `<tarball>.cdx.sigstore.json` (`cosign verify-blob-attestation --type
-cyclonedx`, with the identity above).
+cyclonedx`, with the identity above). QEMU, the kernel and qboot carry their patches as pedigree:
+each patch file by name and hash, so the SBOM says the binary is upstream's source plus these.
+
+The builders' packages are a commit's, not the mirror's on the day: `qemu/apk.list` and
+`e2fsprogs/apk.list` say what each installs, and `qemu/apk.lock` and `e2fsprogs/apk.lock` pin every
+package installed, dependencies included, at a version. A pin Alpine has dropped from its mirror
+fails a cold build at `apk add`; `task apk:lock` writes both locks again from a fresh install on the
+pinned Alpine, and the diff is the review.
 `workflows/workflows_test.go` holds every workflow to attesting before it publishes.
 
 ## The feature matrix

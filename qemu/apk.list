@@ -1,0 +1,12 @@
+# What QEMU's builder installs, each package at the version qemu/apk.lock pins (task apk:lock).
+#
+# Every -static package is load-bearing: with --static, a dependency present only as a .so
+# fails at link time after the whole tree has compiled. liburing and libaio ship their .a
+# inside the -dev package rather than a separate one, which is why they look inconsistent.
+# samurai is Alpine's ninja: the package that provides the name, which the lock pins.
+build-base meson samurai pkgconf python3 py3-setuptools bash coreutils curl xz
+linux-headers bison flex perl git acpica
+glib-dev glib-static pcre2-dev pcre2-static libffi-dev
+pixman-dev pixman-static zlib-dev zlib-static
+libseccomp-dev libseccomp-static libcap-ng-dev libcap-ng-static
+liburing-dev libaio-dev gettext-dev gettext-static

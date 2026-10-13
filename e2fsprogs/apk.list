@@ -1,0 +1,6 @@
+# What e2fsprogs' builder installs, each package at the version e2fsprogs/apk.lock pins
+# (task apk:lock). The -static ones are what the tools link.
+build-base linux-headers pkgconf curl xz binutils
+libarchive-dev libarchive-static
+acl-static zlib-static xz-static zstd-static bzip2-static lz4-static
+expat-static openssl-libs-static
