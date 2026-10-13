@@ -24,13 +24,11 @@ tasks:
     cmds:
       - SPIN_ROM_TEST=1 go test ./boot/ -run '^TestEveryROMIsTheFingerprints$' -count=1 -v -timeout 3m
 
-  compat:
+  previous:
     desc: >-
-      A checkpoint the newest published release saves resumes on this tree's build, when the two
-      have one fingerprint (machine.Spec.Fingerprint). Fetches that release, checked against its
-      sha256 and its signature, into _output/compat/<version>/. PREVIOUS=<version> names another.
-      Needs a built release and /dev/kvm.
-    deps: [':tools']
+      Fetch the newest published release, or PREVIOUS=<version>, into _output/compat/<version>/,
+      checked against its sha256 and its signature, and write the path of its
+      usr/share/spin-stack to _output/compat/previous: the machine boot:compat resumes from.
     vars:
       PREVIOUS: '{{.PREVIOUS | default ""}}'
     cmds:
@@ -45,13 +43,26 @@ tasks:
           gh release download "$tag" -R spin-stack/spin-machine -D "$dir" \
             -p "$name.tar.gz" -p "$name.tar.gz.sha256" -p "$name.tar.gz.sigstore.json"
           (cd "$dir" && sha256sum -c "$name.tar.gz.sha256")
-          cosign verify-blob --bundle "$dir/$name.tar.gz.sigstore.json" \
+          # cosign by its pin, built: the KVM runner this runs on has no envsubst for the action.
+          go run "github.com/sigstore/cosign/v3/cmd/cosign@$(go tool versions version cosign)" verify-blob \
+            --bundle "$dir/$name.tar.gz.sigstore.json" \
             --certificate-identity https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/heads/main \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com "$dir/$name.tar.gz"
           tar -xzf "$dir/$name.tar.gz" -C "$dir"
         fi
-        SPIN_COMPAT_PREVIOUS="$dir/$name/usr/share/spin-stack" \
-          go test ./boot/ -run '^TestACheckpointOfTheReleaseBeforeResumesHere$' -count=1 -v -timeout 10m
+        echo "$dir/$name/usr/share/spin-stack" > {{.OUTPUT_ABS}}/compat/previous
+
+  compat:
+    desc: >-
+      A checkpoint the newest published release saves resumes on this tree's build, when the two
+      have one fingerprint (machine.Spec.Fingerprint); PREVIOUS=<version> names another release
+      (boot:previous). Needs a built release and /dev/kvm.
+    deps:
+      - ':tools'
+      - task: previous
+        vars: {PREVIOUS: '{{.PREVIOUS}}'}
+    cmds:
+      - SPIN_COMPAT_PREVIOUS="$(cat {{.OUTPUT_ABS}}/compat/previous)" go test ./boot/ -run '^TestACheckpointOfTheReleaseBeforeResumesHere$' -count=1 -v -timeout 10m
 
   bench:
     desc: >-
