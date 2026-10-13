@@ -40,7 +40,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A checkpoint of the release before resumes on this one, when the two have one fingerprint,
+  # and the fingerprint accounts for every ROM the machine maps: on the KVM runner, before
+  # anything is built here to publish (compat.yml says why).
+  compat:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/compat.yml
+
   release:
+    needs: compat
     if: github.ref == 'refs/heads/main'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     # A warm run reads main's BuildKit cache and takes a few minutes (2m13s, 2026-09-30). The

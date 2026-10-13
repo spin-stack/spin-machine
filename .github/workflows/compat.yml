@@ -1,9 +1,9 @@
 name: Compat
 
 # Whether a checkpoint the newest release saved resumes on this change's machine, and whether the
-# fingerprint still accounts for every ROM the machine maps (boot:compat, boot:roms). Every change
-# to what a resumed guest is loaded into runs it: the machine's definition, QEMU, the kernel, the
-# firmware and their pins.
+# fingerprint still accounts for every ROM the machine maps (boot:compat, boot:roms): after every
+# change on main to what a resumed guest is loaded into - the machine's definition, QEMU, the
+# kernel, the firmware and their pins - and before every release.
 #
 # On the KVM runner, because it boots: the newest release is unpacked as the machine before, and
 # the machine here is that tree with this change's QEMU, firmware and kernel built over it - the
@@ -13,9 +13,16 @@ name: Compat
 #
 # The test holds the promise only where it is made: when the two fingerprints differ the contract
 # moved on purpose, the test says so and passes, and the release notes say it for the fleet.
+#
+# Not on a pull request: the KVM runner's job hook refuses that event, since a workflow asking
+# for its runners would run a pull request's code as root there. It runs on main after a merge
+# that touches the machine, on a dispatch - a branch tried before its pull request merges - and
+# as a job release.yml waits for, so no release is published that a checkpoint of the one
+# before it does not resume on.
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - machine/**
       - cmd/spin-machine/**
@@ -26,13 +33,16 @@ on:
       - versions.yaml
       - .github/workflows/compat.yml
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
+# Per ref and never cancelled: a run on main is a commit somebody needs the answer for, and a
+# release's waits on it. Called from release.yml it is the release's job and takes its group.
 concurrency:
-  group: compat-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  group: compat-${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   compat:
