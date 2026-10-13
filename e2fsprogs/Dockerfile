@@ -27,12 +27,12 @@ ARG JOBS=8
 
 SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 
+# e2fsprogs/apk.list says what; e2fsprogs/apk.lock the version of everything installed, so the
+# libraries the static tools link are a commit's. A version the mirror no longer has fails here:
+# task apk:lock moves the lock.
+COPY e2fsprogs/apk.list e2fsprogs/apk.lock /tmp/apk/
 RUN --mount=type=cache,sharing=locked,id=e2fsprogs-apk,target=/var/cache/apk \
-    apk add --cache-dir /var/cache/apk \
-        build-base linux-headers pkgconf curl xz binutils \
-        libarchive-dev libarchive-static \
-        acl-static zlib-static xz-static zstd-static bzip2-static lz4-static \
-        expat-static openssl-libs-static
+    apk add --cache-dir /var/cache/apk $(grep -v '^#' /tmp/apk/apk.list) $(cat /tmp/apk/apk.lock)
 
 WORKDIR /build
 

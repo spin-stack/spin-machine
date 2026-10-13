@@ -23,6 +23,11 @@ pins=$(go tool versions env qemu kernel e2fsprogs qboot)
 while IFS='=' read -r key value; do
   declare "${key}=${value}"
 done <<< "${pins}"
+# Where each tarball is fetched from, as the pin says: SOURCES names the URL the build checked the
+# sha256 of, never one written here, which named a mirror the kernel was not on.
+QEMU_URL=$(go tool versions url qemu)
+KERNEL_URL=$(go tool versions url kernel)
+E2FSPROGS_URL=$(go tool versions url e2fsprogs)
 
 RELEASE_NAME="spin-machine-${VERSION}-linux-${KERNEL_ARCH}"
 RELEASE_DIR="${OUTPUT_DIR}/release/${RELEASE_NAME}"
@@ -170,7 +175,7 @@ QEMU ${QEMU_VERSION}
             usr/share/spin-stack/bin/qemu-system-x86_64-tcg
             usr/share/spin-stack/bin/qemu-img
   firmware: usr/share/spin-stack/qemu/*, except patches/, qboot.bin and the qboot files below
-  source:   https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz
+  source:   ${QEMU_URL}
   sha256:   ${QEMU_SHA256}
   built by: qemu/Dockerfile, with usr/share/spin-stack/qemu/patches applied to that source
             (each says what it changes and why) and the configure flags in that file
@@ -186,14 +191,14 @@ qboot ${QBOOT_COMMIT}
 e2fsprogs ${E2FSPROGS_VERSION}
   binaries: usr/share/spin-stack/bin/mkfs.ext4, debugfs, e2fsck, dumpe2fs
   config:   usr/share/spin-stack/e2fsprogs/mke2fs.conf, upstream's, from the same tarball
-  source:   https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
+  source:   ${E2FSPROGS_URL}
   sha256:   ${E2FSPROGS_SHA256}
   built by: e2fsprogs/Dockerfile, unpatched, statically linked against the Alpine libraries
             named there; their sources are the Alpine package sources for that release
 
 Linux ${KERNEL_VERSION}
   binary:   usr/share/spin-stack/kernel/vmlinux
-  source:   https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz
+  source:   ${KERNEL_URL}
   sha256:   ${KERNEL_SHA256}
   built by: kernel/Dockerfile, with the patches shipped alongside the binary in
             usr/share/spin-stack/kernel/patches applied to that source (each says what
@@ -242,7 +247,11 @@ sbom apk -name e2fsprogs-libraries -version "${E2FSPROGS_VERSION}" -distro alpin
   -only libarchive-static,acl-static,zlib-static,xz-static,zstd-static,bzip2-static,lz4-static,expat-static,openssl-libs-static,musl-dev,gcc \
   -out "${PARTS}/e2fsprogs-libraries.cdx.json" "${OUTPUT_DIR}/sbom/e2fsprogs.apk"
 sbom dpkg -name base-image -version "${VERSION}" -distro ubuntu -out "${PARTS}/base-image.cdx.json" "${SHARE}/packages.txt"
-sbom pins -name sources -version "${VERSION}" -out "${PARTS}/sources.cdx.json" qemu qboot e2fsprogs kernel ubuntu task git-lfs buildkit
+# QEMU, qboot and the kernel are built with this repository's patches: each is in its component's
+# pedigree, so the SBOM does not say upstream's source is what was compiled.
+sbom pins -name sources -version "${VERSION}" -out "${PARTS}/sources.cdx.json" \
+  -patches qemu=qemu/patches -patches qboot=qemu/qboot -patches kernel="${OUTPUT_DIR}/kernel/patches" \
+  qemu qboot e2fsprogs kernel ubuntu task git-lfs buildkit
 # The files themselves, by their hashes: the firmware is the QEMU tarball's own build of it.
 for f in "${SHARE}"/bin/qemu-system-x86_64 "${SHARE}"/bin/qemu-system-x86_64-tcg "${SHARE}"/bin/qemu-img \
   "${SHARE}"/qemu/bios.bin "${SHARE}"/qemu/bios-256k.bin "${SHARE}"/qemu/pvh.bin "${SHARE}"/qemu/kvmvapic.bin "${SHARE}"/qemu/efi-virtio.rom; do
