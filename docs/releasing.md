@@ -36,6 +36,23 @@ the machine by the part they changed, the pins that moved, the kernel options tu
 or changed, and the patches added, changed or removed), whether checkpoints carry over
 (`hack/fingerprint-diff`), and the checksums.
 
+Each file the release offers - the tarball, its `.sha256` and `machine.env` - carries two
+Sigstore bundles beside it: `<file>.sigstore.json`, the signature of the workflow that built it,
+and `<file>.provenance.sigstore.json`, its SLSA provenance (`go tool provenance`: this workflow at
+its commit, and every pin in `versions.yaml`). Whoever takes one checks both against
+`release.yml` at the ref it ran on:
+
+```sh
+id=https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/tags/<version>
+cosign verify-blob --bundle f.sigstore.json --certificate-identity "$id" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com f
+cosign verify-blob-attestation --type slsaprovenance1 --bundle f.provenance.sigstore.json \
+  --certificate-identity "$id" --certificate-oidc-issuer https://token.actions.githubusercontent.com f
+```
+
+A run started by hand ran on `refs/heads/main`, and that is the ref its certificate names.
+`workflows/workflows_test.go` holds every workflow to attesting before it publishes.
+
 ## The feature matrix
 
 A release also says what it costs. After it publishes, the `report` job boots the tarball it

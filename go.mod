@@ -3,15 +3,17 @@ module github.com/spin-stack/spin-machine
 go 1.27
 
 tool (
+	github.com/spin-stack/go-tools/cmd/attestgate
 	github.com/spin-stack/go-tools/cmd/ctxlife
 	github.com/spin-stack/go-tools/cmd/mutate
+	github.com/spin-stack/go-tools/cmd/provenance
 	github.com/spin-stack/go-tools/cmd/refs
 	github.com/spin-stack/go-tools/cmd/testquality
 	github.com/spin-stack/go-tools/cmd/versions
 )
 
 require (
-	github.com/spin-stack/go-tools v0.0.0-20260930221820-8ea51671c2d8
+	github.com/spin-stack/go-tools v0.0.0-20261013124106-428d61cfb405
 	golang.org/x/sys v0.48.0
 )
 

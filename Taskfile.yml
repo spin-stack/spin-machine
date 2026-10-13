@@ -183,7 +183,7 @@ tasks:
     cmds:
       - |
         set -euo pipefail
-        unformatted=$(gofmt -l machine cmd boot versions)
+        unformatted=$(gofmt -l machine cmd boot versions workflows)
         if [ -n "$unformatted" ]; then
           echo "not gofmt'd:"; echo "$unformatted"; exit 1
         fi
