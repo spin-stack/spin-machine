@@ -287,6 +287,33 @@ tasks:
   # Release
   # ==========================================================================
 
+  osv:
+    desc: >-
+      What OSV knows against the newest release's SBOM, once its signature is the builder's: one
+      line a finding, id, package@version and summary, in _output/osv.tsv. Needs gh, cosign and
+      the network; osv.yml runs it daily and opens an issue for a finding it has not opened before.
+    # The newest release, because it is what anything takes next; an older one still pinned is
+    # its consumer's to scan, which spin's control plane does for what it was installed with.
+    cmds:
+      - |
+        set -euo pipefail
+        tag=$(gh release view --json tagName -q .tagName)
+        dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
+        sbom="spin-machine-${tag}-linux-x86_64.cdx.json"
+        gh release download "$tag" -p "$sbom" -p "$sbom.sigstore.json" -D "$dir"
+        cosign verify-blob --bundle "$dir/$sbom.sigstore.json" \
+          --certificate-identity https://github.com/spin-stack/spin-machine/.github/workflows/build-release.yml@refs/heads/main \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com "$dir/$sbom"
+        # osv-scanner exits 1 when it found something, which is the answer; above 1 it failed.
+        status=0
+        go run "github.com/google/osv-scanner/v2/cmd/osv-scanner@$(go tool versions version osv-scanner)" \
+          scan source -L "$dir/$sbom" --format json > "$dir/osv.json" || status=$?
+        [ "$status" -le 1 ] || exit "$status"
+        mkdir -p _output
+        jq -r '.results[]?.packages[]? | .package as $p | .vulnerabilities[]? | [.id, ($p.name + "@" + $p.version), (.summary // "")] | @tsv' \
+          "$dir/osv.json" | sort -u > _output/osv.tsv
+        echo "$tag: $(wc -l < _output/osv.tsv) finding(s), in _output/osv.tsv"
+
   release:
     desc: Build everything and pack one versioned tarball.
     cmds:

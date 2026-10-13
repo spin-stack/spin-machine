@@ -197,3 +197,10 @@
   version: v1.7.12
   track: github-release https://github.com/rhysd/actionlint
   note: task lint:workflows, the only thing that reads .github/ before GitHub does. spin's version.
+
+- name: osv-scanner
+  kind: module
+  source: github.com/google/osv-scanner/v2/cmd/osv-scanner
+  version: v2.7.0
+  track: github-release https://github.com/google/osv-scanner
+  note: task osv, which osv.yml runs daily over the newest release's SBOM. A bump is checked with task osv.

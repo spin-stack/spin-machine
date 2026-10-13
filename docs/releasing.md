@@ -25,7 +25,7 @@ combination of the machine's features, booted from the published tarball to a lo
 
 ## Releases
 
-`release.yml` builds all three and packs one tarball. Versions are **CalVer**,
+`release.yml`, through `build-release.yml`, builds all three and packs one tarball. Versions are **CalVer**,
 `v20260909.01`: a release of this repository is the machine as it stood on a date. There is
 no API here to promise compatibility about, and the one thing a version could promise —
 that checkpoints still resume — is decided by the fingerprint of the artefacts, not by a
@@ -39,12 +39,14 @@ or changed, and the patches added, changed or removed), whether checkpoints carr
 
 Each file the release offers - the tarball, its `.sha256` and `machine.env` - carries two
 Sigstore bundles beside it: `<file>.sigstore.json`, the signature of the workflow that built it,
-and `<file>.provenance.sigstore.json`, its SLSA provenance (`go tool provenance`: this workflow at
-its commit, and every pin in `versions.yaml`). Whoever takes one checks both against
-`release.yml` at the ref it ran on:
+and `<file>.provenance.sigstore.json`, its SLSA provenance (`go tool provenance`: the builder, the
+dispatched workflow at its commit, and every pin in `versions.yaml`). `release.yml` publishes
+nothing itself: it calls `build-release.yml`, a workflow only a call starts, which builds from cold
+on GitHub's own runner, signs, attests and publishes - so the certificate names the builder, and
+that is the identity whoever takes a file checks both bundles against:
 
 ```sh
-id=https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/heads/main
+id=https://github.com/spin-stack/spin-machine/.github/workflows/build-release.yml@refs/heads/main
 cosign verify-blob --bundle f.sigstore.json --certificate-identity "$id" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com f
 cosign verify-blob-attestation --type slsaprovenance1 --bundle f.provenance.sigstore.json \
