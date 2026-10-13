@@ -218,9 +218,57 @@ SOURCES
 echo "Sources:"
 echo "  ok: SOURCES"
 
+# What the release is made of, as a scanner reads it: CycloneDX, one component per thing shipped
+# and the version it was built from. Read from what the builds themselves recorded - the apk
+# databases the static binaries were linked in, the image's dpkg database, versions.yaml's pins -
+# never from a list kept here. A component with no version fails the release (sbom check): a
+# scanner cannot match it against anything. The time in it is the commit's, so a release built
+# twice from one commit carries the same bytes.
+echo "SBOM:"
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || echo 0)}"
+export SOURCE_DATE_EPOCH
+PARTS="${OUTPUT_DIR}/release/sbom"
+mkdir -p "${PARTS}" "${SHARE}/sbom"
+sbom() { go tool sbom "$@"; }
+for db in qemu e2fsprogs; do
+  [ -f "${OUTPUT_DIR}/sbom/${db}.apk" ] || { echo "👹 missing ${db}'s apk database: ${OUTPUT_DIR}/sbom/${db}.apk" >&2; echo "   run: task build" >&2; exit 1; }
+done
+# The packages each static binary links, by the -static or -dev package that carries the .a,
+# with musl's libc and gcc's libgcc: the rest of each database built them and is formulation.
+sbom apk -name qemu-libraries -version "${QEMU_VERSION}" -distro alpine \
+  -only glib-static,pcre2-static,libffi-dev,pixman-static,zlib-static,libseccomp-static,libcap-ng-static,liburing-dev,libaio-dev,gettext-static,musl-dev,gcc \
+  -out "${PARTS}/qemu-libraries.cdx.json" "${OUTPUT_DIR}/sbom/qemu.apk"
+sbom apk -name e2fsprogs-libraries -version "${E2FSPROGS_VERSION}" -distro alpine \
+  -only libarchive-static,acl-static,zlib-static,xz-static,zstd-static,bzip2-static,lz4-static,expat-static,openssl-libs-static,musl-dev,gcc \
+  -out "${PARTS}/e2fsprogs-libraries.cdx.json" "${OUTPUT_DIR}/sbom/e2fsprogs.apk"
+sbom dpkg -name base-image -version "${VERSION}" -distro ubuntu -out "${PARTS}/base-image.cdx.json" "${SHARE}/packages.txt"
+sbom pins -name sources -version "${VERSION}" -out "${PARTS}/sources.cdx.json" qemu qboot e2fsprogs kernel ubuntu task git-lfs buildkit
+# The files themselves, by their hashes: the firmware is the QEMU tarball's own build of it.
+for f in "${SHARE}"/bin/qemu-system-x86_64 "${SHARE}"/bin/qemu-system-x86_64-tcg "${SHARE}"/bin/qemu-img \
+  "${SHARE}"/qemu/bios.bin "${SHARE}"/qemu/bios-256k.bin "${SHARE}"/qemu/pvh.bin "${SHARE}"/qemu/kvmvapic.bin "${SHARE}"/qemu/efi-virtio.rom; do
+  sbom file -name "$(basename "$f")" -version "${QEMU_VERSION}" -out "${PARTS}/$(basename "$f").cdx.json" "$f"
+done
+for f in mkfs.ext4 debugfs e2fsck dumpe2fs; do
+  sbom file -name "$f" -version "${E2FSPROGS_VERSION}" -out "${PARTS}/$f.cdx.json" "${SHARE}/bin/$f"
+done
+sbom file -name qboot.bin -version "${QBOOT_COMMIT}" -out "${PARTS}/qboot.bin.cdx.json" "${SHARE}/qemu/qboot.bin"
+sbom file -name vmlinux -version "${KERNEL_VERSION}" -out "${PARTS}/vmlinux.cdx.json" "${SHARE}/kernel/vmlinux"
+sbom file -name rootfs.qcow2 -version "${VERSION}" -out "${PARTS}/rootfs.qcow2.cdx.json" "${SHARE}/image/rootfs.qcow2"
+# The machine, as the manifest above describes it; inside the tarball, where whatever lays the
+# release keeps it.
+sbom merge -name spin-machine -version "${VERSION}" -subject "${SHARE}/machine.env" \
+  -out "${SHARE}/sbom/machine.cdx.json" "${PARTS}"/*.cdx.json
+sbom check "${SHARE}/sbom/machine.cdx.json" > /dev/null
+echo "  ok: usr/share/spin-stack/sbom/machine.cdx.json"
+
 TARBALL="${OUTPUT_DIR}/release/${RELEASE_NAME}.tar.gz"
 tar -czf "${TARBALL}" -C "${OUTPUT_DIR}/release" "${RELEASE_NAME}"
 sha256sum "${TARBALL}" | sed "s|${OUTPUT_DIR}/release/||" > "${TARBALL}.sha256"
+# And beside it, of the tarball by its hash: what the release's attestation is made of.
+sbom merge -name "${RELEASE_NAME}.tar.gz" -version "${VERSION}" -subject "${TARBALL}" \
+  -out "${TARBALL%.tar.gz}.cdx.json" "${SHARE}/sbom/machine.cdx.json"
+sbom check "${TARBALL%.tar.gz}.cdx.json" > /dev/null
+rm -rf "${PARTS}"
 
 # The manifest again, beside the tarball rather than inside it, so that it can be published
 # as an asset of its own and read back without the 1 GB around it.

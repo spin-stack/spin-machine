@@ -8,7 +8,7 @@ tasks:
   build:
     desc: "Build e2fsprogs statically: mkfs.ext4, e2fsck, dumpe2fs, debugfs and the mke2fs.conf they are made with."
     cmds:
-      - rm -rf {{.OUTPUT_ABS}}/bin/mkfs.ext4 {{.OUTPUT_ABS}}/bin/e2fsck {{.OUTPUT_ABS}}/bin/dumpe2fs {{.OUTPUT_ABS}}/bin/debugfs {{.OUTPUT_ABS}}/e2fsprogs
+      - rm -rf {{.OUTPUT_ABS}}/bin/mkfs.ext4 {{.OUTPUT_ABS}}/bin/e2fsck {{.OUTPUT_ABS}}/bin/dumpe2fs {{.OUTPUT_ABS}}/bin/debugfs {{.OUTPUT_ABS}}/e2fsprogs {{.OUTPUT_ABS}}/sbom/e2fsprogs.apk
       - mkdir -p {{.OUTPUT_ABS}}
       - |
         docker buildx build \

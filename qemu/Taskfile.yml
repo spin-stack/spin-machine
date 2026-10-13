@@ -24,7 +24,7 @@ tasks:
       # a firmware blob this build no longer produces stays on disk, indistinguishable from
       # one it does. That is how a 331 MB firmware tree outlived the build that stopped
       # shipping it, and how a qemu-nbd would outlive the decision to stop shipping one.
-      - rm -rf {{.OUTPUT_ABS}}/bin/qemu-* {{.OUTPUT_ABS}}/qemu
+      - rm -rf {{.OUTPUT_ABS}}/bin/qemu-* {{.OUTPUT_ABS}}/qemu {{.OUTPUT_ABS}}/sbom/qemu.apk
       - mkdir -p {{.OUTPUT_ABS}}
       - |
         docker buildx build \

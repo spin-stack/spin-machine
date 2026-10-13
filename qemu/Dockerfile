@@ -517,3 +517,7 @@ COPY --from=builder /opt/qemu-tcg/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 COPY --from=builder /build/pc-bios/ /qemu/
 COPY --from=qboot /build/qboot.bin /qemu/qboot.bin
+# The packages the builder installed, as apk recorded them: the static libraries the binaries
+# link are among them, by the version that was linked, and hack/release's SBOM reads them here.
+# A copy out of the finished builder, so nothing the compile depends on changes.
+COPY --from=builder /lib/apk/db/installed /sbom/qemu.apk
