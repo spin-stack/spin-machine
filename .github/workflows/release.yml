@@ -205,29 +205,35 @@ jobs:
 
       # Each file is signed and attested, then each bundle checked against the identity that made
       # it, file by file: a bundle nothing verifies is a step that can quietly stop working.
+      #
+      # An attestation is checked by the file's digest, not the file: verify-blob-attestation reads
+      # a blob whole and refuses one over COSIGN_MAX_ATTACHMENT_SIZE (128 MiB), and the tarball is
+      # 338 MB (v20261013.01's run failed there). The digest is what the in-toto subject names.
       - name: Sign and attest what the release offers
         env:
           IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
         run: |
           set -euo pipefail
+          attested() {
+            cosign verify-blob-attestation --type "$1" --bundle "$2" \
+              --digest "$(sha256sum "$3" | cut -d' ' -f1)" --digestAlg sha256 \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          }
           for f in _output/release/*.tar.gz _output/release/*.tar.gz.sha256 _output/release/machine.env _output/release/*.cdx.json; do
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}" > /dev/null
             cosign attest-blob --yes --type slsaprovenance1 --predicate _output/provenance.json \
               --bundle "${f}.provenance.sigstore.json" "${f}" > /dev/null
             cosign verify-blob --bundle "${f}.sigstore.json" --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
-            cosign verify-blob-attestation --type slsaprovenance1 --bundle "${f}.provenance.sigstore.json" \
-              --certificate-identity "${IDENTITY}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+            attested slsaprovenance1 "${f}.provenance.sigstore.json" "${f}"
           done
           # The tarball's SBOM (hack/release), attested over it: what it is made of, by the
           # workflow that built it. The same SBOM is inside it, at usr/share/spin-stack/sbom.
           for f in _output/release/*.tar.gz; do
             cosign attest-blob --yes --type cyclonedx --predicate "${f%.tar.gz}.cdx.json" \
               --bundle "${f}.cdx.sigstore.json" "${f}" > /dev/null
-            cosign verify-blob-attestation --type cyclonedx --bundle "${f}.cdx.sigstore.json" \
-              --certificate-identity "${IDENTITY}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+            attested cyclonedx "${f}.cdx.sigstore.json" "${f}"
           done
           go tool attestgate files -require provenance _output/release
           go tool attestgate files -require cdx -except '*.sha256,machine.env,*.cdx.json' _output/release
