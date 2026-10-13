@@ -24,6 +24,9 @@ on:
 
 permissions:
   contents: write
+  # Keyless signing: cosign asks Sigstore for a short-lived certificate bound to this workflow at
+  # this ref, which is what a machine that takes the release holds its files to.
+  id-token: write
 
 # One release at a time, across every ref, and not per-ref. Per-ref serialises two runs on
 # the same tag and nothing else: a workflow_dispatch on main and a tag push are different
@@ -190,6 +193,37 @@ jobs:
             echo RELEASE_NOTES_EOF
           } >> "$GITHUB_OUTPUT"
 
+      # v4 is the one that installs cosign v3. Dependabot moves this pin like every other `uses:`.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Who built each file and from what - this workflow at this commit, every pin in
+      # versions.yaml - as SLSA provenance, beside the signature that says who made it. The
+      # predicate has no clock in it, so it is the same for every file of the run.
+      - name: Write the provenance
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: go tool provenance -version "${VERSION}" -out _output/provenance.json
+
+      # Each file is signed and attested, then each bundle checked against the identity that made
+      # it, file by file: a bundle nothing verifies is a step that can quietly stop working.
+      - name: Sign and attest what the release offers
+        env:
+          IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          for f in _output/release/*.tar.gz _output/release/*.tar.gz.sha256 _output/release/machine.env; do
+            cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}" > /dev/null
+            cosign attest-blob --yes --type slsaprovenance1 --predicate _output/provenance.json \
+              --bundle "${f}.provenance.sigstore.json" "${f}" > /dev/null
+            cosign verify-blob --bundle "${f}.sigstore.json" --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+            cosign verify-blob-attestation --type slsaprovenance1 --bundle "${f}.provenance.sigstore.json" \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+          done
+          go tool attestgate files -require provenance _output/release
+
       # Tagged here when the run generated its own version, so that the next run's count
       # of "tags already taken today" is right and the tarball has a commit behind it.
       - name: Tag the commit
@@ -212,6 +246,7 @@ jobs:
             _output/release/*.tar.gz
             _output/release/*.tar.gz.sha256
             _output/release/machine.env
+            _output/release/*.sigstore.json
 
   # What every combination of the machine's features costs, booted from the tarball just
   # published, as report.json beside it, and what moved against the release before it at the end
