@@ -1267,7 +1267,7 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("fingerprinting the BIOS: %w", err)
 	}
-	write("bios-size", strconv.FormatInt(size, 10))
+	write("bios-size", strconv.FormatInt(size, 10)) // mutate-exempt: the base the size is written in; any base names each size once
 
 	// The machine's shape, its devices, and the host's own CPU when the guest is being shown it.
 	shape := s.Shape()

@@ -186,7 +186,7 @@ func array(src, name string) (string, error) {
 		return "", fmt.Errorf("%s: %w", name, errNoArray)
 	}
 	end := strings.Index(src[start[0]:], "};")
-	if end < 0 {
+	if end < 0 { // mutate-exempt: the match starts with "GlobalProperty", so "};" is never at its offset 0
 		return "", fmt.Errorf("%s has no end in the source", name)
 	}
 	return src[start[0] : start[0]+end+2], nil
