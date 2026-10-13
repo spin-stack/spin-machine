@@ -18,7 +18,12 @@ func TestALockIsEveryInstalledPackage(t *testing.T) {
 	if err != nil || got != "glib-static=2.88.1-r1\nzlib-static=1.3.1-r2\n" {
 		t.Fatalf("lock %q, %v", got, err)
 	}
-	for name, db := range map[string]string{"no version": "P:glib\n", "no name": "V:1\n", "nothing": "\n"} {
+	for name, db := range map[string]string{
+		"no version":          "P:glib\n",
+		"no name":             "V:1\n",
+		"nothing":             "\n",
+		"one whole, one half": "P:musl\nV:1.2.5-r10\n\nP:glib\n",
+	} {
 		if _, err := Lock(db); err == nil {
 			t.Errorf("%s: locked", name)
 		}
