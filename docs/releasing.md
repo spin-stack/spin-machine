@@ -48,8 +48,12 @@ id=https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs
 cosign verify-blob --bundle f.sigstore.json --certificate-identity "$id" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com f
 cosign verify-blob-attestation --type slsaprovenance1 --bundle f.provenance.sigstore.json \
-  --certificate-identity "$id" --certificate-oidc-issuer https://token.actions.githubusercontent.com f
+  --digest "$(sha256sum f | cut -d' ' -f1)" --digestAlg sha256 \
+  --certificate-identity "$id" --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+The attestation is checked by the file's digest: given the file, `verify-blob-attestation` reads it
+whole and refuses one over 128 MiB (`COSIGN_MAX_ATTACHMENT_SIZE`), which the tarball is.
 
 Every release ran on `refs/heads/main`, and that is the ref its certificate names; which release
 a file is, its provenance says (`buildDefinition.externalParameters.version`), and whoever takes it
