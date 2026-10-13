@@ -42,7 +42,7 @@ features` and exit 1, before the VM exists.
 ## The devices have to match too
 
 Down to whether there is a serial port — restoring without one says `Unknown section or
-instance 'serial'`. That is why the device set is in the fingerprint
-([machine.md](machine.md#the-fingerprint)). NICs are in it, by count and MTU: a NIC is on
+instance 'serial'`. That is why every device, with its properties, is in the fingerprint
+([machine.md](machine.md#the-fingerprint)). NICs are in it, by slot and MTU: a NIC is on
 the command line, so it is there when the state is loaded. Disks are not: they are the VM's
 and not the machine's, and whoever resumes a checkpoint gives it the disks it was saved with.

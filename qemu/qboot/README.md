@@ -70,6 +70,8 @@ The same commit, patch and flags saved 6.3 ms over SeaBIOS built by a host's GCC
 recipe is pinned rather than convenient, and why a number here compares only with one built
 the same way. Against this machine's real boot, the firmware is about 10 ms of a few hundred.
 
-Firmware contents are part of Spec.Fingerprint — the BIOS and pvh.bin, by content — so
-two firmware builds are two machines, and a checkpoint saved under one does not resume
-under the other.
+The BIOS's size is part of Spec.Fingerprint and its contents are not: it is the `pc.bios` RAM
+block, which a checkpoint carries whole, so a resumed guest keeps running the qboot it booted
+with and only a block of another length is refused. qboot.bin is linked for its 64 KiB window
+(`qemu:verify` holds it there), so a rebuilt qboot is the same machine to a checkpoint and new
+firmware to the next boot. pvh.bin reaches the guest through fw_cfg at a boot and is not in it.

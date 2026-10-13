@@ -27,15 +27,20 @@ These are release invariants, not defaults. Everything below them is a strong en
 default unless it says otherwise; an experiment may depart from a default when it is isolated
 and makes its scope and result clear.
 
-1. **A release is one machine.** `machine.Spec.Fingerprint` hashes the QEMU binary, the
-   kernel, the initrd and the firmware the guest runs (the BIOS, qboot.bin, and pvh.bin) by
-   content, together with the five arguments that decide the machine's shape. A checkpoint
-   resumes only onto a machine with the fingerprint of the one it was saved on; across two
-   that differ a resume is undefined rather than an error. A content change to any of those
-   files is a fleet-wide event: every checkpoint taken against the previous machine stops
-   resuming. That is the design, not a bug to work around. A source or recipe change is a possible fleet-wide event; whether
-   it is one is decided by the resulting artifact hashes and shape, not by the diff's apparent
-   size. Verify them before promotion.
+1. **A checkpoint resumes on any release with its fingerprint, and the fingerprint is the
+   machine's contract.** `machine.Spec.Fingerprint` hashes the versioned machine type
+   (`machine.MachineType`), the shape, the chipset's globals and every device as the command
+   line gives it (`Spec.Contract`), the BIOS's size, and the host CPU under `-cpu host`. Not
+   the QEMU binary, the kernel, the initrd or pvh.bin: QEMU promises a newer release loads what
+   an older one of the same versioned type saved, and a resumed guest runs the kernel in its
+   saved memory. `task boot:compat` holds every change to that promise - a checkpoint the newest
+   release saved must resume on this tree when the fingerprint is the same - and `task
+   boot:roms` holds the fingerprint to every ROM a booted machine maps. Across two fingerprints
+   a resume is undefined rather than an error, so a change to anything the fingerprint hashes -
+   the machine type, a device or one of its properties, the BIOS's size - is a fleet-wide event:
+   every checkpoint taken against the previous machine stops resuming. That is the design, made
+   on purpose and never as a side effect: a QEMU bump keeps the machine type, and moving it is
+   its own change.
 
 2. **The base image is never written to.** Every VM maps it read-only through a qcow2
    backing chain and many share one file. Anything that opens it for writing invalidates

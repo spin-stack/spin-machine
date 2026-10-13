@@ -20,6 +20,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -379,11 +380,10 @@ func fingerprint(s machine.Spec) error {
 	}
 	out := struct {
 		Fingerprint string        `json:"fingerprint"`
-		QEMU        string        `json:"qemu"`
-		Kernel      string        `json:"kernel"`
-		Initrd      string        `json:"initrd,omitempty"`
 		Shape       machine.Shape `json:"shape"`
-	}{fp, s.QEMU, s.Kernel, s.Initrd, s.Shape()}
+		Contract    []string      `json:"contract"`
+		BIOS        string        `json:"bios"`
+	}{fp, s.Shape(), s.Contract(), filepath.Join(s.Firmware, cmp.Or(s.BIOS, machine.DefaultBIOS))}
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

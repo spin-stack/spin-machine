@@ -9,16 +9,17 @@ A virtual machine: QEMU, the guest kernel, the base image, and the definition of
 machine they make.
 
 The four are one thing, and the reason is not tidiness. A VM resumed from a checkpoint
-loads device and CPU state into a machine that has to be the same shape as the one the
+loads device and CPU state into a machine that has to be the same hardware as the one the
 checkpoint was saved on, and nothing checks that at run time. So the machine's identity
-is computed from the things that decide its shape — `machine.Spec.Fingerprint` hashes the
-QEMU binary, the kernel, the initrd and the firmware the guest runs (the BIOS, qboot.bin and pvh.bin)
-*by content*, together with the five arguments that decide what a guest sees. Two machines
-with the same fingerprint can take each other's checkpoints. Two with different
-fingerprints cannot, and a release in which any of those files moved has a different
-fingerprint by construction.
+is its contract — `machine.Spec.Fingerprint` hashes the versioned machine type
+(`machine.MachineType`, `pc-q35-11.1`), the shape, every device as the command line gives it,
+and the BIOS's size. Two machines with the same fingerprint can take each other's checkpoints,
+and two with different fingerprints cannot. A new QEMU of the same machine type, a new kernel or
+new firmware of the same size is the same machine: QEMU promises a newer release loads what an
+older one of the same machine type saved, and `task boot:compat` holds every release to it.
 
-One repository, one version, one machine a checkpoint resumes onto.
+One repository, one version per release, and checkpoints that resume across releases until the
+machine itself changes.
 
 **What is deliberately not in a release: software that owns a guest.** This repository
 builds a machine, and a release is not bootable on its own by design — whoever runs guests
@@ -42,7 +43,7 @@ One tarball:
 | `qemu/patches/`, `qemu/qboot-*.patch`, `qemu/qboot-COPYING` | the changes this tree makes to QEMU and qboot, shipped with the binaries built from them |
 | `kernel/vmlinux` | plus `kernel-config` |
 | `image/rootfs.qcow2` | read-only, 0444 |
-| `machine.env` | the version, the commit it was built from, and the checksums that decide whether a checkpoint resumes |
+| `machine.env` | the version, the commit it was built from, each file's checksum, and `fingerprint_sha256`, the contract that decides whether a checkpoint resumes |
 | `SOURCES` | every upstream source by version, URL and SHA-256, and the written offer |
 | `packages.txt` | every package and exact version in the base image |
 
@@ -53,8 +54,8 @@ either. What a release has beyond a build directory is what `hack/release` creat
 copies when it names one: `machine.env` and `SOURCES` it writes, and the QEMU and qboot
 patches under `qemu/` it takes from this repository, not from the build. A tree without
 a manifest is still a release for every purpose except being named — the fingerprint
-decides whether checkpoints resume, and it is computed from the files, not from
-`machine.env`. `_output/bin/` holds one thing more: `spin-machine`,
+decides whether checkpoints resume, and it is computed from the machine's definition and its
+BIOS, not from `machine.env`. `_output/bin/` holds one thing more: `spin-machine`,
 which `task tools` builds for working in this repository and `hack/release` does not ship —
 a release is the machine, not the tool that boots it. There is one layout: nothing rearranges
 the files on the way out of a build, into a tarball or into a consumer. Let the three differ

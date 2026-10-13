@@ -84,6 +84,26 @@ tasks:
           exit 1; }
         echo "OK: both qemu-system binaries run here, qemu-img runs, six firmware files,"
         echo "    and only the CI binary can emulate"
+      # The versioned q35 every checkpoint is saved on (machine.MachineType), offered and not
+      # deprecated by both binaries; a newer one is said here and in a release's notes, and is
+      # not a failure: moving to it is a decision, not a side effect of a bump.
+      - for: [qemu-system-x86_64, qemu-system-x86_64-tcg]
+        cmd: go run ./hack/machinetype check -qemu {{.OUTPUT_ABS}}/bin/{{.ITEM}}
+
+  compat:
+    desc: >-
+      Print what QEMU's newer machine types change against the pinned one (machine.MachineType):
+      hw_compat_X_Y and pc_compat_X_Y from the source of the pinned QEMU, checked against its
+      sha256. task bump NAME=qemu runs it.
+    cmds:
+      - |
+        set -euo pipefail
+        eval "$({{.VERSIONS}} env qemu)"
+        tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+        curl -fsSL "$({{.VERSIONS}} url qemu)" -o "$tmp/qemu.tar.xz"
+        echo "${QEMU_SHA256}  $tmp/qemu.tar.xz" | sha256sum -c - > /dev/null
+        tar -xJf "$tmp/qemu.tar.xz" -C "$tmp" "qemu-${QEMU_VERSION}/hw/core/machine.c" "qemu-${QEMU_VERSION}/hw/i386/pc.c"
+        go run ./hack/machinetype compat "$tmp/qemu-${QEMU_VERSION}/hw/core/machine.c" "$tmp/qemu-${QEMU_VERSION}/hw/i386/pc.c"
 
   fetch:
     desc: >-

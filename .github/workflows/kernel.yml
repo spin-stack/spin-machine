@@ -3,11 +3,10 @@ name: Kernel
 # The guest kernel, for the same reason QEMU has its own workflow: compiling it is tens of
 # minutes and the merge gate must not wait for it.
 #
-# It matters more than a build time, though. A changed kernel is a changed machine — the
-# fingerprint hashes this binary by content — so every checkpoint taken against the previous
-# one stops resuming. The job prints the checksum of what it produced for exactly that
-# reason: a config change whose effect nobody looked at is a fleet-wide event nobody
-# noticed.
+# It matters more than a build time, though: a changed kernel is every guest's next boot. It
+# does not strand checkpoints - a resumed guest runs the kernel in its saved memory, and the
+# fingerprint is the machine's contract, not this binary - but the job prints the checksum of
+# what it produced, so a config change is something somebody looked at.
 
 on:
 # kernel/**, and versions.yaml when it moves the kernel or its toolchain; see the note in
@@ -101,28 +100,17 @@ jobs:
         run: |
           CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task kernel:build KERNEL_NPROC=4
 
-      # Compared against the last released machine, which every release publishes as a
-      # machine.env asset. The kernel's checksum is one of the numbers in it that decide
-      # whether a checkpoint still resumes (hack/fingerprint-diff names them).
-      #
-      # So a pull request that changes the config, or bumps the Debian toolchain the kernel
-      # is compiled with, says on its own summary that it strands every checkpoint in
-      # existence. That is not a reason to reject it — it is a release this repository makes
-      # deliberately, and the step exits 0 either way. It is a reason to know: the change
-      # that does this need not look like much, and a comment edited in this directory's
-      # Dockerfile is enough.
-      #
-      # It speaks only for the kernel: this workflow builds no QEMU, and the verdict says so
-      # rather than implying it checked the whole machine.
-      - name: What this kernel is, and what it breaks
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # What it produced, on the run's summary: a pull request that changes the config, or
+      # bumps the Debian toolchain the kernel is compiled with, changes every guest's next
+      # boot, and the change that does it need not look like much. Checkpoints are not
+      # affected: the kernel is not in the fingerprint (machine.Spec.Fingerprint).
+      - name: What this kernel is
         run: |
           set -euo pipefail
-          kernel=$(sha256sum _output/kernel/vmlinux | cut -d' ' -f1)
-          echo "kernel sha256: ${kernel}"
-          echo "config sha256: $(sha256sum _output/kernel/kernel-config | cut -d' ' -f1)"
-          hack/fingerprint-diff "kernel_sha256=${kernel}" | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "kernel sha256: $(sha256sum _output/kernel/vmlinux | cut -d' ' -f1)"
+            echo "config sha256: $(sha256sum _output/kernel/kernel-config | cut -d' ' -f1)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the kernel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
