@@ -32,6 +32,11 @@ permissions:
 
 jobs:
   release:
+    # Any repository may call a public reusable workflow, and the certificate its run gets names
+    # this file at the ref it called - build-release.yml@refs/heads/main from someone else's
+    # workflow, over what that repository checked out. So the builder runs here or nowhere, and a
+    # verifier pins the source repository besides the SAN (--certificate-github-workflow-repository).
+    if: github.repository == 'spin-stack/spin-machine'
     runs-on: ubuntu-24.04
     # Every artefact compiled from cold on four cores: QEMU and the kernel are each tens of minutes.
     timeout-minutes: 300
@@ -194,10 +199,12 @@ jobs:
             cosign attest-blob --yes --type slsaprovenance1 --predicate _output/provenance.json \
               --bundle "${f}.provenance.sigstore.json" "${f}" > /dev/null
             cosign verify-blob --bundle "${f}.sigstore.json" --certificate-identity "${IDENTITY}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-github-workflow-repository spin-stack/spin-machine "${f}"
             cosign verify-blob-attestation --type slsaprovenance1 --bundle "${f}.provenance.sigstore.json" \
               --certificate-identity "${IDENTITY}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-github-workflow-repository spin-stack/spin-machine "${f}"
           done
           # The tarball's SBOM (hack/release), attested over it: what it is made of, by the
           # workflow that built it. The same SBOM is inside it, at usr/share/spin-stack/sbom.
@@ -206,7 +213,8 @@ jobs:
               --bundle "${f}.cdx.sigstore.json" "${f}" > /dev/null
             cosign verify-blob-attestation --type cyclonedx --bundle "${f}.cdx.sigstore.json" \
               --certificate-identity "${IDENTITY}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-github-workflow-repository spin-stack/spin-machine "${f}"
           done
           go tool attestgate files -require provenance _output/release
           go tool attestgate files -require cdx -except '*.sha256,machine.env,*.cdx.json' _output/release

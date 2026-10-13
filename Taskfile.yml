@@ -303,7 +303,8 @@ tasks:
         gh release download "$tag" -p "$sbom" -p "$sbom.sigstore.json" -D "$dir"
         cosign verify-blob --bundle "$dir/$sbom.sigstore.json" \
           --certificate-identity https://github.com/spin-stack/spin-machine/.github/workflows/build-release.yml@refs/heads/main \
-          --certificate-oidc-issuer https://token.actions.githubusercontent.com "$dir/$sbom"
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          --certificate-github-workflow-repository spin-stack/spin-machine "$dir/$sbom"
         # osv-scanner exits 1 when it found something, which is the answer; above 1 it failed.
         status=0
         go run "github.com/google/osv-scanner/v2/cmd/osv-scanner@$(go tool versions version osv-scanner)" \
