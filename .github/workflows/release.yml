@@ -10,11 +10,12 @@ name: Release
 #
 # The `.01` is the run within the day, because two releases on one day is normal when a
 # flag is being chased.
+#
+# A release is made from main and nothing else: dispatched there, it names its version, builds,
+# signs and attests as release.yml@refs/heads/main - the one identity whoever takes the release
+# holds its files to - and only then tags the commit. A pushed tag starts nothing.
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       version:
@@ -40,6 +41,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     # A warm run reads main's BuildKit cache and takes a few minutes (2m13s, 2026-09-30). The
     # ceiling is for the cold one, which compiles QEMU and the kernel, each tens of minutes.
@@ -82,8 +84,7 @@ jobs:
       - name: Expose the Actions cache to buildx
         uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
 
-      # Three sources, in order: what the caller typed, the tag that triggered this, or a
-      # new one for today. The generated form is deliberately not `date +%s` or a commit
+      # Two sources, in order: what the caller typed, or a new one for today. The generated form is deliberately not `date +%s` or a commit
       # hash — it has to be readable, sortable, and the same shape as one typed by hand.
       # The caller's input arrives through the environment and not through ${{ }} in the
       # script body. Interpolation happens before the shell sees the line, so a version
@@ -99,9 +100,6 @@ jobs:
           if [ -n "${INPUT_VERSION:-}" ]; then
             version="$INPUT_VERSION"
             origin="given by the caller"
-          elif [ "${{ github.ref_type }}" = "tag" ]; then
-            version="${{ github.ref_name }}"
-            origin="the tag that triggered this run"
           else
             day=$(date -u +%Y%m%d)
             # Count what today already has. `git tag -l` on a fetch-depth:0 checkout sees
@@ -234,10 +232,10 @@ jobs:
           go tool attestgate files -require provenance _output/release
           go tool attestgate files -require cdx -except '*.sha256,machine.env,*.cdx.json' _output/release
 
-      # Tagged here when the run generated its own version, so that the next run's count
-      # of "tags already taken today" is right and the tarball has a commit behind it.
+      # Tagged here, after the files are signed and before they are published, so that the next
+      # run's count of "tags already taken today" is right and the tarball has a commit behind it.
+      # A version tagged already is refused here: git push does not move a tag.
       - name: Tag the commit
-        if: github.ref_type != 'tag'
         run: |
           set -euo pipefail
           git tag "${{ steps.version.outputs.version }}"
@@ -264,6 +262,7 @@ jobs:
   # of the notes. report.yml says why it is a job of its own, on its own runner.
   report:
     needs: release
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/report.yml
     with:
       version: ${{ needs.release.outputs.version }}
