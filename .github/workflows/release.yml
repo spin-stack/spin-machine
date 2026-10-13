@@ -212,7 +212,7 @@ jobs:
           IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
         run: |
           set -euo pipefail
-          for f in _output/release/*.tar.gz _output/release/*.tar.gz.sha256 _output/release/machine.env; do
+          for f in _output/release/*.tar.gz _output/release/*.tar.gz.sha256 _output/release/machine.env _output/release/*.cdx.json; do
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}" > /dev/null
             cosign attest-blob --yes --type slsaprovenance1 --predicate _output/provenance.json \
               --bundle "${f}.provenance.sigstore.json" "${f}" > /dev/null
@@ -222,7 +222,17 @@ jobs:
               --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
           done
+          # The tarball's SBOM (hack/release), attested over it: what it is made of, by the
+          # workflow that built it. The same SBOM is inside it, at usr/share/spin-stack/sbom.
+          for f in _output/release/*.tar.gz; do
+            cosign attest-blob --yes --type cyclonedx --predicate "${f%.tar.gz}.cdx.json" \
+              --bundle "${f}.cdx.sigstore.json" "${f}" > /dev/null
+            cosign verify-blob-attestation --type cyclonedx --bundle "${f}.cdx.sigstore.json" \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+          done
           go tool attestgate files -require provenance _output/release
+          go tool attestgate files -require cdx -except '*.sha256,machine.env,*.cdx.json' _output/release
 
       # Tagged here when the run generated its own version, so that the next run's count
       # of "tags already taken today" is right and the tarball has a commit behind it.
@@ -246,6 +256,7 @@ jobs:
             _output/release/*.tar.gz
             _output/release/*.tar.gz.sha256
             _output/release/machine.env
+            _output/release/*.cdx.json
             _output/release/*.sigstore.json
 
   # What every combination of the machine's features costs, booted from the tarball just

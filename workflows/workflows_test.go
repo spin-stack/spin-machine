@@ -13,7 +13,7 @@ import (
 // Every step that publishes runs after an unconditional provenance attestation in its job; the
 // ones that look like an upload and ship nothing anyone installs are named here, each with why.
 func TestEveryUploadIsAttested(t *testing.T) {
-	g := attestgate.Gate{Root: "..", NotPublished: map[string]string{
+	g := attestgate.Gate{Root: "..", RequireSBOM: true, NotPublished: map[string]string{
 		"ci.yml/gate/Upload Go coverage HTML":                  "a coverage page for a person, kept seven days",
 		"kernel.yml/build/Upload the kernel":                   "a lane's kernel for a person to fetch; a release builds its own",
 		"lab.yml/lab/Keep the log":                             "a measurement's log, for a person",

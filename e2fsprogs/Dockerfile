@@ -77,3 +77,6 @@ COPY --from=builder /build/e2fsck/e2fsck /bin/e2fsck
 COPY --from=builder /build/misc/dumpe2fs /bin/dumpe2fs
 COPY --from=builder /build/debugfs/debugfs /bin/debugfs
 COPY --from=builder /build/misc/mke2fs.conf /e2fsprogs/mke2fs.conf
+# The packages the builder installed, the static libraries linked among them, for the SBOM
+# hack/release writes: a copy out of the finished builder, so nothing the compile reads changes.
+COPY --from=builder /lib/apk/db/installed /sbom/e2fsprogs.apk

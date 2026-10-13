@@ -51,6 +51,15 @@ cosign verify-blob-attestation --type slsaprovenance1 --bundle f.provenance.sigs
 ```
 
 A run started by hand ran on `refs/heads/main`, and that is the ref its certificate names.
+
+What the release is made of is its CycloneDX SBOM, written by `hack/release` from what the builds
+recorded - the apk databases QEMU and e2fsprogs were statically linked in (each build's
+`/lib/apk/db/installed`, extracted to `_output/sbom/`), the image's `packages.txt`, the pins in
+`versions.yaml`, and each shipped file by its hash - and checked with `go tool sbom check`: a
+component with no version fails the release. It is inside the tarball at
+`usr/share/spin-stack/sbom/machine.cdx.json`, beside it as `<tarball>.cdx.json`, and attested
+over the tarball as `<tarball>.cdx.sigstore.json` (`cosign verify-blob-attestation --type
+cyclonedx`, with the identity above).
 `workflows/workflows_test.go` holds every workflow to attesting before it publishes.
 
 ## The feature matrix
