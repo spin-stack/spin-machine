@@ -43,14 +43,17 @@ and `<file>.provenance.sigstore.json`, its SLSA provenance (`go tool provenance`
 dispatched workflow at its commit, and every pin in `versions.yaml`). `release.yml` publishes
 nothing itself: it calls `build-release.yml`, a workflow only a call starts, which builds from cold
 on GitHub's own runner, signs, attests and publishes - so the certificate names the builder, and
-that is the identity whoever takes a file checks both bundles against:
+that is the identity whoever takes a file checks both bundles against. With the repository it ran
+in: any repository can call a public reusable workflow, and its run's certificate names this
+builder too, so the SAN alone is not this repository's (the builder's job also refuses to run
+anywhere else).
 
 ```sh
 id=https://github.com/spin-stack/spin-machine/.github/workflows/build-release.yml@refs/heads/main
-cosign verify-blob --bundle f.sigstore.json --certificate-identity "$id" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com f
-cosign verify-blob-attestation --type slsaprovenance1 --bundle f.provenance.sigstore.json \
-  --certificate-identity "$id" --certificate-oidc-issuer https://token.actions.githubusercontent.com f
+pin=(--certificate-identity "$id" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  --certificate-github-workflow-repository spin-stack/spin-machine)
+cosign verify-blob --bundle f.sigstore.json "${pin[@]}" f
+cosign verify-blob-attestation --type slsaprovenance1 --bundle f.provenance.sigstore.json "${pin[@]}" f
 ```
 
 Every release ran on `refs/heads/main`, and that is the ref its certificate names; which release
