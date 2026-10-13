@@ -10,8 +10,8 @@ github.com/in-toto/attestation v1.2.0 h1:aPRUZ3azbqD7yEBD5fP3TD8Dszf+YHo284SOcpa
 github.com/in-toto/attestation v1.2.0/go.mod h1:r79G45gOmzPismgObLSL+rZTFxUgZLOQJI6LofTZgXk=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/spin-stack/go-tools v0.0.0-20261013132702-621f429d5b97 h1:9O9xGhCP1Ij0ydUba0gqmS1pvGIIvW5iytBzq6RYIvA=
-github.com/spin-stack/go-tools v0.0.0-20261013132702-621f429d5b97/go.mod h1:cKPqYf5z2CcqsABqoifumRkiEEYSCBlRCwVNP+3Hz5A=
+github.com/spin-stack/go-tools v0.0.0-20261013153230-6e2b16ee38be h1:pi7rsTCKW9m8ZYpPY/dk1di7/RYhM5fepPrh001sJI8=
+github.com/spin-stack/go-tools v0.0.0-20261013153230-6e2b16ee38be/go.mod h1:cKPqYf5z2CcqsABqoifumRkiEEYSCBlRCwVNP+3Hz5A=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/terminalstatic/go-xsd-validate v0.1.8 h1:UVrTCy1j3DhwaYTTUF+QYO/Nan13S0tf+Jwi+p45Bf0=
