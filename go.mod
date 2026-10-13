@@ -14,7 +14,7 @@ tool (
 )
 
 require (
-	github.com/spin-stack/go-tools v0.0.0-20261013172709-defd29ba99c4
+	github.com/spin-stack/go-tools v0.0.0-20261013164036-99d744796066
 	golang.org/x/sys v0.48.0
 )
 

@@ -289,7 +289,7 @@ tasks:
 
   osv:
     desc: >-
-      What OSV knows against the newest release's SBOM, once its signature is the builder's: one
+      What OSV knows against the newest release's SBOM, once its signature is the release's: one
       line a finding, id, package@version and summary, in _output/osv.tsv. Needs gh, cosign and
       the network; osv.yml runs it daily and opens an issue for a finding it has not opened before.
     # The newest release, because it is what anything takes next; an older one still pinned is
@@ -302,9 +302,8 @@ tasks:
         sbom="spin-machine-${tag}-linux-x86_64.cdx.json"
         gh release download "$tag" -p "$sbom" -p "$sbom.sigstore.json" -D "$dir"
         cosign verify-blob --bundle "$dir/$sbom.sigstore.json" \
-          --certificate-identity https://github.com/spin-stack/spin-machine/.github/workflows/build-release.yml@refs/heads/main \
-          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-          --certificate-github-workflow-repository spin-stack/spin-machine "$dir/$sbom"
+          --certificate-identity https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/heads/main \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com "$dir/$sbom"
         # osv-scanner exits 1 when it found something, which is the answer; above 1 it failed.
         status=0
         go run "github.com/google/osv-scanner/v2/cmd/osv-scanner@$(go tool versions version osv-scanner)" \
