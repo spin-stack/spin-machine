@@ -42,8 +42,9 @@
   pin: 731b5681e4bb18be313231579b8efd0296c5b015fa36dc533874b639ba838016
   track: tags https://gitlab.com/qemu-project/qemu.git
   note: >-
-    qemu/Dockerfile. A new machine. After the bump: `task qemu:build verify:args`, and the lane's
-    fingerprint-diff says what it breaks. The build directories' cache mounts are keyed by the
+    qemu/Dockerfile. A new emulator of the same machine: the machine type (machine.MachineType)
+    stays, and the bump prints what newer types change against it (task qemu:compat). After the
+    bump: `task qemu:build verify:args boot:roms boot:compat`. The build directories' cache mounts are keyed by the
     version, so QEMU_CONFIG_REV does not move with it.
     A device renamed or dropped upstream fails qemu:verify or verify:args, and is fixed in
     qemu/devices.mak or the machine package, not by removing the check.
@@ -69,7 +70,8 @@
   pin: 382d6aa48640351df7da6321e156c39155b4a99b0985d4370f7e608729987453
   track: kernel-stable
   note: >-
-    kernel/Dockerfile. A new machine. The configuration
+    kernel/Dockerfile. A new kernel for every guest's next boot; checkpoints keep resuming, each
+    on the kernel it was saved with (machine.Spec.Fingerprint). The configuration
     is kernel/config-<version>-x86_64: rename it to the new version in the same commit, then
     `task kernel:build`, `task boot:bench`. A series that is over is a decision, not a bump.
     Pinned at 7.3's release candidates, from git.kernel.org, until 7.3.0 is out: the bump to it

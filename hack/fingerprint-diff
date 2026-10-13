@@ -2,27 +2,26 @@
 #
 # Whether this build is still the machine the fleet's checkpoints were taken against.
 #
-# `machine.Spec.Fingerprint` hashes by content the files a guest runs - QEMU, the kernel, the
-# initrd and the firmware - together with the machine's shape and devices, as machine/ defines
-# them. The initrd is brought by whoever runs guests, so between two releases the question
-# collapses to the checksums FP_KEYS names below, fingerprint_sha256 among them - Fingerprint
-# itself, of one fixed machine, which also moves when machine/ changes what it hashes or how:
-# **checkpoints carry over if and only if none of them changed.**
+# `machine.Spec.Fingerprint` is the machine's contract: its versioned machine type
+# (machine.MachineType), its shape, its devices as the command line gives them, and the BIOS's
+# size. fingerprint_sha256 in machine.env is Fingerprint itself, of one fixed machine, so it
+# moves when any of those does: **checkpoints carry over if and only if it did not change.**
 #
-# image_sha256 is deliberately not one of them. The base image is mapped read-only through
-# a backing chain and is not hashed into the fingerprint - a checkpoint resumes with its own
-# disks, chain and all - so a release that moves only the image still resumes every
-# checkpoint taken against its predecessor. Saying that plainly is
-# half the value of this script: the other half is that the numbers which *do* decide it stop
-# being something a human diffs by eye across two release pages.
+# The files' own checksums - qemu_sha256, kernel_sha256, bios_sha256, pvh_sha256 and
+# image_sha256 - are deliberately not what decides it. A newer QEMU of the same machine type is
+# another emulator of one machine (QEMU's migration promise, which boot:compat holds a release
+# to); a resumed guest runs the kernel in its saved memory; the BIOS travels in a checkpoint and
+# only its size is the machine's; pvh.bin and the base image are read by a boot. So a release
+# that moves only those still resumes every checkpoint taken against its predecessor, and this
+# says so beside what moved. Saying that plainly is half the value of this script: the other half
+# is that the number which *does* decide it stops being something a human diffs by eye across
+# two release pages.
 #
 # It exits 0 whatever it finds. This is not a gate — changing the machine is a thing this
 # repository does on purpose, and a check that failed on it would be one people learn to
-# force through. What changing the machine is not allowed to be is silent, and it has been
-# exactly once here already: a comment edited in kernel/Dockerfile, a rebuilt vmlinux, and a
-# fleet-wide invalidation that nothing announced.
+# force through. What changing the machine is not allowed to be is silent.
 #
-#   hack/fingerprint-diff qemu_sha256=<hex> [kernel_sha256=<hex>] [bios_sha256=<hex>] [pvh_sha256=<hex>] [fingerprint_sha256=<hex>] [image_sha256=<hex>]
+#   hack/fingerprint-diff fingerprint_sha256=<hex> [qemu_sha256=<hex>] [kernel_sha256=<hex>] [bios_sha256=<hex>] [pvh_sha256=<hex>] [image_sha256=<hex>]
 #
 # Writes a Markdown verdict to stdout — meant to be pasted into release notes or a step
 # summary — and its workings to stderr.
@@ -47,10 +46,9 @@ if [ "${#KEYS[@]}" -eq 0 ]; then
   exit 2
 fi
 
-# The classification this script exists to hold in one place. Adding a file to the
-# fingerprint means adding it here; anything else is a number that is reported and does not
-# bear on whether a checkpoint resumes.
-FP_KEYS=(qemu_sha256 kernel_sha256 bios_sha256 pvh_sha256 fingerprint_sha256)
+# The classification this script exists to hold in one place: the fingerprint is the contract,
+# and every other number is reported and does not bear on whether a checkpoint resumes.
+FP_KEYS=(fingerprint_sha256)
 bears_on_fingerprint() {
   local k
   for k in "${FP_KEYS[@]}"; do [ "$1" = "${k}" ] && return 0; done
@@ -148,7 +146,8 @@ detail() {
 if [ "${#moved_fp[@]}" -gt 0 ]; then
   say "### ⚠️ Every checkpoint taken against \`${reference}\` stops resuming on this machine"
   say
-  say "The fingerprint hashes these by content, so a host resuming a checkpoint saved"
+  say "The machine's contract moved - its machine type, its shape, its devices or its BIOS's"
+  say "size (machine.Spec.Fingerprint) - so a host resuming a checkpoint saved"
   say "against \`${reference}\` on this machine is doing something undefined rather than"
   say "something that fails."
   say
@@ -156,9 +155,10 @@ if [ "${#moved_fp[@]}" -gt 0 ]; then
 elif [ "${#unchecked_fp[@]}" -eq 0 ]; then
   say "### Checkpoints taken against \`${reference}\` still resume on this machine"
   say
-  say "$(printf '`%s` ' "${FP_KEYS[@]}")are unchanged, and they are the whole of what"
-  say "this repository contributes to the fingerprint — the initrd and each VM's own sizes"
-  say "come from whoever runs the guests and are untouched by a release."
+  say "\`fingerprint_sha256\`, the machine's contract, is unchanged: its machine type, shape,"
+  say "devices and BIOS size are the same, whatever else below moved - a new QEMU of the same"
+  say "machine type, a new kernel or firmware a boot reads. Each VM's own sizes come from"
+  say "whoever runs the guests and are untouched by a release."
 else
   say "### Nothing compared here moves the fingerprint"
   say

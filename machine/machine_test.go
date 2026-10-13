@@ -176,7 +176,7 @@ func TestArgs(t *testing.T) {
 			s.KVMFDSet, s.VsockFD, s.NICs[0].VhostFD = 1, 5, 6
 		},
 		want: []string{
-			"-machine q35,kernel-irqchip=on,", "-accel kvm,device=/dev/fdset/1 ",
+			"-machine pc-q35-11.1,kernel-irqchip=on,", "-accel kvm,device=/dev/fdset/1 ",
 			"addr=0x2,vhostfd=5 ", "tap,id=net0,fd=3,vhost=on,vhostfd=6 ",
 		},
 		absent: []string{"accel=kvm"},
@@ -396,9 +396,10 @@ func TestAChainsBacking(t *testing.T) {
 // The fingerprint, one pair of machines per row: a is spec() changed by a, b is a
 // changed by b, and the row says whether a checkpoint saved on one resumes on the other.
 //
-// It may only if the binary, the kernel, the initrd, the shape and the devices present
-// when state is loaded all agree — and must be able to when all that differs is what is
-// behind the devices, or a checkpoint resumes nowhere but on the VM that saved it.
+// It may only if the machine type, the shape, the devices present when state is loaded and the
+// BIOS's size all agree — and must be able to when all that differs is the emulator, what a
+// boot reads, or what is behind the devices, or a checkpoint resumes nowhere but on the release
+// that saved it.
 func TestFingerprint(t *testing.T) {
 	const intel, amd = "13th Gen Intel(R) Core(TM) i9-13900HK", "AMD EPYC 9634 84-Core Processor"
 	rewrite := func(t *testing.T, path, content string) {
@@ -468,16 +469,25 @@ func TestFingerprint(t *testing.T) {
 
 		{name: "more memory", b: func(_ *testing.T, s *Spec) { s.Memory.SizeMB = 1024 }},
 		{name: "more vCPUs", b: func(_ *testing.T, s *Spec) { s.BootCPUs = 4 }},
-		{name: "a new kernel", b: func(t *testing.T, s *Spec) { rewrite(t, s.Kernel, "a different kernel") }},
-		{name: "a new QEMU", b: func(t *testing.T, s *Spec) { rewrite(t, s.QEMU, "a different qemu") }},
-		// The firmware runs in the guest, and its ROM is carried by a saved machine.
-		{name: "a new BIOS", b: func(t *testing.T, s *Spec) {
+		// A resumed guest runs the kernel in its saved memory: the file is read by a boot.
+		{name: "a new kernel", same: true, b: func(t *testing.T, s *Spec) { rewrite(t, s.Kernel, "a different kernel") }},
+		{name: "an initrd", same: true, b: func(t *testing.T, s *Spec) { s.Initrd = s.Kernel }},
+		// Another QEMU of the same versioned machine type is another emulator of one machine:
+		// QEMU's migration promise, which boot:compat holds a release to.
+		{name: "a new QEMU", same: true, b: func(t *testing.T, s *Spec) { rewrite(t, s.QEMU, "a different qemu") }},
+		// pvh.bin enters the kernel through fw_cfg at a boot and is no block a resume loads.
+		{name: "a new pvh.bin", same: true, b: func(t *testing.T, s *Spec) {
+			rewrite(t, filepath.Join(s.Firmware, "pvh.bin"), "a different pvh")
+		}},
+		// The BIOS is the pc.bios block a saved machine carries whole, contents included: one
+		// of another length is refused, and a rebuild of the same length is the same machine.
+		{name: "a BIOS rebuilt at its size", same: true, b: func(t *testing.T, s *Spec) {
+			rewrite(t, filepath.Join(s.Firmware, DefaultBIOS), "QBOOT")
+		}},
+		{name: "a BIOS of another size", b: func(t *testing.T, s *Spec) {
 			rewrite(t, filepath.Join(s.Firmware, DefaultBIOS), "a different qboot")
 		}},
 		{name: "SeaBIOS instead of qboot", b: func(_ *testing.T, s *Spec) { s.BIOS = "bios-256k.bin" }},
-		{name: "a new pvh.bin", b: func(t *testing.T, s *Spec) {
-			rewrite(t, filepath.Join(s.Firmware, "pvh.bin"), "a different pvh")
-		}},
 		{name: "the same firmware in another directory", same: true, b: func(t *testing.T, s *Spec) {
 			s.Firmware = spec(t).Firmware
 		}},
@@ -771,36 +781,56 @@ func TestValidateRefuses(t *testing.T) {
 	}
 }
 
-// What the fingerprint says is present when a checkpoint's state is loaded. Two machines
-// that differ in one of these differ on the bus, so each has to be in the string when the
-// device is there and out of it when it is not; a check that is only "the two
-// fingerprints differ" holds none of them, because an inverted test still differs.
-func TestTopologyNamesTheDevicesPresentAtRestore(t *testing.T) {
+// What the contract says is present when a checkpoint's state is loaded, each device with its
+// properties and its slot and without what is one VM's. Two machines that differ in one of these
+// differ on the bus, so each has to be in the contract when the device is there and out of it
+// when it is not; a check that is only "the two fingerprints differ" holds none of them, because
+// an inverted test still differs.
+func TestTheContractIsTheDevicesPresentAtRestore(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		set    func(*Spec)
-		want   string
-		absent string
+		want   []string
+		absent []string
 	}{
-		{name: "no vsock", set: func(*Spec) {}, absent: "vhost-vsock-pci"},
-		{name: "a vsock", set: func(s *Spec) { s.VsockCID = 7 }, want: ";vhost-vsock-pci@0x2"},
-		{name: "no memory ceiling", set: func(s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB }, absent: "virtio-mem-pci"},
-		{name: "a memory ceiling", set: func(s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB + 1 }, want: ";virtio-mem-pci@0x1e"},
-		{name: "no console", set: func(*Spec) {}, absent: "isa-serial"},
-		{name: "a console by path", set: func(s *Spec) { s.Serial = "file:/log" }, want: ";isa-serial"},
-		{name: "a console by descriptor", set: func(s *Spec) { s.SerialFDSet = 1 }, want: ";isa-serial"},
-		{name: "no hotplug controller", set: func(*Spec) {}, absent: "virtio-scsi-pci"},
-		{name: "a hotplug controller", set: func(s *Spec) { s.HotplugDisks = 1 }, want: ";virtio-scsi-pci@0x1a"},
+		{name: "the machine's own", set: func(*Spec) {},
+			want: []string{
+				"device vmgenid,guid=auto",
+				"device virtio-rng-pci,disable-legacy=on,addr=0x3",
+				"device virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on,disable-legacy=on,addr=0x4",
+				"global ICH9-LPC.disable_s3=1",
+				"global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off",
+			},
+			absent: []string{"vhost-vsock-pci", "virtio-mem-pci", "isa-serial", "virtio-scsi-pci", "virtio-net-pci", "virtio-blk-pci"}},
+		{name: "a vsock, without its context id or descriptor", set: func(s *Spec) { s.VsockCID, s.VsockFD = 7, 14 },
+			want: []string{"device vhost-vsock-pci,disable-legacy=on,addr=0x2"}, absent: []string{"guest-cid", "vhostfd"}},
+		{name: "a memory ceiling, without its backend", set: func(s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB + 1 },
+			want: []string{"device virtio-mem-pci,requested-size=0,disable-legacy=on,addr=0x1e"}, absent: []string{"memdev", ",id="}},
+		{name: "a console by path", set: func(s *Spec) { s.Serial = "file:/log" }, want: []string{"serial isa-serial"}},
+		{name: "a console by descriptor", set: func(s *Spec) { s.SerialFDSet = 1 }, want: []string{"serial isa-serial"}},
+		{name: "a hotplug controller", set: func(s *Spec) { s.HotplugDisks = 1 },
+			want: []string{"device virtio-scsi-pci,disable-legacy=on,addr=0x1a"}},
+		{name: "a NIC, by its slot and MTU and not its MAC or backend", set: func(s *Spec) {
+			n := nic()
+			n.MTU, n.VhostFD = 1500, 15
+			s.NICs = []NIC{n}
+		}, want: []string{"device virtio-net-pci,romfile=,disable-legacy=on,addr=0x10,host_mtu=1500"}, absent: []string{"mac=", "netdev", "vhostfd"}},
+		{name: "a disk is the VM's", set: func(s *Spec) { s.Disks = []Disk{{Path: "/a", Format: "raw", Serial: "x"}} },
+			absent: []string{"virtio-blk-pci", "serial=x"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := spec(t)
 			tc.set(&s)
-			got := s.topology()
-			if tc.want != "" && !strings.Contains(got, tc.want) {
-				t.Errorf("topology %q, want it to hold %q", got, tc.want)
+			got := strings.Join(s.Contract(), "\n")
+			for _, w := range tc.want {
+				if !slices.Contains(s.Contract(), w) {
+					t.Errorf("contract\n%s\nwant it to hold %q", got, w)
+				}
 			}
-			if tc.absent != "" && strings.Contains(got, tc.absent) {
-				t.Errorf("topology %q, want no %q", got, tc.absent)
+			for _, a := range tc.absent {
+				if strings.Contains(got, a) {
+					t.Errorf("contract\n%s\nwant no %q", got, a)
+				}
 			}
 		})
 	}

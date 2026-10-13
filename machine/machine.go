@@ -11,11 +11,11 @@
 // detail of whoever launches a VM; it is part of what a release *is*, and it has
 // to move with the binary and the kernel it was written for.
 //
-// The rule that follows: Fingerprint hashes the QEMU binary, the kernel, the initrd
-// and the firmware the guest runs by content, together with the five arguments that
-// decide the machine's shape. A checkpoint resumes only onto a machine with the
-// fingerprint of the one it was saved on, and a release in which any of those files
-// moved has a different fingerprint by construction.
+// The rule that follows: Fingerprint is the machine's contract - its versioned machine
+// type, its shape, every device as the command line gives it, and the BIOS's size. A
+// checkpoint resumes only onto a machine with the fingerprint of the one it was saved on,
+// and onto any release with that fingerprint: a new QEMU of the same machine type, or a
+// new kernel, is the same machine to a checkpoint (boot:compat holds a release to it).
 //
 // What is here is what a machine is. What is not here is everything about
 // running one: allocating a vsock context id, opening a TAP file descriptor,
@@ -30,11 +30,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -508,10 +508,8 @@ type Spec struct {
 	// TCG can present — QEMU refuses it with "CPU model 'host' requires KVM or HVF" — so
 	// the default below is "max" here and "host" under KVM.
 	//
-	// Checkpoints do not cross the two, and nothing extra is needed to keep them apart: the
-	// fingerprint hashes the QEMU binary by content, and the TCG build is a different file.
-	// This lands in the shape as well, which makes the separation visible in an argument
-	// rather than only in a hash.
+	// Checkpoints do not cross the two: the accelerator is in the shape, which the fingerprint
+	// hashes, and a guest's state under TCG is not a guest's state under KVM.
 	Accel string
 
 	Disks []Disk
@@ -748,7 +746,21 @@ func (s Spec) accel() string {
 // kernel-irqchip=on stays under either accelerator. It names KVM's in-kernel interrupt
 // controller and TCG has none, but QEMU accepts the option and ignores it rather than
 // refusing — measured against 11.1.1 — so the shape is one string and not two.
-const machineOpts = "q35,kernel-irqchip=on,hpet=off,acpi=on,sata=off,smbus=off"
+const machineOpts = MachineType + ",kernel-irqchip=on,hpet=off,acpi=on,sata=off,smbus=off"
+
+// MachineType is the versioned q35 this machine is, and never the bare "q35", which is an
+// alias of whichever pc-q35-X.Y the QEMU running it is newest at.
+//
+// The version is what QEMU's migration promise is made of: a newer QEMU loads the state an
+// older one saved when both run the same pc-q35-X.Y with the same devices, because the newer
+// type's changes to defaults (hw_compat_X_Y in hw/core/machine.c, pc_compat_X_Y in
+// hw/i386/pc.c) are switched back off for the older one. Under the alias a QEMU bump to a new
+// minor is a new machine; under the version it is a new emulator of the same one, and a
+// checkpoint resumes across it (Fingerprint). Moving this is moving every guest to new
+// hardware: a decision, made here, that every checkpoint taken before it stops resuming.
+// qemu:verify says when the QEMU built offers a newer one, and fails once this one is
+// deprecated (QEMU deprecates a versioned type after three years and removes it after six).
+const MachineType = "pc-q35-11.1"
 
 // accelArg is -accel: the accelerator, and under KVM the descriptor set /dev/kvm is in
 // when the caller opened it (validate refuses one for any other accelerator).
@@ -1209,20 +1221,22 @@ func (s Spec) bios() string {
 	return s.BIOS
 }
 
-// Fingerprint identifies the machine this spec describes, by content.
+// Fingerprint is the machine's contract: what a checkpoint saved on it needs of the machine it
+// resumes into. Two machines with one fingerprint present the same hardware to a guest, and a
+// checkpoint saved on one resumes on the other; across two that differ a resume is undefined
+// rather than an error, because QEMU does not check it.
 //
-// It hashes the QEMU binary, the kernel, the initrd and the firmware the guest
-// runs (the BIOS and pvh.bin) — the files, not their paths — together with the
-// five arguments that decide the machine's shape. Two machines with the same
-// fingerprint present the same thing to a guest, and a checkpoint saved on one
-// resumes on the other; across two with different fingerprints a resume is
-// undefined rather than an error, because QEMU does not check it.
+// It hashes the versioned machine type and the shape (Shape), the chipset's globals and every
+// device as the command line gives it with what is one VM's taken out (Contract), the size of
+// the BIOS, and the host's CPU when the guest is shown it. Not the QEMU binary, the kernel, the
+// initrd or pvh.bin: QEMU's promise is per versioned machine type, so a newer QEMU of the same
+// type is the same machine; a resumed guest runs the kernel in its saved memory, and the
+// kernel, the initrd and the option ROM that entered it are read again only by a boot.
+// boot:compat holds the promise: a checkpoint the newest release saved resumes on this tree's.
 //
-// The consequence is deliberate: a release in which any of those files moved
-// has a different fingerprint, so every checkpoint taken against the previous one
-// stops resuming. That is the design. A checkpoint resumed into a machine of
-// another shape is memory and device state loaded into hardware that is not the
-// hardware it came from.
+// A change to any of what it does hash is a change of hardware under every guest, and every
+// checkpoint taken against the previous machine stops resuming. That is the design, and the
+// release notes say so (hack/fingerprint-diff).
 func (s Spec) Fingerprint() (string, error) {
 	return s.fingerprint(hostCPUModel)
 }
@@ -1244,37 +1258,27 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 		_, _ = fmt.Fprintf(h, "%s=%d:%s\n", key, len(value), value)
 	}
 
-	for _, f := range []struct{ name, path string }{
-		{"qemu", s.QEMU},
-		{"kernel", s.Kernel},
-		{"initrd", s.Initrd},
-		// The firmware the guest runs: the BIOS, and pvh.bin, the option ROM that enters
-		// the kernel. Both are ROM a saved machine carries, sized and filled by them.
-		{"bios", filepath.Join(s.Firmware, s.bios())},
-		{"pvh", filepath.Join(s.Firmware, "pvh.bin")},
-	} {
-		if f.path == "" {
-			// An absent initrd is part of the identity too: a machine that boots
-			// one and a machine that does not are different machines.
-			write(f.name, "none")
-			continue
-		}
-		sum, err := fileSum(f.path)
-		if err != nil {
-			return "", fmt.Errorf("fingerprinting %s: %w", f.name, err)
-		}
-		write(f.name, sum)
+	// The BIOS by its size. It is the one ROM a file sizes: QEMU maps it as the RAM block
+	// pc.bios, which a saved machine carries whole and a resume refuses at another length. Its
+	// contents travel with the checkpoint, so a rebuilt qboot of the same size is the same
+	// machine. Every other read-only block is the machine type's or the chipset's own, and
+	// boot:roms fails when one appears that is neither (BIOSBlock, MachineBlocks).
+	size, err := fileSize(filepath.Join(s.Firmware, s.bios()))
+	if err != nil {
+		return "", fmt.Errorf("fingerprinting the BIOS: %w", err)
 	}
+	write("bios-size", strconv.FormatInt(size, 10))
 
-	// The machine's shape, its device topology, and the host's own CPU when the guest is
-	// being shown it.
+	// The machine's shape, its devices, and the host's own CPU when the guest is being shown it.
 	shape := s.Shape()
 	write("machine", shape.Machine)
 	write("accel", shape.Accel)
 	write("cpu", shape.CPU)
 	write("smp", shape.SMP)
 	write("memory", shape.Memory)
-	write("devices", s.topology())
+	for _, c := range s.Contract() {
+		write("contract", c)
+	}
 
 	// The host's own CPU, but only when the guest is being shown it.
 	//
@@ -1301,78 +1305,75 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// topology is the machine's device list — which models, at which slots — with
-// everything about *this* VM removed: no paths, no file descriptors, no context
-// id, no MAC.
+// Contract is the chipset's globals and every device of the machine, each as the command line
+// gives it (appendChipset, appendDevices, appendNICs) with what is one VM's taken out, and
+// whether it has a serial port.
 //
-// It is in the fingerprint because a resume loads device state into a machine
-// that has to have the same devices. Adding a device to this package changes what
-// a checkpoint may resume into, and without this it would not move the hash — a
-// balloon was added at slot 0x04, and every existing saved state would have gone
-// on matching a machine it can no longer be loaded into.
+// From the command line itself and not a description kept beside it, because a resume loads
+// device state into a machine that has to have the same devices with the same properties: a
+// balloon added at slot 0x04, free-page-reporting turned on, a NIC's MTU announced
+// (VIRTIO_NET_F_MTU, negotiated at probe and carried in the stream) are each a machine a
+// checkpoint of the other cannot be loaded into, and each moves this the moment Args changes.
 //
-// What is deliberately not in it: the backing files and the identifiers, and the
-// disks.
+// What is one VM's, and so taken out, is what a resume is known to be allowed to differ in:
+// an id, the backend a device is bound to (netdev, memdev), a NIC's MAC, the vsock's context
+// id, which the migration stream does not carry and the guest re-reads when QEMU resets the
+// transport, and a descriptor (vhostfd). The backends themselves (-netdev, -drive, -object,
+// -chardev) are files and descriptors on the host, never the guest's hardware; the memory
+// backend's size is the shape's.
 //
-// The files and identifiers, because each is a thing a resume is known to be
-// allowed to differ in, and each for its own reason: the vsock context id is not
-// carried in the migration stream at all, and the guest re-reads it when QEMU
-// resets the transport after the resume; a disk's contents are whatever file the
-// resuming machine opens; and what sits behind a NIC is a host-side file
-// descriptor the guest never sees. What is present here is the device *model at
-// its slot*, which is what the state being loaded describes.
-//
-// The disks, because they are the VM's and not the machine's. A fingerprint names
-// what a host runs, and a host computes it before any VM exists to say how many
-// disks it has; a checkpoint is resumed with the disks it was saved with, and
-// supplying them is the resuming caller's part of the contract.
-func (s Spec) topology() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "vmgenid;virtio-rng-pci@%#x;virtio-balloon-pci@%#x", slotRNG, slotBalloon)
-	// Whose PCI hotplug is: the chipset's state, and the ACPI tables the guest read, differ with
-	// it (see Args), and a state loaded into the other kind is a guest whose slots nothing
-	// answers for.
-	b.WriteString(";ich9-lpc:pcie-native-hotplug")
-	if s.VsockCID != 0 {
-		fmt.Fprintf(&b, ";vhost-vsock-pci@%#x", slotVsock)
-	}
-	if s.Memory.MaxMB > s.Memory.SizeMB {
-		fmt.Fprintf(&b, ";virtio-mem-pci@%#x", slotMem)
-	}
-	if s.Serial != "" || s.SerialFDSet != 0 {
-		b.WriteString(";isa-serial")
-	}
-	// The hotplug controller, which is on the command line whatever it is given. How many
-	// disks it may be given is not here: they are targets on the one controller, and not
-	// devices on the bus.
-	if s.HotplugDisks > 0 {
-		fmt.Fprintf(&b, ";virtio-scsi-pci@%#x", slotHotplug)
-	}
-	// The NICs, by how many and where, and deliberately not by MAC or by descriptor.
-	//
-	// A NIC is on the command line when the machine starts, so it is present when state is
-	// loaded, and a checkpoint saved on a machine without one cannot be loaded into a
-	// machine that has one.
-	//
-	// What is left out matters as much. A descriptor number is not the machine's shape —
-	// it is which file the backend reads, the way a disk's path is — and the MAC is a
-	// property of the device rather than of the bus. Both are left out so that machines
-	// which differ only in those two have one fingerprint.
-	//
-	// The MTU is here, unlike those two, because it is not a setting on the backend: it
-	// is VIRTIO_NET_F_MTU, negotiated at probe and carried in the migration stream, so a
-	// checkpoint saved with it announced cannot be loaded into a machine that does not
-	// announce it, or announces another value. Including it turns "the operator changed
-	// the MTU" into a checkpoint that is refused before the load rather than a resume
-	// that fails.
-	if len(s.NICs) > 0 {
-		fmt.Fprintf(&b, ";virtio-net-pci@%#x*%d", slotNICBase, len(s.NICs))
-		for _, n := range s.NICs {
-			fmt.Fprintf(&b, ",mtu=%d", n.MTU)
+// The disks are not here at all: they are the VM's and not the machine's. A host computes its
+// fingerprint before any VM exists to say how many disks it has, and a checkpoint is resumed
+// with the disks it was saved with, which is the resuming caller's part of the contract.
+func (s Spec) Contract() []string {
+	args := appendChipset(nil)
+	args = s.appendDevices(args)
+	args = s.appendNICs(args)
+	var out []string
+	for i := 0; i+1 < len(args); i++ {
+		switch args[i] {
+		case "-global":
+			out = append(out, "global "+args[i+1])
+			i++
+		case "-device":
+			out = append(out, "device "+withoutTheVMs(args[i+1]))
+			i++
 		}
 	}
-	return b.String()
+	if s.Serial != "" || s.SerialFDSet != 0 {
+		out = append(out, "serial isa-serial")
+	}
+	return out
 }
+
+// vmProperties are the device properties that are one VM's and not its machine's (Contract).
+var vmProperties = []string{"id", "netdev", "memdev", "mac", "guest-cid", "vhostfd"}
+
+// withoutTheVMs is a -device value with vmProperties taken out, the rest in the order Args
+// wrote them. The values Contract reads are Args' own, with no escaped comma among them: the
+// one that may carry one, a disk's serial, belongs to a disk, which is not in the contract.
+func withoutTheVMs(dev string) string {
+	parts := strings.Split(dev, ",")
+	kept := parts[:1]
+	for _, p := range parts[1:] {
+		if k, _, _ := strings.Cut(p, "="); !slices.Contains(vmProperties, k) {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, ",")
+}
+
+// BIOSBlock is the RAM block the BIOS is mapped as, the read-only block whose size is a file's
+// (Fingerprint).
+const BIOSBlock = "pc.bios"
+
+// MachineBlocks are the read-only RAM blocks besides the BIOS that this machine maps, each sized
+// by the machine type or by the chipset and not by a file: the option ROM area (a fixed 128 KiB),
+// and the ACPI tables, their loader and the RSDP, which QEMU builds and resizes on a resume.
+// pvh.bin and the kernel reach the guest through fw_cfg and are no block of their own, and a
+// NIC loads no option ROM (romfile=). boot:roms holds a booted machine to this list, so a
+// QEMU or a device that maps another ROM fails there rather than in a resume.
+var MachineBlocks = []string{"pc.rom", "/rom@etc/acpi/tables", "/rom@etc/table-loader", "/rom@etc/acpi/rsdp"}
 
 // hostCPUModel reports the host CPU's model name, which model "host" makes part
 // of what a checkpoint describes.
@@ -1408,16 +1409,10 @@ func hostCPUModel() (string, error) {
 	return "", errors.New("no model name in /proc/cpuinfo")
 }
 
-func fileSum(path string) (string, error) {
-	f, err := os.Open(path) // #nosec G304 -- a path this caller chose
+func fileSize(path string) (int64, error) {
+	fi, err := os.Stat(path)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
-	defer func() { _ = f.Close() }()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return fi.Size(), nil
 }

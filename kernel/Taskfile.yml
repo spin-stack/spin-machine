@@ -3,10 +3,10 @@ version: '3'
 # The guest kernel. See kernel/Dockerfile; the kernel and its toolchain are pinned in
 # versions.yaml, and KERNEL_ARCH is the root Taskfile.yml's.
 #
-# A changed kernel is a changed machine: the fingerprint hashes it by content, so every
-# checkpoint on every host stops resuming. That is the point — it is how a fleet is stopped
-# from resuming a checkpoint into a machine of another shape — but it means a config change
-# here is a fleet-wide event and should be a deliberate commit with a measurement in it.
+# A changed kernel is every guest's next boot: a resumed guest runs the kernel in its saved
+# memory, so the fingerprint, the machine's contract, does not hash it and checkpoints keep
+# resuming. A config change is still every guest's kernel once they reboot, and is a deliberate
+# commit with a measurement in it.
 
 # The pinned version, for the name of the configuration file menuconfig writes. The builds
 # are handed it by `versions args`; see the note in qemu/Taskfile.yml.

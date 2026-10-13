@@ -174,6 +174,10 @@ jobs:
             echo "Nothing to compare against: this is the first published release." > /tmp/verdict.md
             echo "The first release: nothing before it to say what changed against." > /tmp/changes.md
           fi
+          # Whether the QEMU shipped offers a machine type newer than the one every checkpoint is
+          # saved on: said, never acted on (machine.MachineType).
+          offer=$(go run ./hack/machinetype check -qemu "_output/release/${name}/usr/share/spin-stack/bin/qemu-system-x86_64")
+          if [ -n "$offer" ]; then printf '\n%s\n' "$offer" >> /tmp/verdict.md; fi
           cat /tmp/verdict.md
           cat /tmp/changes.md
 

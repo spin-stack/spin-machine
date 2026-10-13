@@ -28,8 +28,9 @@ combination of the machine's features, booted from the published tarball to a lo
 `release.yml` builds all three and packs one tarball. Versions are **CalVer**,
 `v20260909.01`: a release of this repository is the machine as it stood on a date. There is
 no API here to promise compatibility about, and the one thing a version could promise —
-that checkpoints still resume — is decided by the fingerprint of the artefacts, not by a
-number anybody chose. A release is the workflow dispatched on main, and nothing else - a pushed
+that checkpoints still resume — is decided by the fingerprint, the machine's contract, not by a
+number anybody chose: a release that keeps it resumes every checkpoint the one before it saved
+(`task boot:compat`), whatever QEMU, kernel or firmware it ships. A release is the workflow dispatched on main, and nothing else - a pushed
 tag starts nothing: given a version it makes that one, with no input it generates the next
 sequence for today; either way it tags the commit once its files are signed, and writes the
 notes: what changed since the release before (`hack/releasenotes`: the commits that reached

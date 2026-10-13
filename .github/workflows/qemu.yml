@@ -166,24 +166,19 @@ jobs:
       - name: Check the built QEMU accepts the machine's arguments
         run: task verify:args
 
-      # The other thing a changed QEMU binary is: a different machine. It is hashed by
-      # content into the fingerprint exactly as the kernel is, so a configure flag added
-      # here, or a device removed from devices.mak, stops every checkpoint in the fleet from
-      # resuming. Compared against the last released machine.env and reported; never a
-      # failure, since changing the machine is a thing that gets done on purpose.
-      #
-      # The TCG binary is deliberately not compared. It is not part of a machine's identity
-      # and must never run a machine a KVM guest will later restore from.
-      - name: What this QEMU is, and what it breaks
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # What it produced, and whether it still offers the machine type every checkpoint is
+      # saved on, on the run's summary. A changed QEMU binary is a new emulator of the same
+      # machine (machine.MachineType stays): it is not in the fingerprint, and whether a
+      # checkpoint the released QEMU saved resumes on it is boot:compat's to say, on the KVM
+      # runner (compat.yml).
+      - name: What this QEMU is
         run: |
           set -euo pipefail
-          qemu=$(sha256sum _output/bin/qemu-system-x86_64 | cut -d' ' -f1)
-          echo "qemu sha256: ${qemu}"
-          hack/fingerprint-diff "qemu_sha256=${qemu}" \
-            "bios_sha256=$(sha256sum _output/qemu/qboot.bin | cut -d' ' -f1)" \
-            "pvh_sha256=$(sha256sum _output/qemu/pvh.bin | cut -d' ' -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "qemu sha256: $(sha256sum _output/bin/qemu-system-x86_64 | cut -d' ' -f1)"
+            echo "qboot.bin: $(stat -c%s _output/qemu/qboot.bin) bytes"
+            go run ./hack/machinetype check -qemu _output/bin/qemu-system-x86_64
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the extracted binaries
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

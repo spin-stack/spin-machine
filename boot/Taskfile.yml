@@ -15,6 +15,44 @@ env:
   SPIN_MACHINE_OUTPUT: '{{.OUTPUT_ABS}}'
 
 tasks:
+  roms:
+    desc: >-
+      Hold the fingerprint to every read-only block a started machine maps: the BIOS by its
+      file's size, the rest the machine type's own (machine.BIOSBlock, machine.MachineBlocks).
+      Needs a built release and /dev/kvm.
+    deps: [':tools']
+    cmds:
+      - SPIN_ROM_TEST=1 go test ./boot/ -run '^TestEveryROMIsTheFingerprints$' -count=1 -v -timeout 3m
+
+  compat:
+    desc: >-
+      A checkpoint the newest published release saves resumes on this tree's build, when the two
+      have one fingerprint (machine.Spec.Fingerprint). Fetches that release, checked against its
+      sha256 and its signature, into _output/compat/<version>/. PREVIOUS=<version> names another.
+      Needs a built release and /dev/kvm.
+    deps: [':tools']
+    vars:
+      PREVIOUS: '{{.PREVIOUS | default ""}}'
+    cmds:
+      - |
+        set -euo pipefail
+        tag='{{.PREVIOUS}}'
+        if [ -z "$tag" ]; then tag=$(gh release view -R spin-stack/spin-machine --json tagName -q .tagName); fi
+        dir={{.OUTPUT_ABS}}/compat/$tag
+        name="spin-machine-${tag}-linux-x86_64"
+        if [ ! -f "$dir/$name/usr/share/spin-stack/machine.env" ]; then
+          rm -rf "$dir" && mkdir -p "$dir"
+          gh release download "$tag" -R spin-stack/spin-machine -D "$dir" \
+            -p "$name.tar.gz" -p "$name.tar.gz.sha256" -p "$name.tar.gz.sigstore.json"
+          (cd "$dir" && sha256sum -c "$name.tar.gz.sha256")
+          cosign verify-blob --bundle "$dir/$name.tar.gz.sigstore.json" \
+            --certificate-identity https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/heads/main \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$dir/$name.tar.gz"
+          tar -xzf "$dir/$name.tar.gz" -C "$dir"
+        fi
+        SPIN_COMPAT_PREVIOUS="$dir/$name/usr/share/spin-stack" \
+          go test ./boot/ -run '^TestACheckpointOfTheReleaseBeforeResumesHere$' -count=1 -v -timeout 10m
+
   bench:
     desc: >-
       What a boot costs, measured from the host and repeated enough to believe. Needs

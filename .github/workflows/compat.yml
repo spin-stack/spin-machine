@@ -1,0 +1,105 @@
+name: Compat
+
+# Whether a checkpoint the newest release saved resumes on this change's machine, and whether the
+# fingerprint still accounts for every ROM the machine maps (boot:compat, boot:roms). Every change
+# to what a resumed guest is loaded into runs it: the machine's definition, QEMU, the kernel, the
+# firmware and their pins.
+#
+# On the KVM runner, because it boots: the newest release is unpacked as the machine before, and
+# the machine here is that tree with this change's QEMU, firmware and kernel built over it - the
+# base image is the release's, since a checkpoint resumes with the disks it was saved with. The
+# builds read and write a BuildKit cache that outlives the run (checkout keeps .cache/), so a
+# change that leaves QEMU and the kernel alone rebuilds neither.
+#
+# The test holds the promise only where it is made: when the two fingerprints differ the contract
+# moved on purpose, the test says so and passes, and the release notes say it for the fleet.
+
+on:
+  pull_request:
+    paths:
+      - machine/**
+      - cmd/spin-machine/**
+      - qemu/**
+      - kernel/**
+      - boot/compat_test.go
+      - boot/roms_test.go
+      - versions.yaml
+      - .github/workflows/compat.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compat-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  compat:
+    runs-on: [self-hosted, linux, x64, kvm]
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # .cache/buildkit is the runner's QEMU and kernel cache; a clean checkout would empty it.
+          clean: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Set up Task
+        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # A builder that can export its cache to the directory above; the runner keeps it.
+      - name: A BuildKit that keeps its cache
+        run: docker buildx inspect compat > /dev/null 2>&1 && docker buildx use compat || docker buildx create --use --name compat --driver docker-container
+
+      - name: Build this change's QEMU and kernel, and the tools
+        run: task qemu:build kernel:build tools
+
+      # The newest release, checked against its sha256 and its signature, as the machine before;
+      # this change's machine is the same tree with what was just built in place of its own.
+      - name: The machine before, and this one
+        run: |
+          set -euo pipefail
+          tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          name="spin-machine-${tag}-linux-x86_64"
+          dir=_output/compat/$tag
+          if [ ! -f "$dir/$name/usr/share/spin-stack/machine.env" ]; then
+            rm -rf "$dir" && mkdir -p "$dir"
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" -D "$dir" \
+              -p "$name.tar.gz" -p "$name.tar.gz.sha256" -p "$name.tar.gz.sigstore.json"
+            (cd "$dir" && sha256sum -c "$name.tar.gz.sha256")
+            cosign verify-blob --bundle "$dir/$name.tar.gz.sigstore.json" \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "$dir/$name.tar.gz"
+            tar -xzf "$dir/$name.tar.gz" -C "$dir"
+          fi
+          previous=$PWD/$dir/$name/usr/share/spin-stack
+          here=$PWD/_output/compat/here
+          rm -rf "$here" && cp -as "$previous" "$here"
+          rm -rf "$here/bin" "$here/qemu" "$here/kernel"
+          mkdir -p "$here/bin" "$here/kernel"
+          cp _output/bin/qemu-system-x86_64 _output/bin/qemu-img _output/bin/spin-machine "$here/bin/"
+          cp -r _output/qemu "$here/qemu"
+          cp _output/kernel/vmlinux "$here/kernel/vmlinux"
+          {
+            echo "SPIN_COMPAT_PREVIOUS=$previous"
+            echo "SPIN_MACHINE_OUTPUT=$here"
+            echo "Comparing against $tag" >&2
+          } >> "$GITHUB_ENV"
+
+      - name: Every ROM the machine maps is the fingerprint's
+        run: SPIN_ROM_TEST=1 go test ./boot/ -run '^TestEveryROMIsTheFingerprints$' -count=1 -v -timeout 3m
+
+      - name: A checkpoint of the release before resumes here
+        run: go test ./boot/ -run '^TestACheckpointOfTheReleaseBeforeResumesHere$' -count=1 -v -timeout 10m

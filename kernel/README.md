@@ -1,9 +1,10 @@
 # Guest kernel
 
 A version and a config file (`config-<version>-<arch>`). It is here because a kernel and the
-machine that boots it are one release: changing either strands every checkpoint taken
-against the previous pair. `task kernel:build` builds it; `task kernel:verify` reads the ELF
-notes out of the kernel it just stripped.
+machine that boots it are released together. A new kernel does not strand checkpoints: a
+resumed guest runs the kernel in its saved memory until it reboots, and boots this one then
+(`machine.Spec.Fingerprint` hashes the machine's contract, not the kernel). `task kernel:build`
+builds it; `task kernel:verify` reads the ELF notes out of the kernel it just stripped.
 
 ## Memory that moves
 
@@ -67,16 +68,17 @@ load 6-10, where the p95 was 342 ms.
 
 ## Changing it
 
-Every change to the config strands every checkpoint in the fleet, which is the design —
-it should not be quiet. The kernel workflow runs `hack/fingerprint-diff` and puts the
-answer in its summary.
+A change to the config is a new kernel for every guest's next boot, and the release notes say
+what changed (`hack/releasenotes` lists the options turned on, off or changed). It does not
+move the fingerprint, and checkpoints keep resuming: each resumed guest goes on running the
+kernel it was saved with until it reboots.
 
 `Dockerfile` builds with a pinned toolchain — Debian trixie by image digest, its packages from
-snapshot.debian.org at a fixed date — because a different compiler is a different `vmlinux`,
-which is a different fingerprint. Both are `versions.yaml` entries (`debian`,
-`debian-snapshot`), and they move on purpose, not when Debian publishes a point release.
+snapshot.debian.org at a fixed date — because a different compiler is a different `vmlinux`.
+Both are `versions.yaml` entries (`debian`, `debian-snapshot`), and they move on purpose, not
+when Debian publishes a point release.
 
 And the build is reproducible: two builds from the same inputs produce the same `vmlinux`,
 byte for byte. That needs trixie's pahole 1.30, which is deterministic with `-j`. Bookworm's
 1.24 encodes `.BTF` in whatever order make's `-j` threads finish, which gives every release a
-new fingerprint whether or not the kernel changed.
+different kernel whether or not its source changed.

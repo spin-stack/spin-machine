@@ -1,10 +1,11 @@
 # spin-machine — a virtual machine: QEMU, the guest kernel, the base image, and the
 # definition of the machine they make.
 #
-# The four are one thing. `machine.Spec.Fingerprint` hashes by content the binaries and the
-# firmware a guest runs, together with the machine's shape, so a release in which any of them
-# moved has a different fingerprint by construction. That is why they ship as one tarball with
-# one version: shipped separately, they could drift apart and leave the last one to notice.
+# The four are one thing. `machine.Spec.Fingerprint` is the machine's contract - its versioned
+# machine type, shape, devices and BIOS size - and the binaries, the kernel and the firmware are
+# what make that contract run: built together, checked together (boot:compat, boot:roms), and
+# shipped as one tarball with one version, because shipped separately they could drift apart
+# and leave the last one to notice.
 #
 # This file holds the vars every part reads and the targets that cross all of them, in the
 # order a change travels: build, verify, release, then trying the machine and keeping the
@@ -131,8 +132,8 @@ tasks:
   apk:lock:
     desc: Pin every package QEMU's and e2fsprogs' builders install (each part's apk.list) at what the pinned Alpine's mirror has today, into its apk.lock.
     # A fresh install of the list on the pinned Alpine, its database read back: the versions the
-    # mirror serves now, which is what a bump means. A new lock is a new QEMU or e2fsprogs build,
-    # and a changed QEMU is a changed machine: hack/fingerprint-diff says so in the release.
+    # mirror serves now, which is what a bump means. A new lock is a new QEMU or e2fsprogs build:
+    # the release notes say what moved, and boot:compat that checkpoints still resume on it.
     cmds:
       - for: [qemu, e2fsprogs]
         cmd: |
@@ -444,6 +445,10 @@ tasks:
     # Named VERSION, a bump with no version asked for mkosi v20260927.01-2-g30b717b.
     cmds:
       - '{{.VERSIONS}} bump {{.NAME}} {{.TO}}'
+      # A QEMU bump keeps the machine type (machine.MachineType), and the bump's pull request
+      # shows what the newer types change against it, from the source just pinned.
+      - cmd: task qemu:compat
+        if: '[ "{{.NAME}}" = qemu ]'
 
   clean:
     desc: Remove build output. Leaves the caches; use clean:cache for those.
