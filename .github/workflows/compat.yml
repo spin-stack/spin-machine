@@ -66,9 +66,6 @@ jobs:
       - name: Set up Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
       # A builder that can export its cache to the directory above; the runner keeps it.
       - name: A BuildKit that keeps its cache
         run: docker buildx inspect compat > /dev/null 2>&1 && docker buildx use compat || docker buildx create --use --name compat --driver docker-container
@@ -81,20 +78,8 @@ jobs:
       - name: The machine before, and this one
         run: |
           set -euo pipefail
-          tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)
-          name="spin-machine-${tag}-linux-x86_64"
-          dir=_output/compat/$tag
-          if [ ! -f "$dir/$name/usr/share/spin-stack/machine.env" ]; then
-            rm -rf "$dir" && mkdir -p "$dir"
-            gh release download "$tag" -R "$GITHUB_REPOSITORY" -D "$dir" \
-              -p "$name.tar.gz" -p "$name.tar.gz.sha256" -p "$name.tar.gz.sigstore.json"
-            (cd "$dir" && sha256sum -c "$name.tar.gz.sha256")
-            cosign verify-blob --bundle "$dir/$name.tar.gz.sigstore.json" \
-              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com "$dir/$name.tar.gz"
-            tar -xzf "$dir/$name.tar.gz" -C "$dir"
-          fi
-          previous=$PWD/$dir/$name/usr/share/spin-stack
+          task boot:previous
+          previous=$(cat _output/compat/previous)
           here=$PWD/_output/compat/here
           rm -rf "$here" && cp -as "$previous" "$here"
           rm -rf "$here/bin" "$here/qemu" "$here/kernel"
@@ -105,7 +90,6 @@ jobs:
           {
             echo "SPIN_COMPAT_PREVIOUS=$previous"
             echo "SPIN_MACHINE_OUTPUT=$here"
-            echo "Comparing against $tag" >&2
           } >> "$GITHUB_ENV"
 
       - name: Every ROM the machine maps is the fingerprint's
