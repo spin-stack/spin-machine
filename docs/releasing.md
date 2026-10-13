@@ -29,8 +29,9 @@ combination of the machine's features, booted from the published tarball to a lo
 `v20260909.01`: a release of this repository is the machine as it stood on a date. There is
 no API here to promise compatibility about, and the one thing a version could promise —
 that checkpoints still resume — is decided by the fingerprint of the artefacts, not by a
-number anybody chose. Pushing a `v*` tag releases that version; running the workflow by
-hand with no input generates the next sequence for today, tags the commit, and writes the
+number anybody chose. A release is the workflow dispatched on main, and nothing else - a pushed
+tag starts nothing: given a version it makes that one, with no input it generates the next
+sequence for today; either way it tags the commit once its files are signed, and writes the
 notes: what changed since the release before (`hack/releasenotes`: the commits that reached
 the machine by the part they changed, the pins that moved, the kernel options turned on, off
 or changed, and the patches added, changed or removed), whether checkpoints carry over
@@ -43,14 +44,16 @@ its commit, and every pin in `versions.yaml`). Whoever takes one checks both aga
 `release.yml` at the ref it ran on:
 
 ```sh
-id=https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/tags/<version>
+id=https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/heads/main
 cosign verify-blob --bundle f.sigstore.json --certificate-identity "$id" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com f
 cosign verify-blob-attestation --type slsaprovenance1 --bundle f.provenance.sigstore.json \
   --certificate-identity "$id" --certificate-oidc-issuer https://token.actions.githubusercontent.com f
 ```
 
-A run started by hand ran on `refs/heads/main`, and that is the ref its certificate names.
+Every release ran on `refs/heads/main`, and that is the ref its certificate names; which release
+a file is, its provenance says (`buildDefinition.externalParameters.version`), and whoever takes it
+holds it to the version they asked for.
 
 What the release is made of is its CycloneDX SBOM, written by `hack/release` from what the builds
 recorded - the apk databases QEMU and e2fsprogs were statically linked in (each build's
