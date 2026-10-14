@@ -82,7 +82,7 @@
   kind: image
   source: debian
   version: trixie
-  pin: sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c
+  pin: sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
   track: digest
   note: >-
     the kernel's toolchain (and qboot's and the floor kernel's), with its packages from
@@ -105,7 +105,7 @@
 
 - name: debian-snapshot
   kind: date
-  version: 20260928T000000Z
+  version: 20261014T000000Z
   track: today
   note: >-
     the Debian archive the kernel's toolchain is installed from, as it stood then, and the
@@ -128,7 +128,7 @@
   kind: image
   source: ubuntu
   version: '26.04'
-  pin: sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+  pin: sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
   track: digest
   note: >-
     image/Dockerfile: the container mkosi runs in, and where its apt and keyring come from.
@@ -150,8 +150,8 @@
 - name: task
   kind: download
   source: https://github.com/go-task/task/releases/download/v{version}/task_linux_amd64.tar.gz
-  version: 3.45.5
-  pin: e547ea2a47f5240657fdc89ea776baa90d628a1f2748242eaa7478fd92bffd40
+  version: 3.54.0
+  pin: 680859dbb4d881a9c72d4d9a8f510825450849af8567deacd7302c01124416fb
   track: tags https://github.com/go-task/task.git
   note: >-
     image/Dockerfile hands it to install-dev-tools.sh, which puts it in the base image's
@@ -161,8 +161,8 @@
 - name: git-lfs
   kind: download
   source: https://github.com/git-lfs/git-lfs/releases/download/v{version}/git-lfs-linux-amd64-v{version}.tar.gz
-  version: 3.7.0
-  pin: e7ebba491af8a54e560be3a00666fa97e4cf2bbbb223178a0934b8ef74cf9bed
+  version: 3.8.0
+  pin: e455e00f15d9b95661b8d53498ffb0c3367962cf1ec73c31ab7369516cd6ab8d
   track: tags https://github.com/git-lfs/git-lfs.git
   note: >-
     image/Dockerfile hands it to install-dev-tools.sh, as task. The pin can be checked against
@@ -171,8 +171,8 @@
 - name: buildkit
   kind: download
   source: https://github.com/moby/buildkit/releases/download/v{version}/buildkit-v{version}.linux-amd64.tar.gz
-  version: 0.26.2
-  pin: 1ef7c888f808e7f3f49d9aeeca11f661afe5c0880a4b114cc31c56dee86acd35
+  version: 0.34.0
+  pin: 14813b1fb2a40082114e6d386c6fc5e7dd5298176ce7ee1a18bc33e73e109ac3
   track: tags https://github.com/moby/buildkit.git
   note: >-
     image/Dockerfile hands it to install-dev-tools.sh, as task: buildctl and buildkitd. The
