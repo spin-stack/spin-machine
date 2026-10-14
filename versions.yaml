@@ -16,7 +16,9 @@
 # reason not to bump; it is a reason for the bump to be its own commit.
 #
 # Each entry:
-#   kind     image:    an OCI image; version its tag, pin its digest.
+#   kind     image:    an OCI image; version its tag, pin its digest. A Docker Hub image is
+#                      mirror.gcr.io's copy, the same manifest: Docker Hub counts every
+#                      anonymous pull, a digest lookup included, against the address.
 #            git:      a repository built here; version the branch it is on, pin the commit.
 #            download: a file; source its URL with {version} (and {major}), pin its sha256.
 #            date:     a point in time; version the date, no pin.
@@ -51,7 +53,7 @@
 
 - name: alpine
   kind: image
-  source: alpine
+  source: mirror.gcr.io/library/alpine
   version: '3.24'
   pin: sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
   track: digest
@@ -80,7 +82,7 @@
 
 - name: debian
   kind: image
-  source: debian
+  source: mirror.gcr.io/library/debian
   version: trixie
   pin: sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
   track: digest
@@ -126,7 +128,7 @@
 
 - name: ubuntu
   kind: image
-  source: ubuntu
+  source: mirror.gcr.io/library/ubuntu
   version: '26.04'
   pin: sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
   track: digest
