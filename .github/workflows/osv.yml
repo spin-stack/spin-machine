@@ -1,7 +1,7 @@
 name: OSV
 
 # Every day, what OSV knows against the newest release's SBOM (task osv), and an issue for each
-# finding nobody has been told of yet. A release's libraries are a commit's, and a vulnerability is
+# package with findings, closed once a release has none. A release's libraries are a commit's, and a vulnerability is
 # published after the commit: nothing in a build can find it, only asking again later can.
 
 on:
@@ -42,18 +42,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: task osv
 
-      # One issue a finding, by its title, ever: one closed - fixed, or judged not to matter - is
-      # not opened again, and the same finding in the next release is the same issue.
-      - name: Open an issue for each new finding
+      # One issue a package, which a release closes once it has no finding in it; hack/osvissues
+      # says why a package and not a finding.
+      - name: Bring the issues to the findings
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          known=$(gh issue list --state all --limit 1000 --json title -q '.[].title')
-          while IFS=$'\t' read -r id pkg summary; do
-            title="osv: ${id} in ${pkg}"
-            if printf '%s\n' "$known" | grep -Fxq -- "$title"; then
-              continue
-            fi
-            gh issue create --title "$title" --body "$(printf '%s\n\n%s is in the newest release'"'"'s SBOM (task osv). https://osv.dev/vulnerability/%s' "$summary" "$pkg" "$id")"
-          done < _output/osv.tsv
+        run: go run ./hack/osvissues -release "$(gh release view --json tagName -q .tagName)" -findings _output/osv.tsv
