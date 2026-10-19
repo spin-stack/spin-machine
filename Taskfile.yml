@@ -292,7 +292,8 @@ tasks:
     desc: >-
       What OSV knows against the newest release's SBOM, once its signature is the release's: one
       line a finding, id, package@version and summary, in _output/osv.tsv. Needs gh, cosign and
-      the network; osv.yml runs it daily and opens an issue for a finding it has not opened before.
+      the network; osv.yml runs it daily and keeps an issue for each package with findings
+      (hack/osvissues).
     # The newest release, because it is what anything takes next; an older one still pinned is
     # its consumer's to scan, which spin's control plane does for what it was installed with.
     cmds:
