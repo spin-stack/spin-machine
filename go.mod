@@ -2,6 +2,8 @@ module github.com/spin-stack/spin-machine
 
 go 1.27
 
+toolchain go1.27.3
+
 tool (
 	github.com/spin-stack/go-tools/cmd/attestgate
 	github.com/spin-stack/go-tools/cmd/ctxlife
