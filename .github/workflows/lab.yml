@@ -103,10 +103,10 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The guests' vsock transport: a module on the fleet's kernel that nothing loads before the
-      # first QEMU opens /dev/vhost-vsock.
-      - name: vsock
-        run: sudo -n modprobe vhost_vsock
+      # The guests' vsock transport, loaded and made this user's: a module on the fleet's kernel
+      # that nothing loads before the first QEMU opens /dev/vhost-vsock.
+      - name: Load vhost_vsock
+        run: go tool task vsock
 
       - name: Unpack the release
         run: go tool task lab:unpack
