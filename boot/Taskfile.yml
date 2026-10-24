@@ -43,7 +43,8 @@ tasks:
           gh release download "$tag" -R spin-stack/spin-machine -D "$dir" \
             -p "$name.tar.gz" -p "$name.tar.gz.sha256" -p "$name.tar.gz.sigstore.json"
           (cd "$dir" && sha256sum -c "$name.tar.gz.sha256")
-          # cosign by its pin, built: the KVM runner this runs on has no envsubst for the action.
+          # cosign by its pin, built rather than installed by the action: one pin for a laptop
+          # and a runner alike.
           go run "github.com/sigstore/cosign/v3/cmd/cosign@$(go tool versions version cosign)" verify-blob \
             --bundle "$dir/$name.tar.gz.sigstore.json" \
             --certificate-identity https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/heads/main \
@@ -55,7 +56,7 @@ tasks:
   buildkit:
     desc: >-
       Use the BuildKit builder named compat, made the first time: a docker-container builder,
-      which keeps its cache in .cache/buildkit for the KVM runner's next run.
+      which reads and exports a cache (CACHE_BACKEND) where Docker's own cannot.
     cmds:
       - docker buildx inspect compat > /dev/null 2>&1 && docker buildx use compat || docker buildx create --use --name compat --driver docker-container
 

@@ -46,7 +46,7 @@ jobs:
   # Whether this change can reach QEMU at all; see the note on the triggers. Skipped, the build
   # job reports as skipped, which a required check counts as passed.
   changed:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       build: ${{ steps.touches.outputs.build }}
@@ -72,7 +72,7 @@ jobs:
   build:
     needs: changed
     if: needs.changed.outputs.build == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # A cold build is tens of minutes and a warm one is a cache restore, so the spread is
     # wide and the ceiling has to sit above the cold case. What it is really for is the
     # other end: a `configure` that stops on a prompt would hold a runner for six hours
@@ -90,22 +90,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # cache-key is required as of v2 and names the sticky disk the builder keeps its state
-      # on, so it is one key per thing built, for the same reason the BuildKit scopes in
-      # Taskfile.yml are: share one and each build is handed the last one's disk and starts by
-      # discarding it.
-      #
-      # nofallback, because the default is to degrade. A builder that cannot be set up
-      # otherwise reports the error, falls back to a local one and carries on, so the run goes
-      # green having lost the disk — which is how v2's new required input arrived unnoticed.
-      # The cost of this is that an outage at a third party turns the lane red instead of
-      # making it slow, which is the trade this repository makes everywhere else: a build that
-      # did not do what it says is worth more as a failure than as a warning nobody reads.
-      - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
-        with:
-          cache-key: spin-machine/qemu
-          nofallback: true
+      # A builder of its own (the docker-container driver): Docker's default one cannot export its
+      # cache. What it reads and writes is GitHub's cache, in the scopes Taskfile.yml decides
+      # (CACHE_BACKEND=gha), so the runner itself keeps nothing between runs.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # What makes `--cache-to type=gha` do anything at all.
       #
@@ -190,8 +178,8 @@ jobs:
       # The runtime image, tagged with the pinned QEMU version: what `task qemu:fetch` pulls,
       # so CI's argument check runs main's QEMU in seconds instead of compiling it. The
       # binaries are static, so the image around them carries nothing they need. It reads the
-      # builder stage the step above compiled from the `qemu` scope, and writes no cache: the
-      # runner's sticky disk already holds these layers.
+      # builder stage the step above compiled from the `qemu` scope, and writes no cache: that
+      # scope holds these layers already.
       - name: Publish the runtime image
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: go tool task qemu:publish

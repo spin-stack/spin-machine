@@ -36,7 +36,7 @@ jobs:
   gate:
     # The check main's ruleset requires, named Gate in every spin-stack repository.
     name: Gate
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # A ceiling, not a budget. The default is six hours, and a `go test` that deadlocks
     # would hold a runner for all of them without printing a failure.
     timeout-minutes: 15

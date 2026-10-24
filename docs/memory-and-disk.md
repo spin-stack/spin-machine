@@ -169,16 +169,18 @@ B: blog), before measuring:
 
 ## Measuring it again
 
-The probes are `go test` behind the `boot/` Task targets, run on construct by
+The probes are `go test` behind the `boot/` Task targets, run on the bench fleet (spin-stack/ci) by
 `gh workflow run lab.yml -f experiment=boot:page-cache -f vars='REPS=3; SPIN_PAGE_CACHE_ONLY=<probe>'`
 (caches, reclaim), optionally with `kernel_run`/`qemu_run` and
 `variant=beside|instead` for a build of a branch. The cold-boot, `memory.high`, reclaimers and
 first-write probes behind the other tables were deleted once answered; they are in
 `boot/pagecache_test.go`'s history. What the lab taught about itself:
 
-- **Only construct's numbers count.** A laptop has neither the Spin OS kernel nor a quiet host.
-- **One run at a time.** construct has three runners on one machine; two lab runs side by side
-  measure each other. Read results by run id, never by "the newest".
+- **Only a quiet host's numbers count**, and only against numbers from the same kind of host:
+  the tables above are construct's, and the bench fleet's instance type is another host. A
+  laptop is neither.
+- **One run at a time.** Two lab runs side by side measure each other; the bench fleet runs one.
+  Read results by run id, never by "the newest".
 - **A probe that mounts must unmount in `t.Cleanup`**: a loop mount left behind broke every
   later checkout on that runner.
 - **Unix socket paths are 108 bytes**: QMP sockets live under `/tmp`, not the lab's long
