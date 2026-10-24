@@ -123,7 +123,7 @@ tasks:
 
   default:
     cmds:
-      - task --list
+      - '{{.TASK_EXE}} --list'
 
   # ==========================================================================
   # Build
@@ -209,7 +209,7 @@ tasks:
       - cmd: 'echo "OK: go vet"'
       # `task --list` parses every included Taskfile, so a syntax error or a name defined
       # twice fails here rather than in whichever lane first called it.
-      - task --list > /dev/null
+      - '{{.TASK_EXE}} --list > /dev/null'
       - cmd: 'echo "OK: the Taskfiles parse"'
       - |
         set -euo pipefail
@@ -219,12 +219,15 @@ tasks:
         done
         echo "OK: the shell scripts parse"
       # go-tools' gates, at the version go.mod pins: every goroutine held to a context, no test
-      # that cannot fail, every path and task AGENTS.md and CLAUDE.md name resolves, and every
-      # mutate-exempt reason covers an edit mutate makes.
+      # that cannot fail, every path and task AGENTS.md and CLAUDE.md name resolves, every
+      # mutate-exempt reason covers an edit mutate makes, every workflow step is one task, and
+      # pnpm is the one package manager, installing through Socket Firewall.
       - go tool ctxlife
       - go tool testquality ./...
       - go tool refs
       - go tool mutate -stale-exempts
+      - go tool taskgate
+      - go tool sfw check
       - task: lint:workflows
 
   lint:workflows:
@@ -246,11 +249,70 @@ tasks:
   mutate:
     desc: >-
       Break what the change against BASE touched and fail on an edit no test refuses
-      (task mutate BASE=origin/main).
-    vars:
-      BASE: '{{.BASE | default "origin/main"}}'
+      (task mutate BASE=origin/main, the default). In CI the base is what the change is to: a
+      pull request's target branch, or on a push what the push replaced (BEFORE).
     cmds:
-      - go tool mutate -base {{.BASE}} -max 2000
+      - |
+        set -euo pipefail
+        base='{{.BASE}}'
+        if [ -z "$base" ] && [ "${GITHUB_ACTIONS:-}" = true ]; then
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            base="origin/$GITHUB_BASE_REF"
+          else
+            base="${BEFORE:-}"
+          fi
+          # A push that created its branch has no commit before it.
+          git rev-parse --verify "$base^{commit}" >/dev/null 2>&1 || base=HEAD~1
+        fi
+        go tool mutate -base "${base:-origin/main}" -max 2000
+
+  coverage:
+    desc: >-
+      What `task test` covered, function by function: on the run's summary in CI, on stdout
+      here, and as coverage.html.
+    cmds:
+      - |
+        set -e
+        summary=${GITHUB_STEP_SUMMARY:-/dev/stdout}
+        if [ ! -f coverage.out ]; then
+          echo "coverage.out was not produced; the tests may have failed before coverage ran." >> "$summary"
+          exit 0
+        fi
+        {
+          echo "## Go coverage"
+          echo
+          echo "**$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}')** total"
+          echo
+          echo '<details><summary>Function detail</summary>'
+          echo
+          echo '```'
+          go tool cover -func=coverage.out
+          echo '```'
+          echo '</details>'
+        } >> "$summary"
+        go tool cover -html=coverage.out -o coverage.html
+
+  touches:
+    desc: >-
+      Whether the commits since BASE can change what one part builds, as build=true or
+      build=false, on the step's outputs in CI (task touches BASE=<commit> -- <entry>... --
+      <path>...; hack/touches says how it decides).
+    cmds:
+      - |
+        set -e
+        build=$(hack/touches "${BASE:-}" {{.CLI_ARGS}})
+        echo "build=${build}" | tee -a "${GITHUB_OUTPUT:-/dev/null}"
+
+  vsock:
+    desc: >-
+      Make /dev/vhost-vsock usable by this user, so verify:args can create the machine's vsock
+      device. Without it, says so rather than failing: verify:args names the device unchecked.
+    cmds:
+      # The device first: a kernel that builds it in - Spin OS's, which has no modules - has it
+      # from boot, and modprobe there has nothing to find.
+      - |
+        { [ -c /dev/vhost-vsock ] || sudo modprobe vhost_vsock; } && sudo chmod 0666 /dev/vhost-vsock ||
+          echo "no vhost_vsock here; the check will name vhost-vsock-pci as unchecked"
 
   verify:args:
     desc: >-
@@ -316,6 +378,14 @@ tasks:
           "$dir/osv.json" | sort -u > _output/osv.tsv
         echo "$tag: $(wc -l < _output/osv.tsv) finding(s), in _output/osv.tsv"
 
+  osv:issues:
+    desc: >-
+      Bring the issues to what task osv found: one open for each package with findings, closed
+      once the newest release has none (hack/osvissues says why a package and not a finding).
+      Needs gh.
+    cmds:
+      - go run ./hack/osvissues -release "$(gh release view --json tagName -q .tagName)" -findings _output/osv.tsv
+
   release:
     desc: Build everything and pack one versioned tarball.
     cmds:
@@ -324,6 +394,137 @@ tasks:
       # and reads the pins and their checksums from versions.yaml itself: nothing is passed in
       # that could disagree with what was built.
       - OUTPUT_DIR="{{.OUTPUT_ABS}}" hack/release
+
+  # What release.yml does around `task release`, in its order. The version and the identity a file
+  # is signed as are the workflow's to know, and come in its environment.
+
+  release:version:
+    desc: >-
+      The version a release is: INPUT_VERSION, or a new one for today, counted from the tags
+      today already has. On the step's outputs in CI.
+    cmds:
+      - |
+        set -euo pipefail
+        if [ -n "${INPUT_VERSION:-}" ]; then
+          version="$INPUT_VERSION"
+          origin="given by the caller"
+        else
+          day=$(date -u +%Y%m%d)
+          # Count what today already has. `git tag -l` on a fetch-depth:0 checkout sees
+          # every tag; the sequence is two digits so that v20260909.02 sorts after .01
+          # and both sort before v20260910.01, as strings, everywhere.
+          taken=$(git tag -l "v${day}.*" | wc -l)
+          version=$(printf 'v%s.%02d' "$day" "$((taken + 1))")
+          origin="generated for today (${taken} already taken)"
+        fi
+
+        case "$version" in
+          v[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9][0-9]) ;;
+          *) echo "::error::'$version' is not vYYYYMMDD.NN" >&2; exit 1 ;;
+        esac
+
+        echo "version=$version" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+        echo "Releasing $version — $origin"
+
+  release:notes:
+    desc: >-
+      The notes of the release VERSION built in _output/release: what changed since the release
+      before it, whether its machine is that one's (hack/fingerprint-diff), and its machine.env.
+      On the step's outputs in CI. Needs gh.
+    cmds:
+      - |
+        set -euo pipefail
+        name="spin-machine-${VERSION}-linux-x86_64"
+        manifest="_output/release/${name}/usr/share/spin-stack/machine.env"
+        cat "$manifest"
+
+        # The release before this one, for both the verdict and the notes: the newest published
+        # one that is not this version, so a re-run of a version that already published compares
+        # against its predecessor rather than against itself. A listing that fails fails the
+        # step - read as "no releases", it would announce a first release that is not one.
+        releases=$(gh release list -R "$GITHUB_REPOSITORY" --limit 30 --json tagName -q '.[].tagName')
+        previous=$(printf '%s\n' "$releases" | grep -vFx -- "$VERSION" | head -1 || true)
+
+        if [ -n "$previous" ]; then
+          # machine.env's lines are the script's key=value arguments, as they are.
+          # shellcheck disable=SC2046
+          REFERENCE="$previous" hack/fingerprint-diff $(grep '_sha256=' "$manifest") > /tmp/verdict.md
+          # What reached the machine since: the commits by the part they changed, the pins
+          # that moved, the kernel options and the patches, read from git.
+          go run ./hack/releasenotes -from "$previous" -to HEAD > /tmp/changes.md
+        else
+          echo "Nothing to compare against: this is the first published release." > /tmp/verdict.md
+          echo "The first release: nothing before it to say what changed against." > /tmp/changes.md
+        fi
+        # Whether the QEMU shipped offers a machine type newer than the one every checkpoint is
+        # saved on: said, never acted on (machine.MachineType).
+        offer=$(go run ./hack/machinetype check -qemu "_output/release/${name}/usr/share/spin-stack/bin/qemu-system-x86_64")
+        if [ -n "$offer" ]; then printf '\n%s\n' "$offer" >> /tmp/verdict.md; fi
+        cat /tmp/verdict.md
+        cat /tmp/changes.md
+
+        {
+          echo 'notes<<RELEASE_NOTES_EOF'
+          cat /tmp/changes.md
+          echo
+          cat /tmp/verdict.md
+          echo
+          echo 'The machine as it stood on this date.'
+          echo
+          echo '```'
+          cat "$manifest"
+          echo '```'
+          echo RELEASE_NOTES_EOF
+        } >> "${GITHUB_OUTPUT:-/dev/stdout}"
+
+  release:provenance:
+    desc: >-
+      Who built the release VERSION and from what - this commit, every pin in versions.yaml - as
+      SLSA provenance, in _output/provenance.json.
+    cmds:
+      - go tool provenance -version "${VERSION}" -out _output/provenance.json
+
+  release:sign:
+    desc: >-
+      Sign and attest every file of _output/release as IDENTITY, the workflow at its ref, and
+      check each bundle against it. Needs cosign and an OIDC token, so it is release.yml's.
+    # An attestation is checked by the file's digest, not the file: verify-blob-attestation reads
+    # a blob whole and refuses one over COSIGN_MAX_ATTACHMENT_SIZE (128 MiB), and the tarball is
+    # 338 MB (v20261013.01's run failed there). The digest is what the in-toto subject names.
+    cmds:
+      - |
+        set -euo pipefail
+        attested() {
+          cosign verify-blob-attestation --type "$1" --bundle "$2" \
+            --digest "$(sha256sum "$3" | cut -d' ' -f1)" --digestAlg sha256 \
+            --certificate-identity "${IDENTITY}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+        }
+        for f in _output/release/*.tar.gz _output/release/*.tar.gz.sha256 _output/release/machine.env _output/release/*.cdx.json; do
+          cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}" > /dev/null
+          cosign attest-blob --yes --type slsaprovenance1 --predicate _output/provenance.json \
+            --bundle "${f}.provenance.sigstore.json" "${f}" > /dev/null
+          cosign verify-blob --bundle "${f}.sigstore.json" --certificate-identity "${IDENTITY}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
+          attested slsaprovenance1 "${f}.provenance.sigstore.json" "${f}"
+        done
+        # The tarball's SBOM (hack/release), attested over it: what it is made of, by the
+        # workflow that built it. The same SBOM is inside it, at usr/share/spin-stack/sbom.
+        for f in _output/release/*.tar.gz; do
+          cosign attest-blob --yes --type cyclonedx --predicate "${f%.tar.gz}.cdx.json" \
+            --bundle "${f}.cdx.sigstore.json" "${f}" > /dev/null
+          attested cyclonedx "${f}.cdx.sigstore.json" "${f}"
+        done
+        go tool attestgate files -require provenance _output/release
+        go tool attestgate files -require cdx -except '*.sha256,machine.env,*.cdx.json' _output/release
+
+  release:tag:
+    desc: Tag this commit VERSION and push the tag. A version tagged already is refused, since git push does not move a tag.
+    cmds:
+      - |
+        set -euo pipefail
+        git tag "$VERSION"
+        git push origin "$VERSION"
 
   # ==========================================================================
   # Trying the machine
@@ -427,6 +628,223 @@ tasks:
         go test ./boot/ -run '^TestReport$' -count=1 -v -timeout 6h
 
   # ==========================================================================
+  # The KVM runner: what lab.yml and report.yml do around a target
+  # ==========================================================================
+  #
+  # In their order. What the dispatch asked for comes in the job's environment (RELEASE,
+  # EXPERIMENT, KERNEL_RUN, KERNEL_RUN_C, QEMU_RUN, VARIANT, VARS; VERSION for a report), and what
+  # one step finds reaches the next through $GITHUB_ENV.
+
+  lab:unpack:
+    desc: The release RELEASE, or the newest, unpacked into _output/lab as the tree the experiment boots. Needs gh.
+    cmds:
+      - |
+        set -euo pipefail
+        if [ -z "$RELEASE" ]; then
+          RELEASE=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')
+        fi
+        rm -rf _output/lab
+        mkdir -p _output/lab/tmp
+        gh release download "$RELEASE" -R "$GITHUB_REPOSITORY" -p '*.tar.gz' -D _output/lab
+        tar -xzf _output/lab/*.tar.gz -C _output/lab
+        {
+          echo "RELEASE=$RELEASE"
+          echo "SPIN_MACHINE_OUTPUT=$PWD/_output/lab/spin-machine-${RELEASE}-linux-x86_64/usr/share/spin-stack"
+          # On disk: the overlays and memory files go here, gigabytes a tmpfs /tmp holds in RAM.
+          echo "TMPDIR=$PWD/_output/lab/tmp"
+        } >> "${GITHUB_ENV:-/dev/stdout}"
+
+  lab:fetch:
+    desc: The builds to compare, from the runs KERNEL_RUN, KERNEL_RUN_C and QEMU_RUN name, into _output/lab. Needs gh.
+    cmds:
+      - |
+        set -euo pipefail
+        fetch() { # run, artifact pattern, directory
+          [[ "$1" =~ ^[0-9]+$ ]] || { echo "::error::a run id is a number, got: $1"; exit 1; }
+          gh run download "$1" -R "$GITHUB_REPOSITORY" -p "$2" -D "$3"
+        }
+        if [ -n "$KERNEL_RUN" ]; then fetch "$KERNEL_RUN" 'vmlinux-*' _output/lab/kernel-b; fi
+        if [ -n "$KERNEL_RUN_C" ]; then fetch "$KERNEL_RUN_C" 'vmlinux-*' _output/lab/kernel-c; fi
+        if [ -n "$QEMU_RUN" ]; then fetch "$QEMU_RUN" 'qemu-*-linux-amd64' _output/lab/qemu-b; fi
+
+  lab:place:
+    desc: >-
+      Put the fetched builds where the experiment boots them: beside the release's (VARIANT=beside)
+      or in place of it (VARIANT=instead).
+    cmds:
+      - |
+        set -euo pipefail
+        env=${GITHUB_ENV:-/dev/stdout}
+        one() { # the one file under $1 whose path matches $2
+          f=$(find "$1" -path "$2" -type f | head -1)
+          [ -n "$f" ] || { echo "::error::$1 has no $2"; exit 1; }
+          echo "$PWD/$f"
+        }
+        b=$PWD/_output/lab/release-b
+        tree_b() { [ -d "$b" ] || cp -as "$SPIN_MACHINE_OUTPUT" "$b"; }
+        if [ -n "$KERNEL_RUN" ]; then
+          k=$(one _output/lab/kernel-b '*/vmlinux')
+          if [ "$VARIANT" = instead ]; then
+            tree_b; rm -f "$b/kernel/vmlinux"; install -m 0644 "$k" "$b/kernel/vmlinux"
+          else
+            echo "SPIN_KERNEL_B=$k" >> "$env"
+          fi
+        fi
+        if [ -n "$KERNEL_RUN_C" ]; then
+          [ "$VARIANT" = beside ] || { echo "::error::kernel_run_c is a third kernel beside the release, not one to boot instead"; exit 1; }
+          echo "SPIN_KERNEL_C=$(one _output/lab/kernel-c '*/vmlinux')" >> "$env"
+        fi
+        if [ -n "$QEMU_RUN" ]; then
+          q=$(one _output/lab/qemu-b '*/bin/qemu-system-x86_64')
+          tree_b; rm -rf "$b/bin/qemu-system-x86_64" "$b/qemu"
+          install -m 0755 "$q" "$b/bin/qemu-system-x86_64"
+          cp -r "$(dirname "$(dirname "$q")")/qemu" "$b/qemu"
+          [ "$VARIANT" = instead ] || echo "SPIN_MACHINE_OUTPUT_B=$b" >> "$env"
+        fi
+        if [ "$VARIANT" = instead ]; then echo "SPIN_MACHINE_OUTPUT=$b" >> "$env"; fi
+
+  lab:vars:
+    desc: >-
+      VARS, `KEY=VALUE; KEY=VALUE`, for the experiment: only the names a target reads, so a typo
+      fails here rather than being ignored, and none of the ones lab:unpack and lab:place set.
+    cmds:
+      - |
+        set -euo pipefail
+        IFS=';' read -ra pairs <<< "$VARS"
+        for pair in "${pairs[@]}"; do
+          pair="${pair#"${pair%%[![:space:]]*}"}"
+          pair="${pair%"${pair##*[![:space:]]}"}"
+          [ -z "$pair" ] && continue
+          key="${pair%%=*}"
+          [[ "$pair" == *=* && "$key" =~ ^(REPS|TOP|GAP|ONLY|FLAGS|CPUS|MEMORY_MIB|DEBUG|FILE_MB|CACHE_TIMEOUT_S|GRAPH_[A-Z_]+|SHARE_[A-Z_]+|SPIN_[A-Z0-9_]+)$ ]] ||
+            { echo "::error::not a variable this workflow passes on: $pair"; exit 1; }
+          case "$key" in
+            SPIN_MACHINE_OUTPUT|SPIN_MACHINE_OUTPUT_B|SPIN_KERNEL_B|SPIN_KERNEL_C) echo "::error::$key is set by this workflow"; exit 1 ;;
+          esac
+          echo "$pair" >> "${GITHUB_ENV:-/dev/stdout}"
+        done
+
+  lab:about:
+    desc: What this lab run is and the host it runs on, on the run's summary in CI; fails without a usable /dev/kvm.
+    cmds:
+      - |
+        set -e
+        {
+          echo "### $EXPERIMENT on ${RUNNER_NAME:-$(hostname)}"
+          echo
+          echo "- release: $RELEASE"
+          echo "- kernel B: ${KERNEL_RUN:+run }${KERNEL_RUN:-none}"
+          echo "- kernel C: ${KERNEL_RUN_C:+run }${KERNEL_RUN_C:-none}"
+          echo "- QEMU B: ${QEMU_RUN:+run }${QEMU_RUN:-none}"
+          if [ -n "$KERNEL_RUN$KERNEL_RUN_C$QEMU_RUN" ]; then echo "- booted: $VARIANT the release"; fi
+          echo "- vars: ${VARS:-none}"
+          echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
+          echo "- load: $(cut -d' ' -f1-3 /proc/loadavg)"
+          if sudo -n true 2>/dev/null; then echo "- sudo -n: yes"; else echo "- sudo -n: **no** (targets that edit an overlay skip)"; fi
+        } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm"; exit 1; }
+
+  lab:run:
+    desc: >-
+      The experiment EXPERIMENT, on the tree SPIN_MACHINE_OUTPUT, logged to _output/lab/lab.log;
+      report writes its JSON to _output/lab/report.json.
+    # A skipped test exits 0, and a green run that measured nothing reads as a result, so a skip
+    # fails the run with the test's reason.
+    cmds:
+      - |
+        set -o pipefail
+        {{.TASK_EXE}} "$EXPERIMENT" OUTPUT_DIR="$SPIN_MACHINE_OUTPUT" OUT="$PWD/_output/lab/report.json" 2>&1 | tee _output/lab/lab.log
+        if grep -q -- '--- SKIP' _output/lab/lab.log; then
+          echo "::error::the experiment skipped: $(grep -B1 -- '--- SKIP' _output/lab/lab.log | head -1 | sed 's/^.*_test.go:[0-9]*: //')"
+          exit 1
+        fi
+
+  lab:found:
+    desc: What the experiment printed, from _output/lab/lab.log, on the run's summary in CI.
+    cmds:
+      - |
+        set -e
+        [ -f _output/lab/lab.log ] || exit 0
+        {
+          echo
+          echo '```'
+          grep -E '^\s{4}\S' _output/lab/lab.log | sed 's/^    //' | tail -300
+          echo '```'
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+
+  report:runner:
+    desc: What this host can measure, said before anything is, on the run's summary in CI; fails without a usable /dev/kvm.
+    # A row the report skips is one this host lacks the device for, and this says which first.
+    cmds:
+      - |
+        set -e
+        {
+          echo "### Runner ${RUNNER_NAME:-$(hostname)}"
+          echo
+          for dev in /dev/kvm /dev/vhost-vsock; do
+            if [ -r "$dev" ] && [ -w "$dev" ]; then echo "- $dev: usable"; else echo "- $dev: **not usable** ($(ls -l "$dev" 2>&1))"; fi
+          done
+          if sudo -n true 2>/dev/null; then
+            echo "- sudo -n: yes"
+            sudo -n modprobe nbd max_part=8 2>/dev/null || true
+            for _ in $(seq 50); do [ -e /dev/nbd0 ] && break; sleep 0.02; done
+            if [ -e /dev/nbd0 ]; then echo "- /dev/nbd0: present (image variants and the echo login run)"; else echo "- /dev/nbd0: **missing** (image variants are skipped, the login is agetty's)"; fi
+          else
+            echo "- sudo -n: **no** (image variants are skipped, the login is agetty's)"
+          fi
+          echo "- gh: $(command -v gh || echo '**missing**')"
+          echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
+        } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm: nothing here can be measured"; exit 1; }
+
+  report:unpack:
+    desc: >-
+      The release VERSION's tarball, as a consumer gets it, unpacked into _output/report: what is
+      measured is what was published. Needs gh.
+    cmds:
+      - |
+        set -euo pipefail
+        rm -rf _output/report
+        mkdir -p _output/report
+        gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -p '*.tar.gz' -D _output/report
+        tar -xzf _output/report/*.tar.gz -C _output/report
+        echo "RELEASE_TREE=$PWD/_output/report/spin-machine-${VERSION}-linux-x86_64/usr/share/spin-stack" >> "${GITHUB_ENV:-/dev/stdout}"
+
+  report:compare:
+    desc: >-
+      _output/report/report.json against the newest release before VERSION that published one,
+      in compare.md beside it and on the run's summary in CI. Needs gh.
+    cmds:
+      - |
+        set -euo pipefail
+        cd _output/report
+        previous=""
+        for tag in $(gh release list -R "$GITHUB_REPOSITORY" --limit 30 --json tagName -q '.[].tagName'); do
+          [ "$tag" = "$VERSION" ] && continue
+          if gh release download "$tag" -R "$GITHUB_REPOSITORY" -p report.json -O previous.json 2>/dev/null; then
+            previous="$tag"
+            break
+          fi
+        done
+        if [ -n "$previous" ]; then
+          "$RELEASE_TREE/bin/spin-machine" compare --old previous.json --new report.json > compare.md
+        else
+          echo "No earlier release published a report.json to compare the feature matrix with." > compare.md
+        fi
+        cat compare.md >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+
+  report:publish:
+    desc: Upload _output/report/report.json to the release VERSION and append compare.md to its notes. Needs gh.
+    cmds:
+      - |
+        set -euo pipefail
+        cd _output/report
+        gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" report.json --clobber
+        gh release view "$VERSION" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md
+        { echo; cat compare.md; } >> notes.md
+        gh release edit "$VERSION" -R "$GITHUB_REPOSITORY" --notes-file notes.md
+
+  # ==========================================================================
   # Keeping the pins and the tree
   # ==========================================================================
 
@@ -448,7 +866,7 @@ tasks:
       - '{{.VERSIONS}} bump {{.NAME}} {{.TO}}'
       # A QEMU bump keeps the machine type (machine.MachineType), and the bump's pull request
       # shows what the newer types change against it, from the source just pinned.
-      - cmd: task qemu:compat
+      - cmd: '{{.TASK_EXE}} qemu:compat'
         if: '[ "{{.NAME}}" = qemu ]'
 
   clean:

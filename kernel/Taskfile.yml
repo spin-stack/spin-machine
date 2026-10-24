@@ -48,6 +48,16 @@ tasks:
           echo "$k carries no Xen PVH notes — QEMU has no entry point into it" >&2; exit 1; }
         echo "OK: $k, PVH notes present, sha256 $(sha256sum "$k" | cut -c1-16)…"
 
+  summary:
+    desc: What the built kernel and its config are, by sha256, on the run's summary in CI.
+    cmds:
+      - |
+        set -euo pipefail
+        {
+          echo "kernel sha256: $(sha256sum {{.OUTPUT_ABS}}/kernel/vmlinux | cut -d' ' -f1)"
+          echo "config sha256: $(sha256sum {{.OUTPUT_ABS}}/kernel/kernel-config | cut -d' ' -f1)"
+        } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
   menuconfig:
     desc: "Edit the kernel config. Writes back to kernel/config-<version>-<arch>."
     interactive: true

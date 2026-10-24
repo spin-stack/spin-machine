@@ -31,20 +31,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
-
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Scan the newest release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: task osv
+        run: go tool task osv
 
       # One issue a package, which a release closes once it has no finding in it; hack/osvissues
       # says why a package and not a finding.
       - name: Bring the issues to the findings
         env:
           GH_TOKEN: ${{ github.token }}
-        run: go run ./hack/osvissues -release "$(gh release view --json tagName -q .tagName)" -findings _output/osv.tsv
+        run: go tool task osv:issues

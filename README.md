@@ -121,8 +121,9 @@ task fingerprint   # this machine's identity
 task release       # one tarball, one version
 ```
 
-`task` is [taskfile.dev](https://taskfile.dev), not GNU task. The part builds run in
-containers (`qemu/Dockerfile`, `kernel/Dockerfile`, `e2fsprogs/Dockerfile`,
+`task` is [taskfile.dev](https://taskfile.dev), not GNU task, at the version go.mod pins:
+`go tool task build` runs it with nothing installed, and is what CI runs. The part builds
+run in containers (`qemu/Dockerfile`, `kernel/Dockerfile`, `e2fsprogs/Dockerfile`,
 `image/Dockerfile`), so a container engine is needed to build; a boot is not, and neither
 is `task build` — a consumer points `--release` at an unpacked release tree instead.
 A boot needs `/dev/kvm` readable and writable by whoever runs it, the same requirement

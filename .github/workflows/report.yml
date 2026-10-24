@@ -41,6 +41,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ inputs.version }}
+      # GitHub reads a workflow command (::error::) only at the start of a line, where Task's
+      # prefixed output puts the task's name.
+      TASK_OUTPUT: interleaved
     steps:
       # The harness from the ref asked for - the release's own tag when release.yml calls - and,
       # run by hand, from where the run was started: a release older than the report has none.
@@ -48,29 +51,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
-
-      # What this runner can do, said before anything is measured: a row the report skips is one
-      # this host lacks the device for, and the summary says which before the report does.
-      - name: What this runner has
-        run: |
-          {
-            echo "### Runner $RUNNER_NAME"
-            echo
-            for dev in /dev/kvm /dev/vhost-vsock; do
-              if [ -r "$dev" ] && [ -w "$dev" ]; then echo "- $dev: usable"; else echo "- $dev: **not usable** ($(ls -l "$dev" 2>&1))"; fi
-            done
-            if sudo -n true 2>/dev/null; then
-              echo "- sudo -n: yes"
-              sudo -n modprobe nbd max_part=8 2>/dev/null || true
-              for _ in $(seq 50); do [ -e /dev/nbd0 ] && break; sleep 0.02; done
-              if [ -e /dev/nbd0 ]; then echo "- /dev/nbd0: present (image variants and the echo login run)"; else echo "- /dev/nbd0: **missing** (image variants are skipped, the login is agetty's)"; fi
-            else
-              echo "- sudo -n: **no** (image variants are skipped, the login is agetty's)"
-            fi
-            echo "- gh: $(command -v gh || echo '**missing**')"
-            echo "- CPU: $(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -1), $(nproc) CPUs"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-          [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error::no usable /dev/kvm: nothing here can be measured"; exit 1; }
 
       # No Actions cache: this runner keeps Go's module and build caches on its own disk, and
       # the cache service only stored another copy per branch, against the repository's limit.
@@ -80,43 +60,23 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      # What this runner can do, said before anything is measured: a row the report skips is one
+      # this host lacks the device for, and the summary says which before the report does.
+      - name: What this runner has
+        run: go tool task report:runner
 
       # The tarball as a consumer gets it, and not a tree a build left: what is measured is what
       # was published.
       - name: Unpack the release
-        run: |
-          set -euo pipefail
-          rm -rf _output/report
-          mkdir -p _output/report
-          gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -p '*.tar.gz' -D _output/report
-          tar -xzf _output/report/*.tar.gz -C _output/report
-          echo "RELEASE_TREE=$PWD/_output/report/spin-machine-${VERSION}-linux-x86_64/usr/share/spin-stack" >> "$GITHUB_ENV"
+        run: go tool task report:unpack
 
       - name: Measure the feature matrix
-        run: task report OUTPUT_DIR="$RELEASE_TREE" OUT="$PWD/_output/report/report.json"
+        run: go tool task report OUTPUT_DIR="$RELEASE_TREE" OUT="$PWD/_output/report/report.json"
 
       # Against the newest release before this one that has a report. The first release with
       # a report has nothing to compare with, and says so.
       - name: Compare with the release before it
-        run: |
-          set -euo pipefail
-          cd _output/report
-          previous=""
-          for tag in $(gh release list -R "$GITHUB_REPOSITORY" --limit 30 --json tagName -q '.[].tagName'); do
-            [ "$tag" = "$VERSION" ] && continue
-            if gh release download "$tag" -R "$GITHUB_REPOSITORY" -p report.json -O previous.json 2>/dev/null; then
-              previous="$tag"
-              break
-            fi
-          done
-          if [ -n "$previous" ]; then
-            "$RELEASE_TREE/bin/spin-machine" compare --old previous.json --new report.json > compare.md
-          else
-            echo "No earlier release published a report.json to compare the feature matrix with." > compare.md
-          fi
-          cat compare.md >> "$GITHUB_STEP_SUMMARY"
+        run: go tool task report:compare
 
       - name: Keep the report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -129,10 +89,4 @@ jobs:
 
       - name: Publish the report, and what moved
         if: inputs.publish
-        run: |
-          set -euo pipefail
-          cd _output/report
-          gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" report.json --clobber
-          gh release view "$VERSION" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md
-          { echo; cat compare.md; } >> notes.md
-          gh release edit "$VERSION" -R "$GITHUB_REPOSITORY" --notes-file notes.md
+        run: go tool task report:publish

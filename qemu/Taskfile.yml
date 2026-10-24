@@ -90,6 +90,44 @@ tasks:
       - for: [qemu-system-x86_64, qemu-system-x86_64-tcg]
         cmd: go run ./hack/machinetype check -qemu {{.OUTPUT_ABS}}/bin/{{.ITEM}}
 
+  version:
+    desc: The pinned QEMU version, as version=, on the step's outputs in CI.
+    cmds:
+      - echo "version={{.QEMU_VERSION}}" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+
+  summary:
+    desc: >-
+      What the built QEMU is, and whether it still offers the machine type every checkpoint is
+      saved on: on the run's summary in CI.
+    cmds:
+      - |
+        set -euo pipefail
+        {
+          echo "qemu sha256: $(sha256sum {{.OUTPUT_ABS}}/bin/qemu-system-x86_64 | cut -d' ' -f1)"
+          echo "qboot.bin: $(stat -c%s {{.OUTPUT_ABS}}/qemu/qboot.bin) bytes"
+          go run ./hack/machinetype check -qemu {{.OUTPUT_ABS}}/bin/qemu-system-x86_64
+        } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+  publish:
+    desc: >-
+      Build and push the runtime image, tagged with the pinned version, to GitHub's registry
+      under GITHUB_REPOSITORY: what `fetch` pulls. Needs a docker login that can write packages.
+    cmds:
+      - |
+        set -euo pipefail
+        repo=${GITHUB_REPOSITORY:-spin-stack/spin-machine}
+        docker buildx build \
+          --file qemu/Dockerfile \
+          --target runtime \
+          --platform linux/amd64 \
+          --cache-from type=gha,scope=qemu \
+          $({{.VERSIONS}} args alpine qemu debian debian-snapshot qboot) \
+          --build-arg JOBS=4 \
+          --label org.opencontainers.image.source=https://github.com/${repo} \
+          --tag ghcr.io/${repo}/qemu:{{.QEMU_VERSION}} \
+          --push \
+          .
+
   compat:
     desc: >-
       Print what QEMU's newer machine types change against the pinned one (machine.MachineType):

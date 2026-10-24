@@ -56,6 +56,10 @@ jobs:
     timeout-minutes: 180
     outputs:
       version: ${{ steps.version.outputs.version }}
+    env:
+      # GitHub reads a workflow command (::error::) only at the start of a line, where Task's
+      # prefixed output puts the task's name.
+      TASK_OUTPUT: interleaved
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,9 +73,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
 
       # Its own sticky disk, and not one of the lanes'. This job builds all four artefacts, so
       # it would want every lane's disk at once and can only have one — and a release can
@@ -103,28 +104,7 @@ jobs:
         id: version
         env:
           INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          if [ -n "${INPUT_VERSION:-}" ]; then
-            version="$INPUT_VERSION"
-            origin="given by the caller"
-          else
-            day=$(date -u +%Y%m%d)
-            # Count what today already has. `git tag -l` on a fetch-depth:0 checkout sees
-            # every tag; the sequence is two digits so that v20260909.02 sorts after .01
-            # and both sort before v20260910.01, as strings, everywhere.
-            taken=$(git tag -l "v${day}.*" | wc -l)
-            version=$(printf 'v%s.%02d' "$day" "$((taken + 1))")
-            origin="generated for today (${taken} already taken)"
-          fi
-
-          case "$version" in
-            v[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9][0-9]) ;;
-            *) echo "::error::'$version' is not vYYYYMMDD.NN" >&2; exit 1 ;;
-          esac
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Releasing $version — $origin"
+        run: go tool task release:version
 
       # `task release` builds all four artefacts and packs them, ending in hack/release,
       # which refuses to produce a tarball with anything missing. A release that installs
@@ -140,7 +120,7 @@ jobs:
           # Reads what main's lanes exported and writes nothing back: a release is built once, and
           # the next one reads main's newer cache, not this. See CACHE_EXPORT in Taskfile.yml.
           CACHE_EXPORT: "false"
-        run: task release QEMU_JOBS=4 KERNEL_NPROC=4
+        run: go tool task release QEMU_JOBS=4 KERNEL_NPROC=4
 
       # The machine's identity, and what it costs whoever holds checkpoints.
       #
@@ -158,50 +138,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          name="spin-machine-${VERSION}-linux-x86_64"
-          manifest="_output/release/${name}/usr/share/spin-stack/machine.env"
-          cat "$manifest"
-
-          # The release before this one, for both the verdict and the notes: the newest published
-          # one that is not this version, so a re-run of a version that already published compares
-          # against its predecessor rather than against itself. A listing that fails fails the
-          # step - read as "no releases", it would announce a first release that is not one.
-          releases=$(gh release list -R "$GITHUB_REPOSITORY" --limit 30 --json tagName -q '.[].tagName')
-          previous=$(printf '%s\n' "$releases" | grep -vFx -- "$VERSION" | head -1 || true)
-
-          if [ -n "$previous" ]; then
-            # machine.env's lines are the script's key=value arguments, as they are.
-            # shellcheck disable=SC2046
-            REFERENCE="$previous" hack/fingerprint-diff $(grep '_sha256=' "$manifest") > /tmp/verdict.md
-            # What reached the machine since: the commits by the part they changed, the pins
-            # that moved, the kernel options and the patches, read from git.
-            go run ./hack/releasenotes -from "$previous" -to HEAD > /tmp/changes.md
-          else
-            echo "Nothing to compare against: this is the first published release." > /tmp/verdict.md
-            echo "The first release: nothing before it to say what changed against." > /tmp/changes.md
-          fi
-          # Whether the QEMU shipped offers a machine type newer than the one every checkpoint is
-          # saved on: said, never acted on (machine.MachineType).
-          offer=$(go run ./hack/machinetype check -qemu "_output/release/${name}/usr/share/spin-stack/bin/qemu-system-x86_64")
-          if [ -n "$offer" ]; then printf '\n%s\n' "$offer" >> /tmp/verdict.md; fi
-          cat /tmp/verdict.md
-          cat /tmp/changes.md
-
-          {
-            echo 'notes<<RELEASE_NOTES_EOF'
-            cat /tmp/changes.md
-            echo
-            cat /tmp/verdict.md
-            echo
-            echo 'The machine as it stood on this date.'
-            echo
-            echo '```'
-            cat "$manifest"
-            echo '```'
-            echo RELEASE_NOTES_EOF
-          } >> "$GITHUB_OUTPUT"
+        run: go tool task release:notes
 
       # v4 is the one that installs cosign v3. Dependabot moves this pin like every other `uses:`.
       - name: Install cosign
@@ -213,51 +150,22 @@ jobs:
       - name: Write the provenance
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: go tool provenance -version "${VERSION}" -out _output/provenance.json
+        run: go tool task release:provenance
 
       # Each file is signed and attested, then each bundle checked against the identity that made
       # it, file by file: a bundle nothing verifies is a step that can quietly stop working.
-      #
-      # An attestation is checked by the file's digest, not the file: verify-blob-attestation reads
-      # a blob whole and refuses one over COSIGN_MAX_ATTACHMENT_SIZE (128 MiB), and the tarball is
-      # 338 MB (v20261013.01's run failed there). The digest is what the in-toto subject names.
       - name: Sign and attest what the release offers
         env:
           IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
-        run: |
-          set -euo pipefail
-          attested() {
-            cosign verify-blob-attestation --type "$1" --bundle "$2" \
-              --digest "$(sha256sum "$3" | cut -d' ' -f1)" --digestAlg sha256 \
-              --certificate-identity "${IDENTITY}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com
-          }
-          for f in _output/release/*.tar.gz _output/release/*.tar.gz.sha256 _output/release/machine.env _output/release/*.cdx.json; do
-            cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}" > /dev/null
-            cosign attest-blob --yes --type slsaprovenance1 --predicate _output/provenance.json \
-              --bundle "${f}.provenance.sigstore.json" "${f}" > /dev/null
-            cosign verify-blob --bundle "${f}.sigstore.json" --certificate-identity "${IDENTITY}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com "${f}"
-            attested slsaprovenance1 "${f}.provenance.sigstore.json" "${f}"
-          done
-          # The tarball's SBOM (hack/release), attested over it: what it is made of, by the
-          # workflow that built it. The same SBOM is inside it, at usr/share/spin-stack/sbom.
-          for f in _output/release/*.tar.gz; do
-            cosign attest-blob --yes --type cyclonedx --predicate "${f%.tar.gz}.cdx.json" \
-              --bundle "${f}.cdx.sigstore.json" "${f}" > /dev/null
-            attested cyclonedx "${f}.cdx.sigstore.json" "${f}"
-          done
-          go tool attestgate files -require provenance _output/release
-          go tool attestgate files -require cdx -except '*.sha256,machine.env,*.cdx.json' _output/release
+        run: go tool task release:sign
 
       # Tagged here, after the files are signed and before they are published, so that the next
       # run's count of "tags already taken today" is right and the tarball has a commit behind it.
       # A version tagged already is refused here: git push does not move a tag.
       - name: Tag the commit
-        run: |
-          set -euo pipefail
-          git tag "${{ steps.version.outputs.version }}"
-          git push origin "${{ steps.version.outputs.version }}"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: go tool task release:tag
 
       - name: Publish
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3

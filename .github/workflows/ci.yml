@@ -53,39 +53,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
-
       # `task lint` and `task test`, and not a list of steps: a second definition of what
       # the gate is, maintained in a workflow file, goes out of step with the first exactly
       # when a check is added.
       - name: Lint
-        run: task lint
+        run: go tool task lint
 
       - name: Test the machine definition
-        run: task test
+        run: go tool task test
 
       # always(): a failed suite is when the per-function numbers are wanted.
       - name: Coverage summary
         if: always()
-        run: |
-          if [ ! -f coverage.out ]; then
-            echo "coverage.out was not produced; the tests may have failed before coverage ran." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          {
-            echo "## Go coverage"
-            echo
-            echo "**$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}')** total"
-            echo
-            echo '<details><summary>Function detail</summary>'
-            echo
-            echo '```'
-            go tool cover -func=coverage.out
-            echo '```'
-            echo '</details>'
-          } >> "$GITHUB_STEP_SUMMARY"
-          go tool cover -html=coverage.out -o coverage.html
+        run: go tool task coverage
 
       - name: Upload Go coverage HTML
         if: always()
@@ -100,23 +80,13 @@ jobs:
       # is against what it merges into, on a push against what was there before.
       - name: What this change broke, and whether a test noticed
         env:
-          EVENT: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" = "pull_request" ]; then
-            base="origin/$BASE_REF"
-          else
-            base="$BEFORE"
-          fi
-          git rev-parse --verify "$base^{commit}" >/dev/null 2>&1 || base=HEAD~1
-          task mutate BASE="$base"
+        run: go tool task mutate
 
       # The steps below run spin-machine, so it has to exist. `task test` exercises the
       # machine package; only a build catches what the command around it does with it.
       - name: Build the tools
-        run: task tools
+        run: go tool task tools
 
       # `task test` proves the machine package agrees with itself. The steps below ask the
       # QEMU binary, which is the half that can disagree: the device set is decided in
@@ -148,7 +118,7 @@ jobs:
       - name: Fetch the pinned QEMU
         id: qemu
         continue-on-error: true
-        run: task qemu:fetch
+        run: go tool task qemu:fetch
 
       # vhost-vsock is a kernel module, and the machine's vsock device cannot be created
       # without /dev/vhost-vsock. The runner has the node and gives the user no access to
@@ -158,12 +128,8 @@ jobs:
       # told what went unchecked instead of being shown a pass.
       - name: Load vhost_vsock
         if: steps.qemu.outcome == 'success'
-        run: |
-          # The device first: a kernel that builds it in - Spin OS's, which has no modules - has
-          # it from boot, and modprobe there has nothing to find.
-          { [ -c /dev/vhost-vsock ] || sudo modprobe vhost_vsock; } && sudo chmod 0666 /dev/vhost-vsock ||
-            echo "no vhost_vsock here; the check will name vhost-vsock-pci as unchecked"
+        run: go tool task vsock
 
       - name: Check QEMU accepts the machine's arguments
         if: steps.qemu.outcome == 'success'
-        run: task verify:args
+        run: go tool task verify:args

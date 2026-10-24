@@ -52,6 +52,37 @@ tasks:
         fi
         echo "$dir/$name/usr/share/spin-stack" > {{.OUTPUT_ABS}}/compat/previous
 
+  buildkit:
+    desc: >-
+      Use the BuildKit builder named compat, made the first time: a docker-container builder,
+      which keeps its cache in .cache/buildkit for the KVM runner's next run.
+    cmds:
+      - docker buildx inspect compat > /dev/null 2>&1 && docker buildx use compat || docker buildx create --use --name compat --driver docker-container
+
+  here:
+    desc: >-
+      The machine before (boot:previous) and this one: the newest release with this tree's QEMU,
+      kernel and spin-machine in place of its own, in _output/compat/here. Both are exported to
+      the steps after in CI (SPIN_COMPAT_PREVIOUS, SPIN_MACHINE_OUTPUT). Needs a built QEMU,
+      kernel and tools.
+    # The base image is the release's: a checkpoint resumes with the disks it was saved with.
+    cmds:
+      - task: previous
+      - |
+        set -euo pipefail
+        previous=$(cat {{.OUTPUT_ABS}}/compat/previous)
+        here={{.OUTPUT_ABS}}/compat/here
+        rm -rf "$here" && cp -as "$previous" "$here"
+        rm -rf "$here/bin" "$here/qemu" "$here/kernel"
+        mkdir -p "$here/bin" "$here/kernel"
+        cp {{.OUTPUT_ABS}}/bin/qemu-system-x86_64 {{.OUTPUT_ABS}}/bin/qemu-img {{.OUTPUT_ABS}}/bin/spin-machine "$here/bin/"
+        cp -r {{.OUTPUT_ABS}}/qemu "$here/qemu"
+        cp {{.OUTPUT_ABS}}/kernel/vmlinux "$here/kernel/vmlinux"
+        {
+          echo "SPIN_COMPAT_PREVIOUS=$previous"
+          echo "SPIN_MACHINE_OUTPUT=$here"
+        } >> "${GITHUB_ENV:-/dev/stdout}"
+
   compat:
     desc: >-
       A checkpoint the newest published release saves resumes on this tree's build, when the two
