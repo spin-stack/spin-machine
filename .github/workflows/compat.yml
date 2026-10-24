@@ -67,10 +67,10 @@ jobs:
       # The tokens `type=gha` needs in a `run:` step; qemu.yml says why.
       - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
 
-      # The guests' vsock transport: a module on the fleet's kernel that nothing loads before the
-      # first QEMU opens /dev/vhost-vsock.
-      - name: vsock
-        run: sudo -n modprobe vhost_vsock
+      # The guests' vsock transport, loaded and made this user's: a module on the fleet's kernel
+      # that nothing loads before the first QEMU opens /dev/vhost-vsock.
+      - name: Load vhost_vsock
+        run: go tool task vsock
 
       # Reads the lanes' scopes and writes none back: main's lanes keep them current.
       - name: Build this change's QEMU and kernel, and the tools
