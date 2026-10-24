@@ -19,7 +19,7 @@ tool (
 )
 
 require (
-	github.com/spin-stack/go-tools v0.0.0-20261024182514-8cf54b031efe
+	github.com/spin-stack/go-tools v0.0.0-20261024185510-dfcf2c10f30b
 	golang.org/x/sys v0.49.0
 )
 
