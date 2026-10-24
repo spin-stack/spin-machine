@@ -60,10 +60,7 @@ jobs:
         id: touches
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          build=$(hack/touches "$BASE" alpine e2fsprogs ubuntu mkosi task git-lfs buildkit -- \
-            image e2fsprogs go.mod .github/workflows/image.yml)
-          echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
+        run: go tool task touches -- alpine e2fsprogs ubuntu mkosi task git-lfs buildkit -- image e2fsprogs go.mod .github/workflows/image.yml
 
   build:
     needs: changed
@@ -81,9 +78,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
-
       # One sticky disk per thing built, and no silent fallback; see the note in qemu.yml. This
       # job builds e2fsprogs and the image builder, which is one job and so one disk.
       - name: Setup Blacksmith Builder
@@ -100,8 +94,10 @@ jobs:
       # The image is made and checked with the static e2fsprogs this repository builds, not
       # the build container's, and image/build.sh stops when it is not there.
       - name: Build e2fsprogs
-        run: |
-          CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task e2fsprogs:build
+        env:
+          CACHE_BACKEND: gha
+          CACHE_EXPORT: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: go tool task e2fsprogs:build
 
       # image/build.sh asserts what came out on the finished filesystem rather than
       # trusting the build that made it: that there is an /sbin/init and a /bin/sh, that
@@ -114,13 +110,13 @@ jobs:
       # it would buy minutes of cache traffic in exchange for minutes of archive traffic,
       # and a cache entry large enough to push others out of the repository's 10 GB.
       - name: Build the base image
-        run: |
-          CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task image:build
+        env:
+          CACHE_BACKEND: gha
+          CACHE_EXPORT: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: go tool task image:build
 
       - name: What this image is
-        run: |
-          ls -la _output/image/rootfs.qcow2
-          echo "sha256: $(sha256sum _output/image/rootfs.qcow2 | cut -d' ' -f1)"
+        run: go tool task image:summary
 
       # Not uploaded as an artifact: it is ~860 MB and the release workflow rebuilds it
       # from the same inputs. What this job is for is finding out that it still builds and

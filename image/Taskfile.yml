@@ -23,6 +23,14 @@ tasks:
           -v {{.MKOSI_CACHE_DIR}}:/cache \
           {{.IMAGE_BUILDER_TAG}}
 
+  summary:
+    desc: What the built base image is, by size and sha256.
+    cmds:
+      - |
+        set -e
+        ls -la {{.OUTPUT_ABS}}/image/rootfs.qcow2
+        echo "sha256: $(sha256sum {{.OUTPUT_ABS}}/image/rootfs.qcow2 | cut -d' ' -f1)"
+
   builder:
     desc: Build the container that builds the base image (mkosi, qemu-utils).
     # A step of build, not a thing to run on its own.

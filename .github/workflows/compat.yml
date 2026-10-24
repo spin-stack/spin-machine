@@ -63,37 +63,21 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
-
       # A builder that can export its cache to the directory above; the runner keeps it.
       - name: A BuildKit that keeps its cache
-        run: docker buildx inspect compat > /dev/null 2>&1 && docker buildx use compat || docker buildx create --use --name compat --driver docker-container
+        run: go tool task boot:buildkit
 
       - name: Build this change's QEMU and kernel, and the tools
-        run: task qemu:build kernel:build tools
+        run: go tool task qemu:build kernel:build tools
 
       # The newest release, checked against its sha256 and its signature, as the machine before;
-      # this change's machine is the same tree with what was just built in place of its own.
+      # this change's machine is the same tree with what was just built in place of its own. The
+      # steps after boot that tree: it is their SPIN_MACHINE_OUTPUT.
       - name: The machine before, and this one
-        run: |
-          set -euo pipefail
-          task boot:previous
-          previous=$(cat _output/compat/previous)
-          here=$PWD/_output/compat/here
-          rm -rf "$here" && cp -as "$previous" "$here"
-          rm -rf "$here/bin" "$here/qemu" "$here/kernel"
-          mkdir -p "$here/bin" "$here/kernel"
-          cp _output/bin/qemu-system-x86_64 _output/bin/qemu-img _output/bin/spin-machine "$here/bin/"
-          cp -r _output/qemu "$here/qemu"
-          cp _output/kernel/vmlinux "$here/kernel/vmlinux"
-          {
-            echo "SPIN_COMPAT_PREVIOUS=$previous"
-            echo "SPIN_MACHINE_OUTPUT=$here"
-          } >> "$GITHUB_ENV"
+        run: go tool task boot:here
 
       - name: Every ROM the machine maps is the fingerprint's
-        run: SPIN_ROM_TEST=1 go test ./boot/ -run '^TestEveryROMIsTheFingerprints$' -count=1 -v -timeout 3m
+        run: go tool task boot:roms
 
       - name: A checkpoint of the release before resumes here
-        run: go test ./boot/ -run '^TestACheckpointOfTheReleaseBeforeResumesHere$' -count=1 -v -timeout 10m
+        run: go tool task boot:compat

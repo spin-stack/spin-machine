@@ -57,10 +57,7 @@ jobs:
         id: touches
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          build=$(hack/touches "$BASE" debian debian-snapshot kernel moby-check-config -- \
-            kernel go.mod .github/workflows/kernel.yml)
-          echo "build=${build}" | tee -a "$GITHUB_OUTPUT"
+        run: go tool task touches -- debian debian-snapshot kernel moby-check-config -- kernel go.mod .github/workflows/kernel.yml
 
   build:
     needs: changed
@@ -78,9 +75,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
-
       # One sticky disk per thing built, and no silent fallback; see the note in qemu.yml.
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
@@ -97,20 +91,17 @@ jobs:
       # survived the strip. Without them QEMU has no entry point into this kernel and the
       # failure is a VM that does not start, in whichever lane boots one next.
       - name: Build the kernel
-        run: |
-          CACHE_EXPORT=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} CACHE_BACKEND=gha task kernel:build KERNEL_NPROC=4
+        env:
+          CACHE_BACKEND: gha
+          CACHE_EXPORT: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: go tool task kernel:build KERNEL_NPROC=4
 
       # What it produced, on the run's summary: a pull request that changes the config, or
       # bumps the Debian toolchain the kernel is compiled with, changes every guest's next
       # boot, and the change that does it need not look like much. Checkpoints are not
       # affected: the kernel is not in the fingerprint (machine.Spec.Fingerprint).
       - name: What this kernel is
-        run: |
-          set -euo pipefail
-          {
-            echo "kernel sha256: $(sha256sum _output/kernel/vmlinux | cut -d' ' -f1)"
-            echo "config sha256: $(sha256sum _output/kernel/kernel-config | cut -d' ' -f1)"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+        run: go tool task kernel:summary
 
       - name: Upload the kernel
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
