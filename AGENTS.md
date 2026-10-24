@@ -90,10 +90,10 @@ not silently become production behaviour.
   CPU affinity), document why it does not.
 - Remove or quarantine an experiment once it no longer has an active question. Keep the
   conclusion and durable evidence, not a permanent switch in the release path.
-- A measurement that decides something is taken on the KVM runner (construct), through
-  `.github/workflows/lab.yml`, one run at a time: its three runners share one machine, and two
-  lab runs side by side measure each other. A laptop has neither the Spin OS kernel nor a quiet
-  host, so its numbers are leads, not findings. Compare with enough boots to beat the noise -
+- A measurement that decides something is taken on the bench fleet (spin-stack/ci, one instance
+  type) through `.github/workflows/lab.yml`, one run at a time: two lab runs side by side measure
+  each other. A laptop is not a quiet host, so its numbers are leads, not findings, and a number
+  taken on another kind of host compares with nothing. Compare with enough boots to beat the noise -
   three a row moved a p50 by 5-11% between runs of one release (#81) - and alternate the
   variants rather than running them in blocks.
 - What the guest's memory and disk were measured to cost, and why each default is what it is,

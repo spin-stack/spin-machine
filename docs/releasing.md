@@ -80,7 +80,7 @@ pinned Alpine, and the diff is the review.
 ## The feature matrix
 
 A release also says what it costs. After it publishes, the `report` job boots the tarball it
-just published, on a self-hosted runner labelled `kvm`, through every combination of the
+just published, on the bench fleet (spin-stack/ci: one instance type with `/dev/kvm`), through every combination of the
 machine's features under KVM (memory fixed or with a virtio-mem ceiling; vsock; a hotplug
 controller) and every boot variant of the image. It writes `report.json` beside the tarball: per row, the command
 line, the shape and fingerprint, whether QEMU ran it, and p50/p95 of each boot phase. It then
