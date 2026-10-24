@@ -1,7 +1,7 @@
 name: Lab
 
-# One of the boot/ experiments, run on the KVM runner against a published release: the same Task
-# targets a developer runs, on a host that is doing nothing else.
+# One of the boot/ experiments, run on the bench fleet (spin-stack/ci, one instance type) against
+# a published release: the same Task targets a developer runs, on a host that is doing nothing else.
 #
 # A workflow and not a laptop because a boot time is only worth comparing on a quiet host, and a
 # developer's machine is not one: three runs of one kernel on one read 59.5, 96.8 and 167.7 ms
@@ -73,13 +73,13 @@ permissions:
   contents: read
   actions: read
 
-# No concurrency group: the runner takes one job at a time and queues the rest, and a group
+# No concurrency group: the bench fleet runs one job at a time and queues the rest, and a group
 # keeps one run pending and cancels the one before it, which lost two of three experiments
 # queued back to back.
 
 jobs:
   lab:
-    runs-on: [self-hosted, linux, x64, kvm]
+    runs-on: runs-on/fleet=bench/env=production
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}
@@ -96,13 +96,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # No Actions cache: this runner keeps Go's module and build caches on its own disk, and
-      # the cache service only stored another copy per branch, against the repository's limit.
+      # Go's caches come back from the fleet's cache (its S3 bucket): the instance starts with
+      # nothing.
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
+
+      # The guests' vsock transport: a module on the fleet's kernel that nothing loads before the
+      # first QEMU opens /dev/vhost-vsock.
+      - name: vsock
+        run: sudo -n modprobe vhost_vsock
 
       - name: Unpack the release
         run: go tool task lab:unpack

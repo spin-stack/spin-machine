@@ -1,6 +1,6 @@
 self-hosted-runner:
   labels:
-    - blacksmith-4vcpu-ubuntu-2404
-    - blacksmith-8vcpu-ubuntu-2404
-    # The self-hosted host the release report boots on: it has /dev/kvm.
-    - kvm
+    # spin-stack/ci's fleets: kvm for compat.yml, which builds and boots; bench, one instance type,
+    # for report.yml and lab.yml, whose boot times compare only with ones taken on the same host.
+    - runs-on/fleet=kvm/env=production
+    - runs-on/fleet=bench/env=production
