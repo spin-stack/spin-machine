@@ -306,10 +306,15 @@ tasks:
       Make /dev/vhost-vsock usable by this user, so verify:args can create the machine's vsock
       device. Without it, says so rather than failing: verify:args names the device unchecked.
     cmds:
-      # The device first: a kernel that builds it in - Spin OS's, which has no modules - has it
-      # from boot, and modprobe there has nothing to find.
+      # The module before the node is looked at: GitHub's runner has the static node before the
+      # module is loaded, the first open loads it, and udev then sets the node back to root's -
+      # QEMU got "Permission denied" after a chmod that saw the node and skipped the modprobe
+      # (2026-10-24). A kernel that builds it in - Spin OS's, which has no modules - has the
+      # device from boot, and modprobe there has nothing to find.
       - |
-        { [ -c /dev/vhost-vsock ] || sudo modprobe vhost_vsock; } && sudo chmod 0666 /dev/vhost-vsock ||
+        sudo modprobe vhost_vsock 2>/dev/null || true
+        sudo udevadm settle 2>/dev/null || true
+        { [ -c /dev/vhost-vsock ] && sudo chmod 0666 /dev/vhost-vsock; } ||
           echo "no vhost_vsock here; the check will name vhost-vsock-pci as unchecked"
 
   verify:args:
