@@ -4,11 +4,12 @@ name: Report
 # through the feature matrix (boot/report_test.go), written as report.json, and compared with the
 # newest earlier release that has one.
 #
-# A workflow of its own because it boots: a hosted runner has no /dev/kvm for it, and a time
-# measured under emulation is not a time anybody's machine takes. The runner is one host, on
-# purpose - boot times compare only between reports taken on the same kind of host, and compare
-# says so when they were not. It needs /dev/kvm and /dev/vhost-vsock usable by its user, sudo -n
-# for modprobe nbd and qemu-nbd, and gh (docs/releasing.md).
+# A workflow of its own because it boots: GitHub's runners have no /dev/kvm for it, and a time
+# measured under emulation is not a time anybody's machine takes. The runner is one instance type,
+# on purpose - the bench fleet of spin-stack/ci, a c8i.4xlarge with nested virtualization - since
+# boot times compare only between reports taken on the same kind of host, and compare says so
+# when they were not. It needs /dev/kvm and /dev/vhost-vsock usable by its user, sudo -n for
+# modprobe nbd and qemu-nbd, and gh (docs/releasing.md).
 #
 # release.yml calls it with publish, which uploads report.json to the release and appends the
 # comparison to its notes. Run by hand it measures any release - to check the runner, or to see
@@ -36,7 +37,7 @@ permissions:
 
 jobs:
   report:
-    runs-on: [self-hosted, linux, x64, kvm]
+    runs-on: runs-on/fleet=bench/env=production
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}
@@ -52,13 +53,17 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
 
-      # No Actions cache: this runner keeps Go's module and build caches on its own disk, and
-      # the cache service only stored another copy per branch, against the repository's limit.
+      # Go's caches come back from the fleet's cache (its S3 bucket): the instance starts with
+      # nothing.
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
+
+      # The guests' vsock transport: a module on the fleet's kernel that nothing loads before the
+      # first QEMU opens /dev/vhost-vsock.
+      - name: vsock
+        run: sudo -n modprobe vhost_vsock
 
       # What this runner can do, said before anything is measured: a row the report skips is one
       # this host lacks the device for, and the summary says which before the report does.
