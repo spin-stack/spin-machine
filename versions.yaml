@@ -55,7 +55,7 @@
   kind: image
   source: mirror.gcr.io/library/alpine
   version: '3.24'
-  pin: sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+  pin: sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
   track: digest
   note: >-
     the musl builder of the static QEMU and e2fsprogs, and the base of the QEMU runtime image.
@@ -67,9 +67,9 @@
 
 - name: kernel
   kind: download
-  source: https://git.kernel.org/torvalds/t/linux-{version}.tar.gz
-  version: 7.3-rc5
-  pin: 382d6aa48640351df7da6321e156c39155b4a99b0985d4370f7e608729987453
+  source: https://cdn.kernel.org/pub/linux/kernel/v{major}.x/linux-{version}.tar.xz
+  version: 7.3
+  pin: 87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953
   track: kernel-stable
   note: >-
     kernel/Dockerfile. A new kernel for every guest's next boot; checkpoints keep resuming, each
@@ -84,7 +84,7 @@
   kind: image
   source: mirror.gcr.io/library/debian
   version: trixie
-  pin: sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
+  pin: sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308
   track: digest
   note: >-
     the kernel's toolchain (and qboot's and the floor kernel's), with its packages from
@@ -107,7 +107,7 @@
 
 - name: debian-snapshot
   kind: date
-  version: 20261014T000000Z
+  version: 20261026T000000Z
   track: today
   note: >-
     the Debian archive the kernel's toolchain is installed from, as it stood then, and the
@@ -130,7 +130,7 @@
   kind: image
   source: mirror.gcr.io/library/ubuntu
   version: '26.04'
-  pin: sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
+  pin: sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
   track: digest
   note: >-
     image/Dockerfile: the container mkosi runs in, and where its apt and keyring come from.
@@ -163,8 +163,8 @@
 - name: git-lfs
   kind: download
   source: https://github.com/git-lfs/git-lfs/releases/download/v{version}/git-lfs-linux-amd64-v{version}.tar.gz
-  version: 3.8.0
-  pin: e455e00f15d9b95661b8d53498ffb0c3367962cf1ec73c31ab7369516cd6ab8d
+  version: 3.8.1
+  pin: e72cf723a4a660438862282e8aecf3885fc8123e88bfcad534cf6b941a354b75
   track: tags https://github.com/git-lfs/git-lfs.git
   note: >-
     image/Dockerfile hands it to install-dev-tools.sh, as task. The pin can be checked against
@@ -173,8 +173,8 @@
 - name: buildkit
   kind: download
   source: https://github.com/moby/buildkit/releases/download/v{version}/buildkit-v{version}.linux-amd64.tar.gz
-  version: 0.34.0
-  pin: 14813b1fb2a40082114e6d386c6fc5e7dd5298176ce7ee1a18bc33e73e109ac3
+  version: 0.34.1
+  pin: a59539daf547fe0958efe2d07e41c0a6944e1112a66d7e519ec1cf5b673ef15b
   track: tags https://github.com/moby/buildkit.git
   note: >-
     image/Dockerfile hands it to install-dev-tools.sh, as task: buildctl and buildkitd. The
@@ -212,7 +212,7 @@
 - name: cosign
   kind: module
   source: github.com/sigstore/cosign/v3/cmd/cosign
-  version: v3.0.6
+  version: v3.1.4
   track: github-release https://github.com/sigstore/cosign
   note: >-
     task boot:compat checks the release it fetches with it, on the KVM runner, which has no
