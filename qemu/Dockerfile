@@ -85,7 +85,7 @@ ARG JOBS=8
 # configured under the old base, skipped configure, relinked, and produced a dynamically
 # linked binary from a Dockerfile that says --static on every other line. The assertion
 # below is what caught it.
-ARG QEMU_CONFIG_REV=6
+ARG QEMU_CONFIG_REV=7
 
 SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 
