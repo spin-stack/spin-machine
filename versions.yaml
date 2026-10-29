@@ -28,6 +28,7 @@
 #            digest          the tag's digest now: the version stays, the image moves
 #            today           today's date
 #            kernel-stable   the newest release of the same stable series
+#            kernel-mainline the newest series Linus released, its first tarball
 #            tags <repo>     the highest version-numbered tag of a git repository
 #            branch          the commit the version's branch is at now
 #            commit <repo> <branch>
@@ -70,15 +71,14 @@
   source: https://cdn.kernel.org/pub/linux/kernel/v{major}.x/linux-{version}.tar.xz
   version: 7.3
   pin: 87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953
-  track: kernel-stable
+  track: kernel-mainline
   note: >-
     kernel/Dockerfile. A new kernel for every guest's next boot; checkpoints keep resuming, each
     on the kernel it was saved with (machine.Spec.Fingerprint). The configuration
     is kernel/config-<version>-x86_64: rename it to the new version in the same commit, then
-    `task kernel:build`, `task boot:bench`. A series that is over is a decision, not a bump.
-    Pinned at 7.3's release candidates, from git.kernel.org, until 7.3.0 is out: the bump to it
-    moves source back to cdn.kernel.org's .tar.xz. Until then `task versions` reports the 7.3
-    series as over, because kernel.org lists no stable 7.3.y yet.
+    `task kernel:build`, `task boot:bench`. Mainline, the series' first tarball, as spin-ami's
+    host kernel: a bump is the next series, whose config is checked as above, and no stable
+    release of one is taken.
 
 - name: debian
   kind: image
