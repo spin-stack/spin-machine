@@ -224,7 +224,7 @@ tasks:
       - go tool testquality ./...
       - go tool refs
       - go tool mutate -stale-exempts
-      - go tool taskgate
+      - go tool taskgate -allow .github/taskgate-allow.txt
       - go tool sfw check
       - task: lint:workflows
 
