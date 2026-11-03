@@ -27,8 +27,7 @@
 #   track    how check finds the newest:
 #            digest          the tag's digest now: the version stays, the image moves
 #            today           today's date
-#            kernel-stable   the newest release of the same stable series
-#            kernel-mainline the newest series Linus released, its first tarball
+#            kernel          the newest release of the pinned series; another series is a person's to name
 #            tags <repo>     the highest version-numbered tag of a git repository
 #            branch          the commit the version's branch is at now
 #            commit <repo> <branch>
@@ -69,16 +68,15 @@
 - name: kernel
   kind: download
   source: https://cdn.kernel.org/pub/linux/kernel/v{major}.x/linux-{version}.tar.xz
-  version: 7.3
-  pin: 87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953
-  track: kernel-mainline
+  version: 7.3.1
+  pin: fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231
+  track: kernel
   note: >-
     kernel/Dockerfile. A new kernel for every guest's next boot; checkpoints keep resuming, each
     on the kernel it was saved with (machine.Spec.Fingerprint). The configuration
     is kernel/config-<version>-x86_64: rename it to the new version in the same commit, then
-    `task kernel:build`, `task boot:bench`. Mainline, the series' first tarball, as spin-ami's
-    host kernel: a bump is the next series, whose config is checked as above, and no stable
-    release of one is taken.
+    `task kernel:build`, `task boot:bench`. The series is a person's choice, the same as
+    spin-ami's host kernel.
 
 - name: debian
   kind: image
