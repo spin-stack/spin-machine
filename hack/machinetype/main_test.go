@@ -13,7 +13,7 @@ import (
 	"github.com/spin-stack/spin-machine/machine"
 )
 
-// QEMU 11.1.2's own `-machine help`, the QEMU this tree pins.
+// QEMU 11.1.2's own `-machine help`.
 func help1112(t *testing.T) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", "help-11.1.2.txt"))
