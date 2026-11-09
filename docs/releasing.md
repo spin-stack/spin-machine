@@ -40,7 +40,7 @@ or changed, and the patches added, changed or removed), whether checkpoints carr
 
 Each file the release offers - the tarball, its `.sha256` and `machine.env` - carries two
 Sigstore bundles beside it: `<file>.sigstore.json`, the signature of the workflow that built it,
-and `<file>.provenance.sigstore.json`, its SLSA provenance (`go tool provenance`: this workflow at
+and `<file>.provenance.sigstore.json`, its SLSA provenance (go-tools' `provenance`: this workflow at
 its commit, and every pin in `versions.yaml`). Whoever takes one checks both against
 `release.yml` at the ref it ran on:
 
@@ -63,7 +63,7 @@ holds it to the version they asked for.
 What the release is made of is its CycloneDX SBOM, written by `hack/release` from what the builds
 recorded - the apk databases QEMU and e2fsprogs were statically linked in (each build's
 `/lib/apk/db/installed`, extracted to `_output/sbom/`), the image's `packages.txt`, the pins in
-`versions.yaml`, and each shipped file by its hash - and checked with `go tool sbom check`: a
+`versions.yaml`, and each shipped file by its hash - and checked with go-tools' `sbom check`: a
 component with no version fails the release. It is inside the tarball at
 `usr/share/spin-stack/sbom/machine.cdx.json`, beside it as `<tarball>.cdx.json`, and attested
 over the tarball as `<tarball>.cdx.sigstore.json` (`cosign verify-blob-attestation --type

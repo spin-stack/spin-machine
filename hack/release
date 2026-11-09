@@ -19,15 +19,15 @@ VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo d
 # versions.yaml - the same values the builds were handed and checked the tarballs against - so
 # SOURCES states them without anybody reading a build file. Nothing passes these in, so there
 # is no second copy to disagree: QEMU_VERSION, QEMU_SHA256, KERNEL_*, E2FSPROGS_*, QBOOT_*.
-pins=$(go tool versions env qemu kernel e2fsprogs qboot)
+pins=$(versions env qemu kernel e2fsprogs qboot)
 while IFS='=' read -r key value; do
   declare "${key}=${value}"
 done <<< "${pins}"
 # Where each tarball is fetched from, as the pin says: SOURCES names the URL the build checked the
 # sha256 of, never one written here, which named a mirror the kernel was not on.
-QEMU_URL=$(go tool versions url qemu)
-KERNEL_URL=$(go tool versions url kernel)
-E2FSPROGS_URL=$(go tool versions url e2fsprogs)
+QEMU_URL=$(versions url qemu)
+KERNEL_URL=$(versions url kernel)
+E2FSPROGS_URL=$(versions url e2fsprogs)
 
 RELEASE_NAME="spin-machine-${VERSION}-linux-${KERNEL_ARCH}"
 RELEASE_DIR="${OUTPUT_DIR}/release/${RELEASE_NAME}"
@@ -236,7 +236,7 @@ SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null ||
 export SOURCE_DATE_EPOCH
 PARTS="${OUTPUT_DIR}/release/sbom"
 mkdir -p "${PARTS}" "${SHARE}/sbom"
-sbom() { go tool sbom "$@"; }
+sbom() { command sbom "$@"; }
 for db in qemu e2fsprogs; do
   [ -f "${OUTPUT_DIR}/sbom/${db}.apk" ] || { echo "👹 missing ${db}'s apk database: ${OUTPUT_DIR}/sbom/${db}.apk" >&2; echo "   run: task build" >&2; exit 1; }
 done

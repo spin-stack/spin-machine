@@ -2,7 +2,7 @@ version: '3'
 
 vars:
   E2FSPROGS_VERSION:
-    sh: go tool versions version e2fsprogs
+    sh: versions version e2fsprogs
 
 tasks:
   build:

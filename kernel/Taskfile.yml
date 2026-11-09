@@ -13,7 +13,7 @@ version: '3'
 # builds are handed the version itself by `versions args`; see the note in qemu/Taskfile.yml.
 vars:
   KERNEL_SERIES:
-    sh: go tool versions version kernel | cut -d. -f1,2
+    sh: versions version kernel | cut -d. -f1,2
   # Where task kernel:cves keeps the CNA's records and the release it judges.
   CVES: '{{.OUTPUT_ABS}}/cves'
 
@@ -74,7 +74,7 @@ tasks:
         if: '[ -z "{{.LOCAL}}" ]'
       - |
         set -euo pipefail
-        if [ -n "{{.LOCAL}}" ]; then v=$(go tool versions version kernel); s={{.OUTPUT_ABS}}/kernel/sources
+        if [ -n "{{.LOCAL}}" ]; then v=$(versions version kernel); s={{.OUTPUT_ABS}}/kernel/sources
         else v=$(sed -n 's/^kernel_version=//p' {{.CVES}}/release/machine.env); s={{.CVES}}/release/kernel/sources; fi
         go run ./hack/kernelcves -published {{.CVES}}/vulns/cve/published -version "$v" -sources "$s" |
           tee {{.CVES}}/summary.md >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
