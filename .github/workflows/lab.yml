@@ -77,6 +77,10 @@ permissions:
 # keeps one run pending and cancels the one before it, which lost two of three experiments
 # queued back to back.
 
+# As ci.yml: go-tools' downloads ask GitHub with it, which sheds anonymous ones first.
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   lab:
     runs-on: runs-on/fleet=bench/env=production

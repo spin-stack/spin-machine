@@ -11,7 +11,9 @@ echo "Installing development tools..."
 download() {
     local url="$1" output="$2" sha256="$3"
     echo "Downloading ${url}..."
-    curl -fsSL "${url}" -o "${output}"
+    # GitHub sheds anonymous release downloads under load: a 504 failed this build on
+    # 2026-11-09 and passed when run again. The sum below is still what decides the bytes.
+    curl -fsSL --retry 5 --retry-all-errors "${url}" -o "${output}"
     echo "${sha256}  ${output}" | sha256sum -c -
 }
 

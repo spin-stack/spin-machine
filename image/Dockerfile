@@ -72,7 +72,7 @@ ARG MKOSI_SHA256
 RUN --mount=type=cache,sharing=locked,id=image-mkosi-src,target=/var/cache/mkosi-src \
     tarball="/var/cache/mkosi-src/mkosi-${MKOSI_VERSION}.tar.gz" && \
     if [ ! -f "$tarball" ]; then \
-        curl -fsSL -o "$tarball" "https://github.com/systemd/mkosi/archive/refs/tags/v${MKOSI_VERSION}.tar.gz"; \
+        curl -fsSL --retry 5 --retry-all-errors -o "$tarball" "https://github.com/systemd/mkosi/archive/refs/tags/v${MKOSI_VERSION}.tar.gz"; \
     fi && \
     # Every build, not only after a download: the cache mount outlives the build that
     # filled it.

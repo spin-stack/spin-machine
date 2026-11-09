@@ -32,6 +32,11 @@ permissions:
   # To read back the QEMU this commit pins, rather than build it. See the step.
   packages: read
 
+# go-tools' downloads (versions fetch, sfw) ask GitHub with this: anonymous ones are the first it
+# sheds under load, and they answered 504 for minutes on 2026-11-09.
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   gate:
     # The check main's ruleset requires, named Gate in every spin-stack repository.

@@ -37,6 +37,11 @@ concurrency:
   # Never on main: a cancelled run there is a commit nobody proved.
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
+# As ci.yml: go-tools' downloads, and the image's own from GitHub releases, ask with it: GitHub
+# sheds anonymous ones first.
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   # Whether this change can reach e2fsprogs or the image; see the note in qemu.yml.
   changed:

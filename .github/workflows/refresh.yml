@@ -21,6 +21,10 @@ concurrency:
 permissions:
   contents: read
 
+# As ci.yml: go-tools' downloads ask GitHub with it, which sheds anonymous ones first.
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   kernel:
     if: github.ref == 'refs/heads/main'
