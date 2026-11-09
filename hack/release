@@ -101,6 +101,9 @@ done
 echo "Kernel:"
 require "${OUTPUT_DIR}/kernel/vmlinux" "${SHARE}/kernel/vmlinux" "the guest kernel" 0644
 require "${OUTPUT_DIR}/kernel/kernel-config" "${SHARE}/kernel/kernel-config" "the kernel config"
+# What the kernel compiled, one source or header a line (kernel/Dockerfile): what hack/kernelcves
+# judges a release's kernel against the kernel CNA's CVEs with.
+require "${OUTPUT_DIR}/kernel/sources" "${SHARE}/kernel/sources" "the kernel's sources list"
 # The patches the kernel was built with, as the build applied them: a changed GPL source is
 # distributed with its changes.
 mkdir -p "${SHARE}/kernel/patches"
