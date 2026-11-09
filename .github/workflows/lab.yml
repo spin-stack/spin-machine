@@ -37,6 +37,7 @@ on:
           - boot:systemd
           - boot:ssh-load
           - boot:page-cache
+          - boot:lazy-resume
           - boot:firmware
           - boot:firmware-stages
           - report

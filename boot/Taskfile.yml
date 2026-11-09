@@ -178,6 +178,22 @@ tasks:
     cmds:
       - SPIN_SYSTEMD_DEBUG=1 go test ./boot/ -run TestSystemdDebug -count=1 -v -timeout 15m
 
+  lazy-resume:
+    desc: >-
+      What a resume costs when the guest runs before its memory is loaded (QEMU's fast snapshot
+      load) beside a resume as it is, from a local file in and out of the host's page cache:
+      until the guest goes on, until the load is complete, and what the guest then pays to read
+      its heap. Needs /dev/kvm, a built release with a QEMU that has the feature (the lab's
+      qemu_run, instead of the release's) and userfaultfd for this user. REPS= loads per row,
+      SPIN_LAZY_HEAP_MB= the heaps, SPIN_LAZY_MAX_MEMORY_MB= a virtio-mem region.
+    deps: [':tools']
+    cmds:
+      # Postcopy handles faults KVM takes in the kernel, which an unprivileged userfaultfd may
+      # not unless the host says so. Asked for where sudo allows it, and said when it does not:
+      # the test reports what QEMU then refuses.
+      - sudo -n sysctl -w vm.unprivileged_userfaultfd=1 || echo "vm.unprivileged_userfaultfd stays $(cat /proc/sys/vm/unprivileged_userfaultfd)"
+      - SPIN_LAZY_RESUME=1 go test ./boot/ -run '^TestWhatALazyResumeSaves$' -count=1 -v -timeout 180m
+
   firmware-stages:
     desc: >-
       Where the time before the kernel goes on the machine a workspace boots: QEMU's start and

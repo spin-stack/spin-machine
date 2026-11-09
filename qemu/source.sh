@@ -18,8 +18,15 @@
 # path component) for a directory of their own.
 set -eu
 tarball="/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz"
+# A lab branch builds a commit of master, which no release tarball holds: a version that is a
+# commit is GitLab's archive of it. The archive has no bundled subprojects; meson fetches the
+# ones this configuration needs, as it already does dtc.
+case "$QEMU_VERSION" in
+    *[!0-9a-f]*) url="https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" ;;
+    *) url="https://gitlab.com/qemu-project/qemu/-/archive/${QEMU_VERSION}/qemu-${QEMU_VERSION}.tar.gz" ;;
+esac
 if [ ! -f "$tarball" ]; then
-    curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o "$tarball"
+    curl -fsSL "$url" -o "$tarball"
 fi
 # Checked on every build and not only after a download: the tarball lives in a cache mount, so
 # the copy being compiled today may have arrived weeks ago.
