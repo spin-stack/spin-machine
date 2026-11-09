@@ -84,14 +84,16 @@ RUN --mount=type=cache,sharing=locked,id=image-mkosi-src,target=/var/cache/mkosi
     test "$(mkosi --version)" = "mkosi ${MKOSI_VERSION}"
 
 # What install-dev-tools.sh downloads into the image, by content. It runs inside mkosi's tree,
-# which sees only what mkosi.conf's Environment= passes through, so each is an ENV here.
+# which sees only what mkosi.conf's Environment= passes through, so each is an ENV here. Task is
+# pinned for every platform (versions.yaml): the guest's is linux/amd64's, under the name the script
+# reads.
 ARG TASK_VERSION
-ARG TASK_SHA256
+ARG TASK_SHA256_LINUX_AMD64
 ARG GIT_LFS_VERSION
 ARG GIT_LFS_SHA256
 ARG BUILDKIT_VERSION
 ARG BUILDKIT_SHA256
-ENV TASK_VERSION=${TASK_VERSION} TASK_SHA256=${TASK_SHA256} \
+ENV TASK_VERSION=${TASK_VERSION} TASK_SHA256=${TASK_SHA256_LINUX_AMD64} \
     GIT_LFS_VERSION=${GIT_LFS_VERSION} GIT_LFS_SHA256=${GIT_LFS_SHA256} \
     BUILDKIT_VERSION=${BUILDKIT_VERSION} BUILDKIT_SHA256=${BUILDKIT_SHA256}
 

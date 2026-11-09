@@ -1,4 +1,4 @@
-# What taskgate allows on purpose (go tool taskgate -allow, from task lint). Each line is a key and
+# What taskgate allows on purpose (taskgate -allow, from task lint). Each line is a key and
 # its why: a workflow step that is not one `task <name>`, as <file>/<job>/<step>; a task's shell
 # over twelve lines, as <file>:<task>; a script a task runs that is a program - over forty lines of
 # shell, or deciding anything by GITHUB_OUTPUT, GITHUB_ENV or jq - by its path. The list may shrink

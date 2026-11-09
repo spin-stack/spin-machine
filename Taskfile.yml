@@ -68,7 +68,7 @@ vars:
   # go-tools' command, at the version go.mod pins (its tool directive): the tool is only ever
   # run from a checkout, and Go's build cache makes the second run of it as fast as a binary
   # would be.
-  VERSIONS: go tool versions
+  VERSIONS: versions
   # How many jobs to compile with. CI sets them to its runner's cores.
   QEMU_JOBS: '{{.QEMU_JOBS | default 8}}'
   KERNEL_NPROC: '{{.KERNEL_NPROC | default 8}}'
@@ -220,13 +220,13 @@ tasks:
       # that cannot fail, every path and task AGENTS.md and CLAUDE.md name resolves, every
       # mutate-exempt reason covers an edit mutate makes, every workflow step is one task, and
       # pnpm is the one package manager, installing through Socket Firewall.
-      - go tool ctxlife
-      - go tool testquality ./...
-      - go tool refs
-      - go tool mutate -stale-exempts
+      - ctxlife
+      - testquality ./...
+      - refs
+      - mutate -stale-exempts
       # The Task running this one, which taskgate asks for the task names a workflow step runs.
-      - go tool taskgate -allow .github/taskgate-allow.txt -task {{.TASK_EXE}}
-      - go tool sfw check
+      - taskgate -allow .github/taskgate-allow.txt -task {{.TASK_EXE}}
+      - sfw check
       - task: lint:workflows
 
   lint:workflows:
@@ -234,7 +234,7 @@ tasks:
     cmds:
       # -shellcheck= because actionlint runs whatever shellcheck is on PATH: a runner has one and
       # a laptop may not, and a gate whose answer depends on the machine is not a gate.
-      - go run github.com/rhysd/actionlint/cmd/actionlint@$(go tool versions version actionlint) -shellcheck=
+      - go run github.com/rhysd/actionlint/cmd/actionlint@$(versions version actionlint) -shellcheck=
       - cmd: 'echo "OK: actionlint"'
       # A tag is whatever its owner points it at, and release.yml holds the token that publishes
       # the tarball every host boots its machines from; the comment is the version Dependabot moves.
@@ -263,7 +263,7 @@ tasks:
           # A push that created its branch has no commit before it.
           git rev-parse --verify "$base^{commit}" >/dev/null 2>&1 || base=HEAD~1
         fi
-        go tool mutate -base "${base:-origin/main}" -max 2000
+        mutate -base "${base:-origin/main}" -max 2000
 
   coverage:
     desc: >-
@@ -374,7 +374,7 @@ tasks:
           --certificate-oidc-issuer https://token.actions.githubusercontent.com "$dir/$sbom"
         # osv-scanner exits 1 when it found something, which is the answer; above 1 it failed.
         status=0
-        go run "github.com/google/osv-scanner/v2/cmd/osv-scanner@$(go tool versions version osv-scanner)" \
+        go run "github.com/google/osv-scanner/v2/cmd/osv-scanner@$(versions version osv-scanner)" \
           scan source -L "$dir/$sbom" --format json > "$dir/osv.json" || status=$?
         [ "$status" -le 1 ] || exit "$status"
         mkdir -p _output
@@ -486,7 +486,7 @@ tasks:
       Who built the release VERSION and from what - this commit, every pin in versions.yaml - as
       SLSA provenance, in _output/provenance.json.
     cmds:
-      - go tool provenance -version "${VERSION}" -out _output/provenance.json
+      - provenance -version "${VERSION}" -out _output/provenance.json
 
   release:sign:
     desc: >-
@@ -519,8 +519,8 @@ tasks:
             --bundle "${f}.cdx.sigstore.json" "${f}" > /dev/null
           attested cyclonedx "${f}.cdx.sigstore.json" "${f}"
         done
-        go tool attestgate files -require provenance _output/release
-        go tool attestgate files -require cdx -except '*.sha256,machine.env,*.cdx.json' _output/release
+        attestgate files -require provenance _output/release
+        attestgate files -require cdx -except '*.sha256,machine.env,*.cdx.json' _output/release
 
   release:tag:
     desc: Tag this commit VERSION and push the tag. A version tagged already is refused, since git push does not move a tag.
