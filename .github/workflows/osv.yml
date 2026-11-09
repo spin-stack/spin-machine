@@ -3,6 +3,8 @@ name: OSV
 # Every day, what OSV knows against the newest release's SBOM (task osv), and an issue for each
 # package with findings, closed once a release has none. A release's libraries are a commit's, and a vulnerability is
 # published after the commit: nothing in a build can find it, only asking again later can.
+#
+# And the same question of the guest kernel, against the kernel CNA's own records (the kernel job).
 
 on:
   schedule:
@@ -45,3 +47,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: go tool task osv:issues
+
+  # The guest kernel is not in the SBOM's package graph the way the image's packages are, and OSV
+  # knows a CVE against "Linux" without knowing which files this kernel compiled. So the kernel
+  # CNA's own records, judged against the newest release's kernel by task kernel:cves: how many it
+  # is past the fix of, how many are in code it does not compile, and which apply - those a later
+  # release of the series fixes, which refresh.yml proposes, and those only a later series does,
+  # which are a person's decision. On the run's summary.
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Judge the newest release's kernel against the kernel CNA's CVEs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: go tool task kernel:cves

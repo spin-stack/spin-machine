@@ -14,6 +14,8 @@ version: '3'
 vars:
   KERNEL_SERIES:
     sh: go tool versions version kernel | cut -d. -f1,2
+  # Where task kernel:cves keeps the CNA's records and the release it judges.
+  CVES: '{{.OUTPUT_ABS}}/cves'
 
 tasks:
 
@@ -59,6 +61,55 @@ tasks:
           echo "kernel sha256: $(sha256sum {{.OUTPUT_ABS}}/kernel/vmlinux | cut -d' ' -f1)"
           echo "config sha256: $(sha256sum {{.OUTPUT_ABS}}/kernel/kernel-config | cut -d' ' -f1)"
         } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+  # What the kernel CNA has published, judged against a kernel's version and what its build
+  # compiled (hack/kernelcves). The newest release's by default, because it is what anything takes
+  # next, as task osv scans; LOCAL=1 judges the last kernel:build instead, which is how a bump or a
+  # config change is compared before it is released.
+  cves:
+    desc: "What the kernel CNA's published CVEs mean for the newest release's kernel (LOCAL=1: the last kernel:build): fixed, in code it does not compile, or applying and where the fix is. Needs git and the network, and gh and cosign for a release."
+    cmds:
+      - task: cves:records
+      - task: cves:release
+        if: '[ -z "{{.LOCAL}}" ]'
+      - |
+        set -euo pipefail
+        if [ -n "{{.LOCAL}}" ]; then v=$(go tool versions version kernel); s={{.OUTPUT_ABS}}/kernel/sources
+        else v=$(sed -n 's/^kernel_version=//p' {{.CVES}}/release/machine.env); s={{.CVES}}/release/kernel/sources; fi
+        go run ./hack/kernelcves -published {{.CVES}}/vulns/cve/published -version "$v" -sources "$s" |
+          tee {{.CVES}}/summary.md >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        grep '^|' {{.CVES}}/summary.md
+
+  # The kernel CNA's records as they are today: data, read the way task osv reads OSV's database
+  # and not an input of a build, so not a pin in versions.yaml. Only cve/published, which is what
+  # hack/kernelcves reads, and not the repository's history.
+  cves:records:
+    desc: Fetch the kernel CNA's published CVE records (git.kernel.org's vulns repository) into _output/cves/vulns, or bring them to today's.
+    cmds:
+      - |
+        set -euo pipefail
+        d={{.CVES}}/vulns
+        if [ ! -d "$d/.git" ]; then
+          git clone -q --depth 1 --sparse https://git.kernel.org/pub/scm/linux/security/vulns.git "$d"
+          git -C "$d" sparse-checkout set cve/published
+        fi
+        git -C "$d" fetch -q --depth 1 origin && git -C "$d" reset -q --hard FETCH_HEAD
+
+  # The tarball and not a file of its own: the sources list is in what a release signs already,
+  # and the .sha256's signature is the release's, checked before the tarball is read.
+  cves:release:
+    desc: Put the newest release's machine.env and kernel/sources in _output/cves/release, once the tarball's signature is the release's. Needs gh and cosign.
+    cmds:
+      - |
+        set -euo pipefail
+        tag=$(gh release view --json tagName -q .tagName) d={{.CVES}}/release
+        t="spin-machine-${tag}-linux-x86_64.tar.gz"
+        rm -rf "$d" && mkdir -p "$d" && gh release download "$tag" -p "$t" -p "$t.sha256" -p "$t.sha256.sigstore.json" -D "$d"
+        cosign verify-blob --bundle "$d/$t.sha256.sigstore.json" "$d/$t.sha256" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          --certificate-identity https://github.com/spin-stack/spin-machine/.github/workflows/release.yml@refs/heads/main
+        (cd "$d" && sha256sum -c --quiet "$t.sha256")
+        tar -xzf "$d/$t" -C "$d" --wildcards --strip-components=4 '*/usr/share/spin-stack/machine.env' '*/usr/share/spin-stack/kernel/sources' ||
+          { echo "$tag carries no kernel/sources: hack/kernelcves reads releases from the one after kernel/Dockerfile wrote it" >&2; exit 1; }
 
   menuconfig:
     desc: "Edit the kernel config. Writes back to kernel/config-<series>-<arch>."

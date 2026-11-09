@@ -410,6 +410,19 @@ RUN cd linux && make ARCH=${KERNEL_ARCH} -j${KERNEL_NPROC} \
         KBUILD_BUILD_USER=spin-machine KBUILD_BUILD_HOST=build \
         all
 
+# What this kernel is made of, one source or header a line: the union of the dependency lists
+# the build writes beside every object it compiled (.<object>.o.cmd: source_ and deps_). A CVE
+# whose files are none of these is in code this kernel does not contain, and hack/kernelcves
+# reads it to say so from the build rather than from a guess about which CONFIG_ symbol builds
+# which file. scripts/ and tools/ are the build's own programs, which never run in a guest, and an
+# absolute path is the compiler's own header. A list of under 5000 is a build the pattern no longer
+# reads, and refused here rather than reported as a kernel with nothing in it.
+RUN mkdir -p /build && cd linux && find . -name '.*.o.cmd' -not -path './scripts/*' -not -path './tools/*' -print0 \
+      | xargs -0 sed -n -e 's/^source_[^ ]* := //p' -e 's/^  *\([^ $][^ ]*\)\( \\\)\{0,1\}$/\1/p' \
+      | sed 's|^\./||' | grep -v '^/' | sort -u > /build/sources \
+    && n=$(wc -l < /build/sources) && echo "sources: $n files" \
+    && [ "$n" -gt 5000 ] || { echo "ERROR: the kernel's sources list has ${n:-no} entries"; exit 1; }
+
 RUN <<EOT
     set -e
     cd linux
@@ -473,4 +486,5 @@ EOT
 FROM scratch AS kernel
 COPY --from=kernel-build /build/vmlinux /kernel/vmlinux
 COPY --from=kernel-build /build/kernel-config /kernel/kernel-config
+COPY --from=kernel-build /build/sources /kernel/sources
 COPY --from=kernel-build /build/patches /kernel/patches
