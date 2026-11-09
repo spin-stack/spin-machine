@@ -1,6 +1,7 @@
 # Guest kernel
 
-A version and a config file (`config-<version>-<arch>`). It is here because a kernel and the
+A version and a config file for its series (`config-<major>.<minor>-<arch>`), so a stable release
+within the series builds from the same file. It is here because a kernel and the
 machine that boots it are released together. A new kernel does not strand checkpoints: a
 resumed guest runs the kernel in its saved memory until it reboots, and boots this one then
 (`machine.Spec.Fingerprint` hashes the machine's contract, not the kernel). `task kernel:build`

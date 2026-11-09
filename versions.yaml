@@ -68,13 +68,15 @@
 - name: kernel
   kind: download
   source: https://cdn.kernel.org/pub/linux/kernel/v{major}.x/linux-{version}.tar.xz
-  version: 7.3.1
-  pin: fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231
+  version: 7.3.3
+  pin: 79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1
   track: kernel
   note: >-
     kernel/Dockerfile. A new kernel for every guest's next boot; checkpoints keep resuming, each
     on the kernel it was saved with (machine.Spec.Fingerprint). The configuration
-    is kernel/config-<version>-x86_64: rename it to the new version in the same commit, then
+    is the series', kernel/config-<major>.<minor>-x86_64, so a release within the series moves
+    this entry and nothing else: refresh.yml proposes it every day, and kernel.yml builds it on
+    the pull request. A new series renames the configuration in the same commit, then
     `task kernel:build`, `task boot:bench`. The series is a person's choice, the same as
     spin-ami's host kernel.
 

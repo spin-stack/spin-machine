@@ -89,6 +89,9 @@ RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
 # release true.
 ARG KERNEL_VERSION
 ARG KERNEL_SHA256
+# The series, major.minor, which names the configuration: a stable release within it builds
+# from the same file (kernel/Taskfile.yml derives it from the version).
+ARG KERNEL_SERIES
 ARG KERNEL_ARCH="x86_64"
 ARG KERNEL_NPROC="16"
 
@@ -142,7 +145,7 @@ RUN cd /usr/src/linux && \
         patch -p1 --forward --fuzz=0 < "$p" || { echo "ERROR: $p does not apply to ${KERNEL_VERSION}"; exit 1; }; \
     done
 
-COPY kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH} /usr/src/linux/.config
+COPY kernel/config-${KERNEL_SERIES}-${KERNEL_ARCH} /usr/src/linux/.config
 
 # Every check below is a symbol that olddefconfig can silently drop and whose absence
 # presents as something other than a missing kernel option.
@@ -374,7 +377,7 @@ RUN <<EOT
     echo "Verifying kernel config for Docker support..."
     /usr/local/bin/check-docker-config.sh /usr/src/linux/.config || (echo "Kernel config verification failed!" ; exit 1)
 
-    echo "Using kernel config from kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH}"
+    echo "Using kernel config from kernel/config-${KERNEL_SERIES}-${KERNEL_ARCH}"
 EOT
 
 FROM kernel-build-base AS kernel-build
