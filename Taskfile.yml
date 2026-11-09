@@ -872,6 +872,48 @@ tasks:
       - cmd: '{{.TASK_EXE}} qemu:compat'
         if: '[ "{{.NAME}}" = qemu ]'
 
+  # A pull request opened with a workflow run's own token starts no checks; one the release app
+  # (spin-stack-release) opens does, and kernel.yml is the check a kernel bump needs.
+  git:app:
+    desc: Make git commit and push as the GitHub App whose token is GH_TOKEN (APP_SLUG= its slug) - a workflow's step, as it writes git's global configuration.
+    requires:
+      vars: [APP_SLUG]
+    preconditions:
+      - sh: test -n "${GITHUB_ACTIONS:-}"
+        msg: git:app rewrites git's global user and credentials; it is for a workflow's runner, not this machine
+    cmds:
+      - |
+        set -e
+        gh auth setup-git
+        id=$(gh api "/users/{{.APP_SLUG}}[bot]" --jq .id)
+        git config --global user.name "{{.APP_SLUG}}[bot]"
+        git config --global user.email "${id}+{{.APP_SLUG}}[bot]@users.noreply.github.com"
+
+  # Most of what a stable release fixes is fixed before it is called a CVE, so the kernel is only
+  # as current as the last time somebody looked: refresh.yml asks every day. Within the pinned
+  # series and never past it (versions.yaml's kernel note). A version already proposed is not
+  # proposed again, closed or not: a person who closed it said no to that release.
+  refresh:kernel:
+    desc: Propose the newest release of the kernel's series as a pull request (refresh/kernel-<version>), closing the one it supersedes; nothing when the pin is current or that version was proposed already.
+    env:
+      BODY: >-
+        The newest release of the pinned kernel series, proposed by refresh.yml. kernel.yml builds
+        it on this pull request. Before merging, boot it: `task kernel:build boot:bench`.
+    cmds:
+      - |
+        set -euo pipefail
+        {{.VERSIONS}} bump kernel
+        if git diff --quiet -- versions.yaml; then echo "the kernel is current" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; exit 0; fi
+        v=$({{.VERSIONS}} version kernel); branch="refresh/kernel-$v"
+        if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then echo "$branch was proposed already"; exit 0; fi
+        git switch -c "$branch"
+        git commit -q -m "versions: kernel $v" -- versions.yaml
+        git push origin "$branch"
+        url=$(gh pr create --base main --head "$branch" --title "versions: kernel $v" --body "$BODY")
+        echo "$url" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        gh pr list --state open --json number,headRefName --jq ".[] | select((.headRefName | startswith(\"refresh/kernel-\")) and .headRefName != \"$branch\") | .number" |
+          while read -r n; do gh pr close "$n" --delete-branch --comment "Superseded by $url."; done
+
   clean:
     desc: Remove build output. Leaves the caches; use clean:cache for those.
     cmds:

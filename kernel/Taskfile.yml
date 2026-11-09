@@ -8,11 +8,12 @@ version: '3'
 # resuming. A config change is still every guest's kernel once they reboot, and is a deliberate
 # commit with a measurement in it.
 
-# The pinned version, for the name of the configuration file menuconfig writes. The builds
-# are handed it by `versions args`; see the note in qemu/Taskfile.yml.
+# The pinned version's series, major.minor, which names the configuration: every release of a
+# series builds from one file, so a stable release is a versions.yaml line and nothing else. The
+# builds are handed the version itself by `versions args`; see the note in qemu/Taskfile.yml.
 vars:
-  KERNEL_VERSION:
-    sh: go tool versions version kernel
+  KERNEL_SERIES:
+    sh: go tool versions version kernel | cut -d. -f1,2
 
 tasks:
 
@@ -28,6 +29,7 @@ tasks:
           --cache-from {{.KERNEL_CACHE_FROM}} \
           {{.KERNEL_CACHE_TO}} \
           $({{.VERSIONS}} args debian debian-snapshot kernel moby-check-config) \
+          --build-arg KERNEL_SERIES={{.KERNEL_SERIES}} \
           --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
           --output type=local,dest={{.OUTPUT_ABS}} \
@@ -59,7 +61,7 @@ tasks:
         } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
   menuconfig:
-    desc: "Edit the kernel config. Writes back to kernel/config-<version>-<arch>."
+    desc: "Edit the kernel config. Writes back to kernel/config-<series>-<arch>."
     interactive: true
     cmds:
       - |
@@ -70,6 +72,7 @@ tasks:
           --cache-from {{.KERNEL_CACHE_FROM}} \
           {{.KERNEL_CACHE_TO}} \
           $({{.VERSIONS}} args debian debian-snapshot kernel moby-check-config) \
+          --build-arg KERNEL_SERIES={{.KERNEL_SERIES}} \
           --build-arg KERNEL_ARCH={{.KERNEL_ARCH}} \
           --build-arg KERNEL_NPROC={{.KERNEL_NPROC}} \
           --output type=docker,name=spin-machine-menuconfig \
@@ -85,7 +88,7 @@ tasks:
         docker run --rm -it \
           -v {{.ROOT_DIR}}/kernel:/config \
           -w /usr/src/linux \
-          -e KCONFIG_CONFIG=/config/config-{{.KERNEL_VERSION}}-{{.KERNEL_ARCH}} \
+          -e KCONFIG_CONFIG=/config/config-{{.KERNEL_SERIES}}-{{.KERNEL_ARCH}} \
           -e TERM=${TERM:-xterm-256color} \
           spin-machine-menuconfig \
           make ARCH={{.KERNEL_ARCH}} menuconfig
