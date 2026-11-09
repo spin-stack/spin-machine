@@ -43,6 +43,10 @@ concurrency:
   group: compat-${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: false
 
+# As ci.yml: go-tools' downloads ask GitHub with it, which sheds anonymous ones first.
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   compat:
     runs-on: runs-on/fleet=kvm/env=production

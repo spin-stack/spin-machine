@@ -34,6 +34,10 @@ concurrency:
   # Never on main: a cancelled run there is a commit nobody proved.
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
+# As ci.yml: go-tools' downloads ask GitHub with it, which sheds anonymous ones first.
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   # Whether this change can reach the kernel; see the note in qemu.yml.
   changed:
