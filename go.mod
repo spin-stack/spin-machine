@@ -19,7 +19,7 @@ tool (
 )
 
 require (
-	github.com/spin-stack/go-tools v0.0.0-20261103120703-5912892e2651
+	github.com/spin-stack/go-tools v0.0.0-20261109060342-524a1e09c221
 	golang.org/x/sys v0.49.0
 )
 
@@ -101,7 +101,7 @@ require (
 	github.com/hashicorp/go-getter v1.8.9 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
