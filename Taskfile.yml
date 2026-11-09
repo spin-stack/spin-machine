@@ -224,7 +224,8 @@ tasks:
       - go tool testquality ./...
       - go tool refs
       - go tool mutate -stale-exempts
-      - go tool taskgate -allow .github/taskgate-allow.txt
+      # The Task running this one, which taskgate asks for the task names a workflow step runs.
+      - go tool taskgate -allow .github/taskgate-allow.txt -task {{.TASK_EXE}}
       - go tool sfw check
       - task: lint:workflows
 
