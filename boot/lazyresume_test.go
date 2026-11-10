@@ -78,6 +78,18 @@ func TestWhatALazyResumeSaves(t *testing.T) {
 		{name: "stream", format: "stream"},
 		{name: "mapped", format: "mapped", caps: []string{"mapped-ram"}},
 		{name: "lazy", format: "mapped", caps: []string{"mapped-ram", "postcopy-ram"}},
+		// What the lazy rows' first read of the heap costs, and what takes it away. A lazy
+		// load places 4 KiB pages; small is the control, a whole load with huge pages off for
+		// QEMU, which pays the same if the pages' size is the cost. collapse and around are
+		// this branch's QEMU patch (qemu/patches/0002), by its SPIN_LAB_LAZY.
+		{name: "small", format: "mapped", caps: []string{"mapped-ram"}, small: true},
+		{name: "collapse", format: "mapped", caps: []string{"mapped-ram", "postcopy-ram"}, lab: "collapse"},
+		{name: "around", format: "mapped", caps: []string{"mapped-ram", "postcopy-ram"}, lab: "around"},
+	}
+	if only := os.Getenv("ONLY"); only != "" {
+		variants = slices.DeleteFunc(variants, func(v lazyVariant) bool {
+			return !slices.Contains(strings.Split(only, ","), v.name)
+		})
 	}
 	for _, heap := range heaps {
 		// Not under the test's directory: a socket's path has 108 bytes, and the lab runner's
@@ -87,7 +99,7 @@ func TestWhatALazyResumeSaves(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = os.RemoveAll(socks) })
-		l := &lazyLab{t: t, cli: cli, out: out, heap: heap, dir: t.TempDir(), socks: socks}
+		l := &lazyLab{t: t, cli: cli, out: out, heap: heap, dir: t.TempDir(), socks: socks, said: map[string]string{}}
 		saved := map[string]lazySaved{}
 		for _, format := range []string{"stream", "mapped"} {
 			saved[format] = l.save(format)
@@ -98,9 +110,12 @@ func TestWhatALazyResumeSaves(t *testing.T) {
 		// One lazy load before the rows: a QEMU without the feature, or a host that refuses
 		// userfaultfd, says so once and leaves the other two rows to be measured.
 		use := slices.Clone(variants)
-		if _, err := l.load(variants[2], saved["mapped"], false); err != nil {
-			t.Errorf("heap %d MiB: a lazy load does not work here, so its rows are missing: %v", heap, err)
-			use = use[:2]
+		lazy := func(v lazyVariant) bool { return slices.Contains(v.caps, "postcopy-ram") }
+		if i := slices.IndexFunc(use, lazy); i >= 0 {
+			if _, err := l.load(use[i], saved["mapped"], false); err != nil {
+				t.Errorf("heap %d MiB: a lazy load does not work here, so its rows are missing: %v", heap, err)
+				use = slices.DeleteFunc(use, lazy)
+			}
 		}
 		rows := map[string]*lazyRow{}
 		for range reps {
@@ -125,8 +140,8 @@ func TestWhatALazyResumeSaves(t *testing.T) {
 				if cold {
 					cache = "cold"
 				}
-				t.Logf("    heap %4d MiB  %s  %-6s  counting again p50 %6.0f p90 %6.0f ms   complete p50 %6.0f ms   heap read p50 %6.0f p90 %6.0f ms   again p50 %6.0f ms   n=%d",
-					heap, cache, v.name, pct(r.tick, 50), pct(r.tick, 90), pct(r.done, 50), pct(r.read, 50), pct(r.read, 90), pct(r.again, 50), len(r.tick))
+				t.Logf("    heap %4d MiB  %s  %-8s  counting again p50 %6.0f p90 %6.0f ms   complete p50 %6.0f ms   heap read p50 %6.0f p90 %6.0f ms   again p50 %6.0f ms   QEMU holds %5.0f MiB, %5.0f huge   n=%d",
+					heap, cache, v.name, pct(r.tick, 50), pct(r.tick, 90), pct(r.done, 50), pct(r.read, 50), pct(r.read, 90), pct(r.again, 50), pct(r.rss, 50), pct(r.huge, 50), len(r.tick))
 			}
 		}
 		for _, s := range saved {
@@ -139,6 +154,51 @@ type lazyVariant struct {
 	name   string
 	format string
 	caps   []string
+	small  bool   // QEMU runs with transparent huge pages off
+	lab    string // SPIN_LAB_LAZY for QEMU
+}
+
+// startAs starts QEMU as v: its environment and whether its memory may be huge pages are the
+// process's that starts it, so they are set around the start.
+func (l *lazyLab) startAs(v lazyVariant, args []string) *guest {
+	l.t.Helper()
+	if v.lab != "" {
+		if err := os.Setenv("SPIN_LAB_LAZY", v.lab); err != nil {
+			l.t.Fatal(err)
+		}
+		defer func() { _ = os.Unsetenv("SPIN_LAB_LAZY") }()
+	}
+	if v.small {
+		// Kept across fork and exec, and this process has no use for huge pages meanwhile.
+		if err := unix.Prctl(unix.PR_SET_THP_DISABLE, 1, 0, 0, 0); err != nil {
+			l.t.Fatalf("turning transparent huge pages off for QEMU: %v", err)
+		}
+		defer func() { _ = unix.Prctl(unix.PR_SET_THP_DISABLE, 0, 0, 0, 0) }()
+	}
+	return startGuest(l.t, args)
+}
+
+// memoryOf is what QEMU holds, and how much of it in huge pages, in MiB.
+func memoryOf(t *testing.T, pid int) (rss, huge float64) {
+	t.Helper()
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/smaps_rollup", pid))
+	if err != nil {
+		t.Fatalf("reading QEMU's memory: %v", err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		kb, _ := strconv.ParseFloat(f[1], 64)
+		switch f[0] {
+		case "Rss:":
+			rss = kb / 1024
+		case "AnonHugePages:":
+			huge = kb / 1024
+		}
+	}
+	return rss, huge
 }
 
 // lazySaved is one saved guest: its state, the overlay as it was at the save, and the tick it
@@ -150,14 +210,18 @@ type lazySaved struct {
 	apparent, onDisk int64
 }
 
-type lazyLoad struct{ tick, done, read, again float64 }
+type lazyLoad struct{ tick, done, read, again, rss, huge float64 }
 
-type lazyRow struct{ tick, done, read, again []float64 }
+type lazyRow struct{ tick, done, read, again, rss, huge []float64 }
 
 func (r *lazyRow) add(l lazyLoad) {
 	r.tick, r.done = append(r.tick, l.tick), append(r.done, l.done)
 	r.read, r.again = append(r.read, l.read), append(r.again, l.again)
+	r.rss, r.huge = append(r.rss, l.rss), append(r.huge, l.huge)
 }
+
+// lazyCollapsed is what the lab's QEMU says once it has collapsed a loaded guest's memory.
+var lazyCollapsed = regexp.MustCompile(`spin-lab: collapsed[^\r\n]*`)
 
 var lazyHeapOne = regexp.MustCompile(`HEAP-ONE\s`)
 
@@ -167,6 +231,7 @@ type lazyLab struct {
 	heap     int
 	dir      string
 	socks    string
+	said     map[string]string // what QEMU said of its collapse, once a variant
 	n        int
 }
 
@@ -266,7 +331,7 @@ func (l *lazyLab) load(v lazyVariant, s lazySaved, cold bool) (lazyLoad, error) 
 		}
 	}
 	sock := filepath.Join(l.socks, fmt.Sprintf("load-%d.sock", l.n))
-	g := startGuest(t, machineArgs(t, l.cli, l.out, l.flags(overlay, sock, "--incoming", "defer")))
+	g := l.startAs(v, machineArgs(t, l.cli, l.out, l.flags(overlay, sock, "--incoming", "defer")))
 	defer g.kill()
 	q := dial(t, sock, &vm{})
 	defer q.close()
@@ -359,6 +424,11 @@ func (l *lazyLab) load(v lazyVariant, s lazySaved, cold bool) (lazyLoad, error) 
 		g.type_(t, `cat /mnt/heap > /dev/null; echo HEAP-"TWO"`)
 		g.await(t, regexp.MustCompile(`HEAP-TWO\s`), 5*time.Minute)
 		r.again = float64(time.Since(at).Microseconds()) / 1000
+	}
+	r.rss, r.huge = memoryOf(t, g.cmd.Process.Pid)
+	if m := lazyCollapsed.FindString(g.said()); m != "" && l.said[v.name] == "" {
+		l.said[v.name] = m
+		t.Logf("    heap %4d MiB  %s  %s", l.heap, v.name, m)
 	}
 	return r, nil
 }
