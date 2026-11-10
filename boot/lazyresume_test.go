@@ -80,7 +80,14 @@ func TestWhatALazyResumeSaves(t *testing.T) {
 		{name: "lazy", format: "mapped", caps: []string{"mapped-ram", "postcopy-ram"}},
 	}
 	for _, heap := range heaps {
-		l := &lazyLab{t: t, cli: cli, out: out, heap: heap, dir: t.TempDir()}
+		// Not under the test's directory: a socket's path has 108 bytes, and the lab runner's
+		// TMPDIR alone takes 80 of them.
+		socks, err := os.MkdirTemp("/tmp", "lz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(socks) })
+		l := &lazyLab{t: t, cli: cli, out: out, heap: heap, dir: t.TempDir(), socks: socks}
 		saved := map[string]lazySaved{}
 		for _, format := range []string{"stream", "mapped"} {
 			saved[format] = l.save(format)
@@ -156,6 +163,7 @@ type lazyLab struct {
 	cli, out string
 	heap     int
 	dir      string
+	socks    string
 	n        int
 }
 
@@ -180,7 +188,7 @@ func (l *lazyLab) save(format string) lazySaved {
 		"-b", filepath.Join(l.out, "image", "rootfs.qcow2"), "-F", "qcow2", overlay).CombinedOutput(); err != nil {
 		t.Fatalf("an overlay of the base image: %v: %s", err, b)
 	}
-	sock := filepath.Join(l.dir, format+"-save.sock")
+	sock := filepath.Join(l.socks, format+"-save.sock")
 	g := startGuest(t, machineArgs(t, l.cli, l.out, l.flags(overlay, sock)))
 	defer g.kill()
 	script := "mount -t proc proc /proc; "
@@ -249,7 +257,7 @@ func (l *lazyLab) load(v lazyVariant, s lazySaved, cold bool) (lazyLoad, error) 
 			t.Fatalf("dropping %s from the page cache: %v", s.state, err)
 		}
 	}
-	sock := filepath.Join(l.dir, fmt.Sprintf("load-%d.sock", l.n))
+	sock := filepath.Join(l.socks, fmt.Sprintf("load-%d.sock", l.n))
 	g := startGuest(t, machineArgs(t, l.cli, l.out, l.flags(overlay, sock, "--incoming", "defer")))
 	defer g.kill()
 	q := dial(t, sock, &vm{})
