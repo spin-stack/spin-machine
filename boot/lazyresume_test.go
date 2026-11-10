@@ -125,8 +125,8 @@ func TestWhatALazyResumeSaves(t *testing.T) {
 				if cold {
 					cache = "cold"
 				}
-				t.Logf("    heap %4d MiB  %s  %-6s  counting again p50 %6.0f p90 %6.0f ms   complete p50 %6.0f ms   heap read p50 %6.0f p90 %6.0f ms   n=%d",
-					heap, cache, v.name, pct(r.tick, 50), pct(r.tick, 90), pct(r.done, 50), pct(r.read, 50), pct(r.read, 90), len(r.tick))
+				t.Logf("    heap %4d MiB  %s  %-6s  counting again p50 %6.0f p90 %6.0f ms   complete p50 %6.0f ms   heap read p50 %6.0f p90 %6.0f ms   again p50 %6.0f ms   n=%d",
+					heap, cache, v.name, pct(r.tick, 50), pct(r.tick, 90), pct(r.done, 50), pct(r.read, 50), pct(r.read, 90), pct(r.again, 50), len(r.tick))
 			}
 		}
 		for _, s := range saved {
@@ -150,13 +150,16 @@ type lazySaved struct {
 	apparent, onDisk int64
 }
 
-type lazyLoad struct{ tick, done, read float64 }
+type lazyLoad struct{ tick, done, read, again float64 }
 
-type lazyRow struct{ tick, done, read []float64 }
+type lazyRow struct{ tick, done, read, again []float64 }
 
 func (r *lazyRow) add(l lazyLoad) {
-	r.tick, r.done, r.read = append(r.tick, l.tick), append(r.done, l.done), append(r.read, l.read)
+	r.tick, r.done = append(r.tick, l.tick), append(r.done, l.done)
+	r.read, r.again = append(r.read, l.read), append(r.again, l.again)
 }
+
+var lazyHeapOne = regexp.MustCompile(`HEAP-ONE\s`)
 
 type lazyLab struct {
 	t        *testing.T
@@ -289,12 +292,24 @@ func (l *lazyLab) load(v lazyVariant, s lazySaved, cold bool) (lazyLoad, error) 
 	// The guest was saved stopped, so it is continued by hand, as soon as QEMU has a machine to
 	// continue: the load complete, or for a lazy one the devices loaded and the pages pending.
 	running := false
-	for r.tick == 0 || r.done == 0 {
+	// The heap is read as soon as the guest counts, which for a lazy load is while its pages
+	// are still arriving: what a guest that wakes and touches everything waits.
+	var readAt time.Time
+	for r.tick == 0 || r.done == 0 || (l.heap > 0 && r.read == 0) {
 		if since() > 300_000 {
-			t.Fatalf("%s: the guest was not counting again, or the load not complete, in 5 minutes:\n%s", v.name, tail([]byte(g.said()), 1500))
+			t.Fatalf("%s: the guest was not counting again, the load not complete, or the heap not read, in 5 minutes:\n%s", v.name, tail([]byte(g.said()), 1500))
 		}
-		if r.tick == 0 && lazyTick.MatchString(g.said()) {
+		said := g.said()
+		if r.tick == 0 && lazyTick.MatchString(said) {
 			r.tick = since()
+			if l.heap > 0 {
+				readAt = time.Now()
+				// Quoted, so the console's echo of this line is not what is awaited.
+				g.type_(t, `cat /mnt/heap > /dev/null; echo HEAP-"ONE"`)
+			}
+		}
+		if r.read == 0 && !readAt.IsZero() && lazyHeapOne.MatchString(said) {
+			r.read = float64(time.Since(readAt).Microseconds()) / 1000
 		}
 		var m struct{ Status string }
 		raw, err := q.ask("query-migrate", nil)
@@ -337,11 +352,13 @@ func (l *lazyLab) load(v lazyVariant, s lazySaved, cold bool) (lazyLoad, error) 
 		t.Fatalf("%s: the guest said TICK-%d, and it was saved at TICK-%d: this is not the saved guest going on", v.name, got, s.last)
 	}
 	if l.heap > 0 {
+		// And again, with the load complete and every page touched once: what is left of the
+		// cost when nothing is arriving. Run 42727181036 read a heap after a lazy load had
+		// completed and it still took 3 s a gigabyte, twenty times a whole load's.
 		at := time.Now()
-		// Quoted, so the console's echo of this line is not what is awaited.
-		g.type_(t, `cat /mnt/heap > /dev/null; echo HEAP-"READ"`)
-		g.await(t, regexp.MustCompile(`HEAP-READ\s`), 5*time.Minute)
-		r.read = float64(time.Since(at).Microseconds()) / 1000
+		g.type_(t, `cat /mnt/heap > /dev/null; echo HEAP-"TWO"`)
+		g.await(t, regexp.MustCompile(`HEAP-TWO\s`), 5*time.Minute)
+		r.again = float64(time.Since(at).Microseconds()) / 1000
 	}
 	return r, nil
 }
