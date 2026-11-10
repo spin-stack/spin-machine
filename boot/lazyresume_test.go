@@ -197,7 +197,10 @@ func (l *lazyLab) save(format string) lazySaved {
 	}
 	script += "echo HEAP-FILLED; ( i=0; while :; do i=$((i+1)); echo TICK-$i; sleep 0.02; done ) &"
 	g.type_(t, script)
-	g.await(t, regexp.MustCompile(`HEAP-FILLED\s[\s\S]*TICK-5\b`), 5*time.Minute)
+	// Five seconds of counting before the save: a guest saved in its first second went on
+	// counting 250 ms after every kind of load, and one saved ten seconds in after 10 ms (lab
+	// run 42726681234), which is the guest's own and hides what the load cost.
+	g.await(t, regexp.MustCompile(`HEAP-FILLED\s[\s\S]*TICK-250\b`), 5*time.Minute)
 
 	q := dial(t, sock, &vm{})
 	defer q.close()
@@ -210,6 +213,8 @@ func (l *lazyLab) save(format string) lazySaved {
 	if format == "mapped" {
 		q.do(t, "migrate-set-capabilities", map[string]any{"capabilities": []map[string]any{{"capability": "mapped-ram", "state": true}}})
 	}
+	// QEMU's default is 128 MiB/s, which is what a save then measures: a gigabyte took 9.6 s.
+	q.do(t, "migrate-set-parameters", map[string]any{"max-bandwidth": 0})
 	start := time.Now()
 	q.do(t, "migrate", map[string]any{"uri": "file:" + s.state})
 	q.until(t, "query-migrate", "completed", 5*time.Minute)
