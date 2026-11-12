@@ -234,7 +234,6 @@ SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null ||
 export SOURCE_DATE_EPOCH
 PARTS="${OUTPUT_DIR}/release/sbom"
 mkdir -p "${PARTS}" "${SHARE}/sbom"
-sbom() { command sbom "$@"; }
 for db in qemu e2fsprogs; do
   [ -f "${OUTPUT_DIR}/sbom/${db}.apk" ] || { echo "👹 missing ${db}'s apk database: ${OUTPUT_DIR}/sbom/${db}.apk" >&2; echo "   run: task build" >&2; exit 1; }
 done

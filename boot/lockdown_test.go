@@ -28,5 +28,5 @@ func TestTheGuestKernelIsLockedDown(t *testing.T) {
 	}
 	root := newRawRoot(t, out, base)
 	oneshotAtBoot(t, root, "lockdown-check", "lockdown-check.sh", "")
-	t.Log(checkOnConsole(t, out, rel, root, "LOCKDOWN_CHECK_OK", "LOCKDOWN_CHECK_FAILED"))
+	t.Log(checkOnConsole(t, rel, root, "LOCKDOWN_CHECK_OK", "LOCKDOWN_CHECK_FAILED"))
 }

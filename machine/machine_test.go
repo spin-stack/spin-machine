@@ -340,6 +340,76 @@ func TestEveryNodeOfAChain(t *testing.T) {
 	}
 }
 
+// What the top of a chain may do that the layers under it may not: only the top is written,
+// locked or opened O_DIRECT, because a lower layer is a sealed file every VM on the host reads.
+func TestOnlyTheTopOfAChainIsWritten(t *testing.T) {
+	type opts struct {
+		readOnly bool
+		locking  string
+		direct   any
+	}
+	for _, tc := range []struct {
+		name string
+		disk Disk
+		// want is each node by name, the top's first.
+		want map[string]opts
+	}{
+		{"writable", Disk{}, map[string]opts{
+			"blk0-file": {}, "blk0": {},
+			"blk0-1-file": {readOnly: true}, "blk0-1": {readOnly: true},
+		}},
+		{"read-only", Disk{Readonly: true}, map[string]opts{
+			"blk0-file": {readOnly: true}, "blk0": {readOnly: true},
+			"blk0-1-file": {readOnly: true}, "blk0-1": {readOnly: true},
+		}},
+		{"locked, direct over its backing", Disk{Locking: true, DirectOverBacking: true}, map[string]opts{
+			"blk0-file": {locking: "on", direct: true}, "blk0": {},
+			"blk0-1-file": {readOnly: true, direct: false}, "blk0-1": {readOnly: true},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec(t)
+			s.FDSets = []FDSet{{ID: 1, FDs: []FD{{Num: 10}}}, {ID: 2, FDs: []FD{{Num: 11}}}}
+			tc.disk.Chain = []Image{{FDSet: 1, Format: "qcow2"}, {FDSet: 2, Format: "qcow2"}}
+			s.Disks = []Disk{tc.disk}
+			args, err := s.Args()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]opts{}
+			for i, a := range args {
+				if a != "-blockdev" {
+					continue
+				}
+				var node struct {
+					NodeName string `json:"node-name"`
+					ReadOnly bool   `json:"read-only"`
+					Locking  string `json:"locking"`
+					Cache    *struct {
+						Direct bool `json:"direct"`
+					} `json:"cache"`
+				}
+				if err := json.Unmarshal([]byte(args[i+1]), &node); err != nil {
+					t.Fatalf("a -blockdev that is not JSON: %s", args[i+1])
+				}
+				o := opts{readOnly: node.ReadOnly, locking: node.Locking}
+				if node.Cache != nil {
+					o.direct = node.Cache.Direct
+				}
+				got[node.NodeName] = o
+			}
+			if len(got) != len(tc.want) {
+				t.Errorf("nodes %v, want %v", got, tc.want)
+			}
+			for name, want := range tc.want {
+				if got[name] != want {
+					t.Errorf("%s is %+v, want %+v", name, got[name], want)
+				}
+			}
+		})
+	}
+}
+
 // Where each node of a chain takes its backing from. Each image's backing is the node
 // under it, and the last image's is null, so QEMU follows no name a header holds; a raw
 // image has no backing option at all, and naming one is an error QEMU raises at open.

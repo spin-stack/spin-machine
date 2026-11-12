@@ -18,7 +18,7 @@ import (
 // checkOnConsole boots a disposable 1 GiB guest of rel on root, whose unit prints ok or failed on
 // the serial console, and fails the test unless ok comes first. It returns what the console said.
 // Under TCG where there is no /dev/kvm: what it checks is behaviour, not time.
-func checkOnConsole(t *testing.T, out string, rel *machine.Release, root *rawRoot, ok, failed string) string {
+func checkOnConsole(t *testing.T, rel *machine.Release, root *rawRoot, ok, failed string) string {
 	t.Helper()
 	spec := rel.Spec()
 	spec.BootCPUs = 2
@@ -29,21 +29,17 @@ func checkOnConsole(t *testing.T, out string, rel *machine.Release, root *rawRoo
 	c.Root = "/dev/vda"
 	c.Init = "/sbin/init"
 	spec.Cmdline = c
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		tcg, err := rel.QEMUTCG()
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec.QEMU, spec.Accel = tcg, "tcg"
+		t.Log("TCG: checking functionality only")
+	}
 	args, err := spec.Args()
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		spec.QEMU = filepath.Join(out, "bin/qemu-system-x86_64-tcg")
-		for i := range args {
-			if args[i] == "-accel" {
-				args[i+1] = "tcg"
-			}
-			if strings.HasPrefix(args[i], "host,migratable=on") {
-				args[i] = "max" + strings.TrimPrefix(args[i], "host")
-			}
-		}
-		t.Log("TCG: checking functionality only")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
