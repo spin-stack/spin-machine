@@ -26,8 +26,8 @@ MASK_UNITS=(
     # What masking cost was everything that needs a .device unit to exist.
     #
     #   * serial-getty@ttyS0 carries BindsTo=dev-%i.device and could not start.
-    #   * A hot-plugged CPU or memory block never produced an add event, so nothing could
-    #     act on one — see 40-spin-hotadd.rules, which is the thing that acts on it.
+    #   * A hot-plugged CPU never produced an add event, so nothing could act on one —
+    #     see 40-spin-hotadd.rules, which is the thing that acts on it.
 
     # Time sync - handled by host
     systemd-timesyncd.service
