@@ -55,12 +55,27 @@ The guest's root is not the kernel's. The kernel runs two LSMs, `lockdown` and `
   it, root reads or rewrites the kernel those programs live in.
 
 What enforcing the policy is for, and how, is the consumer's. That this kernel does both is
-what `kernel/Dockerfile` checks after olddefconfig, and `task boot:lockdown` asks a booted guest.
+what `kernel/Dockerfile` checks after olddefconfig, and `task boot:lockdown` asks a booted guest:
+`compat.yml` runs it on every kernel change on main and before every release.
 
 Lockdown at confidentiality also takes away the tenant's kernel tracing: kprobes,
 `bpf_probe_read_kernel` and perf on the kernel. User-space tracing and networking eBPF are
-untouched. systemd notices at boot: it logs `use of bpf to read kernel RAM is restricted` and
-carries on, and logins are unaffected (`task boot:logind`).
+untouched, and so is a BPF LSM program that reads no kernel memory.
+
+systemd notices at boot, and the console shows two lines that read like missing protection
+and are lockdown working:
+
+```
+bpf-restrict-fs: Failed to load BPF object: Invalid argument
+Lockdown: init: use of bpf to read kernel RAM is restricted; see man kernel_lockdown.7
+```
+
+The second is lockdown refusing `bpf_probe_read_kernel` to PID 1. The first is what that costs:
+systemd's `RestrictFileSystems=` program reads each file's filesystem type out of kernel memory
+with that helper, the verifier rejects it, and systemd carries on without it. So a unit in the
+guest cannot use `RestrictFileSystems=`; it is not enforced, and systemd does not say so per
+unit. That is the price of confidentiality, kept on purpose: integrity would give it back by
+letting root read the kernel's memory again. Logins are unaffected (`task boot:logind`).
 
 Measured 2026-10-01, `task boot:initcalls` with `SPIN_KERNEL_B` set to the kernel without these
 options: no cost that can be told from noise. Over 20 interleaved boots each, kernel start to

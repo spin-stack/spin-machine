@@ -66,7 +66,9 @@ tasks:
       kernel and spin-machine in place of its own, in _output/compat/here. Both are exported to
       the steps after in CI (SPIN_COMPAT_PREVIOUS, SPIN_MACHINE_OUTPUT). Needs a built QEMU,
       kernel and tools.
-    # The base image is the release's: a checkpoint resumes with the disks it was saved with.
+    # The base image is the release's: a checkpoint resumes with the disks it was saved with. So
+    # are the e2fsprogs tools that edit a copy of it (boot:lockdown's debugfs), which is why bin/
+    # loses only what this tree replaces; the release's TCG QEMU goes with its QEMU.
     cmds:
       - task: previous
       - |
@@ -74,8 +76,8 @@ tasks:
         previous=$(cat {{.OUTPUT_ABS}}/compat/previous)
         here={{.OUTPUT_ABS}}/compat/here
         rm -rf "$here" && cp -as "$previous" "$here"
-        rm -rf "$here/bin" "$here/qemu" "$here/kernel"
-        mkdir -p "$here/bin" "$here/kernel"
+        rm -rf "$here"/bin/qemu-* "$here/qemu" "$here/kernel"
+        mkdir -p "$here/kernel"
         cp {{.OUTPUT_ABS}}/bin/qemu-system-x86_64 {{.OUTPUT_ABS}}/bin/qemu-img {{.OUTPUT_ABS}}/bin/spin-machine "$here/bin/"
         cp -r {{.OUTPUT_ABS}}/qemu "$here/qemu"
         cp {{.OUTPUT_ABS}}/kernel/vmlinux "$here/kernel/vmlinux"
