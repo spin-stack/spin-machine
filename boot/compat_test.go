@@ -52,7 +52,6 @@ func TestACheckpointOfTheReleaseBeforeResumesHere(t *testing.T) {
 	disk := []string{"--disk", overlay, "--disk-format", "qcow2", "--init", "/bin/sh"}
 	state := filepath.Join(dir, "state")
 
-	// The previous release's machine, a counter on its console, saved.
 	a := startGuest(t, machineArgs(t, cli, previous, append([]string{"--qmp", filepath.Join(dir, "a.sock")}, disk...)))
 	a.type_(t, "mount -t proc proc /proc; ( i=0; while :; do i=$((i+1)); echo TICK-$i; sleep 0.2; done ) &")
 	a.await(t, regexp.MustCompile(`TICK-5\b`), 60*time.Second)
@@ -64,7 +63,6 @@ func TestACheckpointOfTheReleaseBeforeResumesHere(t *testing.T) {
 	qa.close()
 	a.kill()
 
-	// This tree's machine, loading it.
 	b := startGuest(t, machineArgs(t, cli, out, append([]string{"--qmp", filepath.Join(dir, "b.sock"), "--incoming", "defer"}, disk...)))
 	qb := dial(t, filepath.Join(dir, "b.sock"), &vm{})
 	defer qb.close()

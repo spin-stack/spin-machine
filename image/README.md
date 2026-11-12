@@ -10,9 +10,8 @@ Copy-on-write happens in the block layer, where QEMU does it, rather than in a f
 stacked inside the guest.
 
 The contents are an Ubuntu 26.04 userland with systemd as the container's first process,
-the tools a workspace expects, and boot optimizations that were each measured —
-`mkosi.extra/usr/local/lib/spin-base/optimize-systemd.sh` names the milliseconds every mask
-saved, and is an unmodified copy for that reason.
+the tools a workspace expects, and the boot optimizations in
+`mkosi.extra/usr/local/lib/spin-base/optimize-systemd.sh`.
 
 **ext4**, because the guest kernel has `EXT4_FS` and `OVERLAY_FS` and explicitly not
 `XFS_FS`, `BTRFS_FS`, `SQUASHFS` or `EROFS_FS`. Anything else starts with a kernel config

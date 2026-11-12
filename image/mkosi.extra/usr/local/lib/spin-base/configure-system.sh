@@ -3,9 +3,6 @@ set -euo pipefail
 
 echo "Configuring system settings..."
 
-# -------------------------------------------------
-# 1. Create necessary directories
-# -------------------------------------------------
 echo "Creating system directories..."
 mkdir -p \
     /run/sshd \
@@ -13,9 +10,6 @@ mkdir -p \
 
 chmod 700 /root/.ssh
 
-# -------------------------------------------------
-# 2. Configure SSH
-# -------------------------------------------------
 echo "Configuring SSH server..."
 sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
 sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
@@ -47,9 +41,6 @@ grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc
     exit 1
 }
 
-# -------------------------------------------------
-# 4. Configure network interface naming
-# -------------------------------------------------
 echo "Configuring network interface naming..."
 mkdir -p /etc/systemd/network/99-default.link.d
 cat <<'EOF' > /etc/systemd/network/99-default.link.d/traditional-naming.conf
@@ -57,23 +48,15 @@ cat <<'EOF' > /etc/systemd/network/99-default.link.d/traditional-naming.conf
 NamePolicy=keep kernel
 EOF
 
-# -------------------------------------------------
-# 5. An unprivileged user, and no passwords at all
-# -------------------------------------------------
-# This image had `echo 'root:spinbox' | chpasswd`, and it was the one credential baked into
-# a filesystem that every VM boots read-only: the same root password on every machine that
-# ever came from it, discoverable by reading a build script. It is gone.
-#
-# Nothing replaces it. Both accounts are locked, and the way into a machine is either the
-# debug console — which autologins, because whoever can attach to it already has the disk —
-# or a key placed by whoever provisions the VM, alongside the rest of its identity.
+# An unprivileged user, and no passwords at all: a password baked into a filesystem every VM
+# boots read-only is the same credential on every machine that ever came from it. Both accounts
+# are locked, and the way into a machine is a certificate (above) placed by whoever provisions
+# the VM, alongside the rest of its identity.
 echo "Creating the workspace user..."
 # The docker group exists by now: install-dev-tools.sh runs before this and the package
 # creates it. A workspace user who has to sudo for every container is a workspace user who
 # runs everything as root.
 useradd --create-home --shell /bin/bash --uid 1000 --groups sudo,docker spin
-# No password for either account: `!` in the shadow field is a locked account, which is
-# what an image that hands out no credentials should have.
 passwd --lock root
 passwd --lock spin
 
@@ -84,10 +67,7 @@ install -m 0440 /dev/stdin /etc/sudoers.d/spin <<'EOF'
 spin ALL=(ALL) NOPASSWD: ALL
 EOF
 
-# -------------------------------------------------
-# 6. Own the MOTD
-# -------------------------------------------------
-# The distribution's goes, all of it: scripts that check for available updates, count
+# The MOTD is this image's own. The distribution's goes, all of it: scripts that check for available updates, count
 # reboots and advertise a support subscription — network calls and package queries in a
 # machine that is started, does one piece of work and is thrown away.
 #
@@ -121,10 +101,7 @@ chmod 0755 /etc/update-motd.d/00-spin-boot
 sed -i 's/^#\(session.*pam_motd.so\)/\1/' /etc/pam.d/sshd
 
 
-# -------------------------------------------------
-# 7. The distribution's background maintenance
-# -------------------------------------------------
-# Ubuntu ships five timers enabled. Four of them have no business in a machine that is
+# The distribution's background maintenance. Ubuntu ships five timers enabled. Four of them have no business in a machine that is
 # started, does one piece of work and is thrown away.
 #
 # apt-daily and apt-daily-upgrade are the two that produce a failure rather than merely
@@ -133,7 +110,7 @@ sed -i 's/^#\(session.*pam_motd.so\)/\1/' /etc/pam.d/sshd
 # `Could not get lock /var/lib/dpkg/lock-frontend` at a moment nothing in its own logs
 # explains. They also reach the archive, which is egress this machine never asked for.
 #
-# motd-news is the other half of the job section 6 above started. Its ExecStart is
+# motd-news is the other half of the MOTD replacement above. Its ExecStart is
 # /etc/update-motd.d/50-motd-news, and that directory was emptied there — so the unit can
 # only fail 203/EXEC, twice a day, leaving a permanent entry in `systemctl --failed` for
 # whoever looks at the machine next.

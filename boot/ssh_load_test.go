@@ -21,8 +21,7 @@ import (
 //
 // The guest runs testdata/ssh-load.sh once it is up: logins while idle, while a service
 // burns every vCPU eight times over, while a login session does the same, and with /tmp full.
-// The client runs with a weight nothing else in
-// the guest has, so a slow login is sshd's. Each case also reports what the guest was under -
+// The client runs with a weight nothing else in the guest has, so a slow login is sshd's. Each case also reports what the guest was under -
 // runnable tasks, memory available, PSI - so a load that did not happen cannot pass for one
 // sshd shrugged off.
 //
@@ -46,8 +45,7 @@ import (
 // come from, and nothing here is shipped for it. (The memory columns were a tmpfs of the test's
 // own filled to 64 and 16 MiB left; since MGLRU's min_ttl_ms is set, 16 MiB left is an OOM kill
 // of whatever the kernel finds, so the case is /tmp filling to its cap instead.) Not
-// OOMScoreAdjust either: sshd sets its own
-// oom_score_adj to -1000 and restores the inherited value in the processes it forks, so on
+// OOMScoreAdjust either: sshd sets its own oom_score_adj to -1000 and restores the inherited value in the processes it forks, so on
 // the unit the -1000 would be what the users' sessions inherit.
 //
 //	SPIN_SSH_LOAD=1   run at all

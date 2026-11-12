@@ -177,11 +177,10 @@ type machineFlags struct {
 	firmware string
 	bios     string
 
-	disk       string
-	diskFormat string
-	readonly   bool
-	serial     string
-	// directOverBacking is machine.Disk's DirectOverBacking.
+	disk              string
+	diskFormat        string
+	readonly          bool
+	serial            string
 	directOverBacking bool
 
 	memoryMB     int
@@ -319,9 +318,7 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 	if o.extra != "" {
 		c.Extra = append(c.Extra, strings.Fields(o.extra)...)
 	}
-	// A console the caller can read means a console the kernel should print to.
-	// The default is a silent boot, which is what production wants and what
-	// makes a profile measurable.
+	// No console for the caller to read is no console for the kernel to print to.
 	if o.console == "" {
 		c.Console = ""
 	}
@@ -496,10 +493,9 @@ func (o *detachFlags) register(fs *flag.FlagSet) {
 	fs.DurationVar(&o.timeout, "timeout", 30*time.Second, "how long QEMU has to report the disk gone")
 }
 
-// detach takes the disk at a target back and waits for QEMU to say it has gone. A SCSI
-// disk goes as soon as it is asked for, where one behind a PCIe root port waited out
-// pciehp's five-second attention-button window; a device QEMU never reports gone is
-// still the failure worth seeing, so it is an error and not a return on the request.
+// detach takes the disk at a target back and waits for QEMU to say it has gone. A device
+// QEMU never reports gone is the failure worth seeing, so it is an error and not a return
+// on the request.
 func detach(o detachFlags) error {
 	if o.qmp == "" {
 		return errors.New("detach: --qmp is required")
@@ -755,8 +751,7 @@ type qmpMessage struct {
 	Error  *qmpError       `json:"error"`
 }
 
-// qmpError is QEMU refusing a command, in its own words: "GenericError: Bus 'rp0'
-// not found" rather than a Go map of them.
+// qmpError is QEMU refusing a command, in its own words rather than a Go map of them.
 type qmpError struct {
 	Class string `json:"class"`
 	Desc  string `json:"desc"`

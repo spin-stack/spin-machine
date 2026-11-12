@@ -94,13 +94,12 @@ const (
 	// RUN_STATE_INMIGRATE "because we'll fill the data in during the next incoming migration
 	// in all cases".
 	//
-	// There is no gap after machine init, and an earlier version of this comment said there
-	// was — it read "~8 ms to a QMP round trip" and put ~14 ms after it. The 8 ms was the QMP
-	// *greeting*, which the monitor emits from qemu_create_late_backends() at vl.c:3835,
-	// before qmp_x_exit_preconfig() builds the board at vl.c:3862. The reply to
-	// qmp_capabilities is 18-20 ms, and `-S` defers only the qmp_cont() at vl.c:2849 — reset,
-	// the ACPI tables and rom_reset all happen inside that window. A checkpoint that answers
-	// before the thing it is supposed to bracket has started is not a checkpoint.
+	// There is no gap after machine init, though a QMP round trip at ~8 ms suggests one. The
+	// 8 ms is the QMP *greeting*, which the monitor emits from qemu_create_late_backends(),
+	// before qmp_x_exit_preconfig() builds the board. The reply to qmp_capabilities is
+	// 18-20 ms, and `-S` defers only qmp_cont() — reset, the ACPI tables and rom_reset all
+	// happen inside that window. A checkpoint that answers before the thing it is supposed
+	// to bracket has started is not a checkpoint.
 	//
 	// Trace it with `-e sched:sched_process_exec -e kvm:kvm_entry` and nothing else. Adding
 	// kvm:kvm_pio inflates the same interval from 27 to 49 ms, because that tracepoint fires
@@ -114,11 +113,10 @@ const (
 	// storage and input the machine does not have, then pvh.bin) is ~10 ms. Two ways of
 	// spending less on it, and what each came to:
 	//
-	//   - qboot boots this kernel on q35 in 37.4–39.3 ms, 7–8 ms under SeaBIOS, and cannot
-	//     run this machine. Its table loader implements ALLOCATE, ADD_POINTER and
-	//     ADD_CHECKSUM and panics on anything else, and vmgenid needs WRITE_POINTER to tell
-	//     QEMU where the GUID is. The symptom is a vCPU halted inside qboot and not one byte
-	//     on the console, not even earlyprintk.
+	//   - qboot boots this kernel on q35 in 37.4–39.3 ms, 7–8 ms under SeaBIOS. Stock qboot
+	//     cannot run this machine: its table loader stops on WRITE_POINTER, which vmgenid
+	//     needs. Built with qemu/qboot/write-pointer.patch it is machine.DefaultBIOS, and
+	//     TestFirmwareRuns holds it to vmgenid.
 	//   - SeaBIOS rel-1.17.0 rebuilt with 34 of its 68 options — no USB, PS/2, storage
 	//     drivers, sercon, TPM or boot menu, and everything the guest can see left alone —
 	//     reaches the kernel 3 ms sooner (41.2 and 41.4 ms) and keeps vmgenid: through a save

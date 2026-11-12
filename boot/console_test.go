@@ -59,7 +59,7 @@ func checkOnConsole(t *testing.T, out string, rel *machine.Release, root *rawRoo
 	}
 	defer func() {
 		cancel()
-		_ = cmd.Wait() // killed by the cancel above; the console is the result
+		_ = cmd.Wait()
 	}()
 	var console bytes.Buffer
 	buf := make([]byte, 4096)

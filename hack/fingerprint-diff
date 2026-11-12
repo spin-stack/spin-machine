@@ -59,10 +59,6 @@ value_of() { sed -n "s/^$1=//p" "$2" | head -1; }
 
 say() { printf '%s\n' "$*"; }
 
-# ---------------------------------------------------------------------------
-# Pick the release to compare against.
-# ---------------------------------------------------------------------------
-
 if ! command -v gh >/dev/null 2>&1; then
   say "Nothing to compare against: \`gh\` is not on this machine, so the last released"
   say "machine could not be looked up."
@@ -101,10 +97,6 @@ if ! gh release download "${reference}" --pattern machine.env --dir "${work}" >/
   exit 0
 fi
 old="${work}/machine.env"
-
-# ---------------------------------------------------------------------------
-# What moved.
-# ---------------------------------------------------------------------------
 
 declare -a moved_fp=() moved_other=() checked_fp=() unchecked_fp=()
 for k in "${KEYS[@]}"; do

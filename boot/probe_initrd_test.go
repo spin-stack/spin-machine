@@ -12,9 +12,8 @@ import (
 )
 
 // probeInitrd is SPIN_PROBE_INITRD when it names one, and otherwise the initrd of probeinit,
-// built here: the firmware and floor probes ran only where somebody had made a diagnostic
-// initrd by hand, which the lab runner never has. The same one serves both sides of a
-// comparison, so its own cost cancels out.
+// built here, so the firmware probes run where nobody made a diagnostic initrd by hand, the lab
+// runner included. The same one serves both sides of a comparison, so its own cost cancels out.
 func probeInitrd(t *testing.T) string {
 	t.Helper()
 	if os.Getenv("SPIN_PROBE_INITRD") != "" {

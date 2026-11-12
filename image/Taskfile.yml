@@ -33,7 +33,6 @@ tasks:
 
   builder:
     desc: Build the container that builds the base image (mkosi, qemu-utils).
-    # A step of build, not a thing to run on its own.
     internal: true
     cmds:
       - |

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// probeinit is PID 1 of the diagnostic initrd the firmware and floor probes boot when no
-// SPIN_PROBE_INITRD is given (boot/probe_initrd_test.go builds it). It is what those probes
+// probeinit is PID 1 of the diagnostic initrd the firmware probes (boot:firmware,
+// boot:firmware-stages) boot when no SPIN_PROBE_INITRD is given (boot/probe_initrd_test.go
+// builds it). It is what those probes
 // document an initrd's /init must do: mount proc, print the kernel log lines that mention
 // vmgenid, print SPIN-READY, and stay alive printing every new kernel log line - so a restored
 // guest's "crng reseeded due to virtual machine fork" reaches the host.

@@ -144,13 +144,8 @@ WantedBy=multi-user.target
 		for _, cv := range cvs {
 			v := base
 			v.label = cv.label
-			// The profiling command line is not built here. `spin-machine boot --profile` is,
-			// through machine.Cmdline.Profiling(), and that is the only definition of what
-			// profiling a boot means — including the log_buf_len the default ring needs and
-			// the silent console, whose reason that function already records: a console
-			// registers during the device_initcall phase and registering it replays the whole
-			// printk ring into it synchronously, inside that initcall, so a verbose boot
-			// charges the measurement to whichever console driver registered.
+			// The profiling command line is machine.Cmdline.Profiling()'s, through
+			// `spin-machine boot --profile`, and is not built here.
 			v.extra = cv.extra
 			v.profile = true
 			console := bootUntil(t, out, v, cv.kernel, "SPIN-DMESG-END", 90*time.Second)
@@ -420,10 +415,6 @@ func report(t *testing.T, runs []parsed, top, reps int) {
 	line("not in initcalls", nonInit)
 	fmt.Fprintf(&b, "\n  %d initcalls seen\n\n", countUnion(runs))
 
-	// Gaps, which is where the time that is not in an initcall actually is. Only
-	// trustworthy because the console was quiet for the whole boot: with the messages going
-	// to a serial port, a gap between two adjacent stamps is mostly the cost of printing
-	// the first one, and the biggest gap is wherever the most was printed.
 	type agg struct {
 		g  gap
 		ms []float64
@@ -454,7 +445,6 @@ func report(t *testing.T, runs []parsed, top, reps int) {
 	}
 	fmt.Fprintln(&b)
 
-	// Initcalls, ranked by their own p50.
 	type ic struct {
 		name string
 		ms   []float64

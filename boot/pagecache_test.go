@@ -309,7 +309,7 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(sockDir) }) // a socket QEMU made, nothing else
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	qmpSock := filepath.Join(sockDir, "qmp.sock")
 	machine := append([]string{filepath.Join(out, "bin", "spin-machine"), "boot", "--release", out,
 		"--disk", overlay, "--memory", "2048", "--cpus", "2", "--console", "file:/dev/stdout", "--qmp", qmpSock,
@@ -396,7 +396,7 @@ func discardNote(t *testing.T, out, socket, overlay string, trimmed bool) string
 	if err != nil {
 		t.Fatalf("dialling QMP: %v", err)
 	}
-	defer func() { _ = conn.Close() }() // a diagnostic connection
+	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +539,7 @@ func resident(p string) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = f.Close() }() // read-only
+	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil || fi.Size() == 0 {
 		return 0, err
@@ -548,7 +548,7 @@ func resident(p string) (float64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("mapping %s: %w", p, err)
 	}
-	defer func() { _ = unix.Munmap(m) }() // a mapping only read for its residency
+	defer func() { _ = unix.Munmap(m) }()
 	page := os.Getpagesize()
 	vec := make([]byte, (len(m)+page-1)/page)
 	// x/sys/unix has no Mincore on Linux.

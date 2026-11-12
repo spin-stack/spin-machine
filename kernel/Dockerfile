@@ -1,10 +1,5 @@
 # The guest kernel.
 #
-# It is here, next to the QEMU binary and the base image, because a kernel and the machine
-# that boots it are one release: `machine.Spec.Fingerprint` hashes this image by content
-# alongside the emulator, so changing either strands every checkpoint taken against the
-# previous pair. They are coupled by what they are, and storing them apart only hides it.
-#
 # The build depends on no source but its own: a version and a config file.
 #
 # What is NOT here: an initrd. What runs inside a guest belongs to whoever runs guests —
@@ -12,18 +7,14 @@
 #
 # The config is not stable furniture. Symbols get added and removed for measured reasons —
 # a device a restored VM needs to reseed from, a crypto driver worth milliseconds of boot —
-# and every one of those changes strands every checkpoint in the fleet. That is the
-# design, and it makes a change here a fleet-wide event rather than a tidy-up.
+# and every one of those changes is every guest's kernel at its next boot.
 #
 # The toolchain is pinned, by the base image's digest and by the date of the Debian archive
 # its packages come from. A different compiler, assembler or pahole is a different vmlinux,
-# which is a different machine fingerprint, which is every checkpoint stranded — so it
-# changes when this file says so, and not when Debian publishes a point release. A tag and
-# the live archive gave no such promise: `debian:bookworm` and whatever gcc-12 was current.
+# so it changes when this file says so, and not when Debian publishes a point release.
 #
-# Debian trixie: gcc 14.2, binutils 2.44, pahole 1.30. Moved from bookworm (gcc 12.2, binutils
-# 2.40, pahole 1.24) on 2026-09-14, in the same release that made the build reproducible, so
-# the fleet paid for one fingerprint change rather than two.
+# Debian trixie: gcc 14.2, binutils 2.44, pahole 1.30, since 2026-09-14 (from bookworm: gcc
+# 12.2, binutils 2.40, pahole 1.24).
 #
 # Both are versions.yaml's `debian` and `debian-snapshot`, handed in by kernel/Taskfile.yml with
 # no default here. To move them: `task bump NAME=debian` and `task bump NAME=debian-snapshot`,
@@ -84,9 +75,8 @@ RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
         apparmor procps
 
 # The version, and the tarball it is made of by content, from versions.yaml. See the same
-# argument in qemu/Dockerfile: https says who sent it, not what they sent, and this is the one
-# input that comes from outside the repository. It is also what makes the SOURCES file in a
-# release true.
+# argument in qemu/Dockerfile: https says who sent it, not what they sent. It is also what
+# makes the SOURCES file in a release true.
 ARG KERNEL_VERSION
 ARG KERNEL_SHA256
 # The series, major.minor, which names the configuration: a stable release within it builds
@@ -185,11 +175,6 @@ RUN <<EOT
     # does not recognise such an archive at all and the VM does not boot.
     grep -q "CONFIG_RD_LZ4=y" .config || (echo "ERROR: CONFIG_RD_LZ4 not enabled (the lz4 initramfs cannot be unpacked)!" ; exit 1)
 
-    # The filesystems the base image and the guest's overlay are made of. ext4 is what
-    # image/ produces and what a writable layer is formatted as; overlayfs stacks them. A
-    # base image in a filesystem this kernel cannot mount is a VM that boots and finds no
-    # root, so changing image/mkosi.conf to xfs or squashfs starts here, not there.
-
     # Pressure stall information, /proc/pressure/{cpu,memory,io}: how long tasks in the guest
     # waited for each, which is the question when a busy VM stops answering, and what
     # systemd-oomd acts on. Off, and on by default: a psi=1 on the command line would be one
@@ -231,6 +216,10 @@ RUN <<EOT
         ! grep -q "^CONFIG_${opt}=y" .config || { echo "ERROR: CONFIG_${opt} would turn a report into a panic!"; exit 1; }
     done
 
+    # The filesystems the base image and the guest's overlay are made of. ext4 is what
+    # image/ produces and what a writable layer is formatted as; overlayfs stacks them. A
+    # base image in a filesystem this kernel cannot mount is a VM that boots and finds no
+    # root, so changing image/mkosi.conf to xfs or squashfs starts here, not there.
     grep -q "CONFIG_EXT4_FS=y" .config || (echo "ERROR: CONFIG_EXT4_FS not enabled (the base image cannot be mounted)!" ; exit 1)
 
     # The guest defends spin's security from its own root (spin's F2b): the supervisor loads BPF
@@ -321,9 +310,6 @@ RUN <<EOT
     # attached is measuring the serial port. For scale, the kernel reaches /sbin/init at
     # 65 ms and acpi_init alone is 10 ms of it — and ACPI is what CPU and memory hotplug
     # ride on, so the big one is not available either.
-    #
-    # Anything here also strands every checkpoint in the fleet: machine.Spec.Fingerprint
-    # hashes this kernel by content. 154 us is not the price of the change.
 
     # The memory-management options, which look like the largest remaining candidate and are
     # not one. `task boot:initcalls` reports ksm_init at 2.00 ms, hugepage_init at 2.00 and
@@ -363,13 +349,8 @@ RUN <<EOT
     # read of the whole file is under 10 ms, inside a 35 ms launch phase) and then sit in
     # each guest's RAM.
     #
-    # And the price: CONFIG_MODULES is off entirely today — 1379 symbols =y and 0 =m.
-    # Turning it on is a kernel change, so it strands every checkpoint once. Then it
-    # leaves a standing hazard, because the fingerprint hashes this kernel by content and
-    # modules would live in the image, which it does not hash: two machines could carry the
-    # same fingerprint and different modules, and "a release is one machine" would stop
-    # being true. systemd-modules-load.service and the modprobe@ units are also masked in
-    # optimize-systemd.sh, so udev-driven loading needs those reconsidered first.
+    # And CONFIG_MODULES is off entirely — 1379 symbols =y and 0 =m — which the lockdown
+    # assertion above holds it to.
 
     echo "Virtio configuration:"
     grep "CONFIG_VIRTIO" .config | grep -v "^#" || echo "No VIRTIO options enabled!"
@@ -389,7 +370,7 @@ ARG KERNEL_NPROC
 # cache is the effective one.
 #
 # Reproducible: the same inputs give the same vmlinux, so a release whose kernel did not
-# change keeps its fingerprint. v20260914.01 and .02, same source and config, differed in
+# change keeps its kernel_sha256. v20260914.01 and .02, same source and config, differed in
 # 3,525,384 bytes, for two reasons:
 #
 #   The build's date, user and host, which the kernel writes into its banner (uname -v) unless
@@ -474,10 +455,6 @@ RUN <<EOT
     printf 'BTF: %d bytes\n' "0x$btf"
 EOT
 
-# ============================================
-# Output stage
-# ============================================
-#
 # The tree this stage writes is the release tree: kernel/vmlinux, at the path a release
 # carries it and the path machine.Release reads it from. Extracting to the root and letting
 # hack/release do the moving gives the same four files one layout here, a second in the

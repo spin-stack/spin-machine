@@ -11,13 +11,12 @@
 # are handed them as build arguments with no default, so Dockerfile scanning finds nothing to
 # bump. `task versions` says what is behind and `task bump NAME=...` moves one entry, resolving
 # its pin with it; a bot that bumped a version without its hash would produce a build that fails
-# on the checksum, at best. A bump of qemu, kernel, debian or debian-snapshot is a new machine
-# and every checkpoint in existence stops resuming, which is a decision and not a routine merge.
+# on the checksum, at best. A bump of qemu or the kernel changes what every guest runs, which is
+# a decision and not a routine merge.
 version: 2
 
 updates:
-  # Actions cannot change the machine: nothing they do reaches the QEMU binary,
-  # the kernel or the initrd, so nothing they do reaches a fingerprint. These are
+  # Actions cannot change the machine: nothing they do reaches an artefact. These are
   # the updates that can be taken on their merits.
   #
   # Two groups, and the split is not tidiness. Grouped as one, a major arrived with

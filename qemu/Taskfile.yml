@@ -42,11 +42,6 @@ tasks:
   verify:
     desc: Assert the extracted QEMU tree carries what every consumer needs.
     cmds:
-      # Files, and then the binaries themselves — which is worth doing here and was not
-      # possible before they were static: an extracted dynamic binary linked against the
-      # build image's libraries died on a bare host, so this task could only stat files and
-      # leave the behaviour to assertions inside the build. Now the tree that is extracted
-      # is the tree that runs.
       - |
         set -euo pipefail
         for b in qemu-system-x86_64 qemu-system-x86_64-tcg qemu-img; do

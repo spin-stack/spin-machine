@@ -218,9 +218,7 @@ func TestQEMUAcceptsEveryArgument(t *testing.T) {
 		},
 	}, {
 		// Two monitors, which is a machine whose lifecycle and whose disk are
-		// driven by different things. Both are required to answer: a socket that
-		// greets and never replies would look like a working monitor to whoever
-		// only dialled it, and the greeting is written by the chardev.
+		// driven by different things.
 		name: "two monitors",
 		spec: func(s Spec) Spec {
 			s.Monitors = []Monitor{{Socket: qmpSocket(t)}}
