@@ -55,9 +55,7 @@ mkosi --force build
 tree=/work/out/rootfs
 test -d "$tree" || { echo "ERROR: mkosi produced no tree at $tree" >&2; exit 1; }
 
-# --- identity ---------------------------------------------------------------------------
-#
-# Done here rather than through mkosi's RemoveFiles because the two files below are not
+# Identity, done here rather than through mkosi's RemoveFiles because the two files below are not
 # "remove it": /etc/machine-id has to exist and be empty. Empty is what systemd reads as
 # "not provisioned yet", so each VM generates its own on its writable overlay; absent makes
 # some tooling treat the image as broken, and populated makes every VM that ever boots from
@@ -79,12 +77,9 @@ for d in etc tmp proc sys dev run; do
 done
 chmod 1777 "$tree/tmp"
 
-# --- the licences -----------------------------------------------------------------------
-#
-# Moved out of the tree, not generated here: the file was written by
+# The licences, moved out of the tree, not generated here: the file was written by
 # mkosi.postinst.chroot, which is the only moment the copyright files exist —
-# optimize-systemd.sh deletes /usr/share/doc a few lines later, and it is a vendored script
-# this repository does not rewrite.
+# optimize-systemd.sh deletes /usr/share/doc a few lines later.
 #
 # Beside the image rather than inside it. The notices have to accompany a copy of the
 # software, and a release is what gets copied; a few hundred licence texts in every VM that
@@ -98,9 +93,7 @@ test -s "$harvested" || {
 mv "$harvested" "$SHARE/licenses.txt"
 echo "==> $(grep -c '^======== ' "$SHARE/licenses.txt" || true) licence texts, $(du -h "$SHARE/licenses.txt" | cut -f1)"
 
-# --- the bill of materials --------------------------------------------------------------
-#
-# Every package in the tree, by name and exact version, written beside the image rather
+# The bill of materials: every package in the tree, by name and exact version, written beside the image rather
 # than into it.
 #
 # It is the only record of what this image is made of. The tree is thrown away, the qcow2
@@ -113,9 +106,7 @@ dpkg-query --admindir="$tree/var/lib/dpkg" -W -f='${Package} ${Version} ${Archit
     2>/dev/null | sort > "$SHARE/packages.txt"
 echo "==> $(wc -l < "$SHARE/packages.txt") packages recorded"
 
-# --- filesystem -------------------------------------------------------------------------
-#
-# Sized to what the tree needs, plus a small margin, and nothing else. Free space in the base
+# The filesystem, sized to what the tree needs, plus a small margin, and nothing else. Free space in the base
 # is free space in every overlay built on it, whether or not that overlay's disk was meant to
 # have it: a disk larger than the image, with the filesystem grown to fill it, has the space it
 # was given plus whatever the image carried. It carried 317 MiB (2026-09-14).
@@ -179,7 +170,6 @@ mkbase() {
 # command line, after which mke2fs reads it as a count of blocks: adding -b 4096 made this image
 # a 4.08 GiB filesystem instead of a 974 MiB one, and v20260914.01 shipped it (the checks below
 # now compare the size made against the size asked).
-# used_kb is what the filesystem holds, metadata included: blocks less free blocks.
 used_kb() {
     "$bin/dumpe2fs" -h /work/base.raw 2>/dev/null | awk -F: '
         /^Block count:/ { blocks = $2 }
@@ -198,9 +188,7 @@ size_kb=$(( (used + margin_kb + 1023) / 1024 * 1024 ))
 echo "==> mkfs.ext4: ${size_kb} KiB (${used} KiB used at ${first_kb} KiB, plus ${margin_kb} KiB) from a ${kb} KiB tree"
 mkbase "$size_kb"
 
-# --- checks -----------------------------------------------------------------------------
-#
-# Asked of the finished filesystem rather than of the build that made it. A tree that
+# Checks, asked of the finished filesystem rather than of the build that made it. A tree that
 # failed to copy in produces a perfectly valid empty ext4, and the failure would then be a
 # VM that boots and finds nothing to run.
 echo "==> checking the filesystem"
@@ -392,9 +380,7 @@ for f in /etc/update-motd.d/10-help-text /etc/update-motd.d/50-motd-news; do
     fi
 done
 
-# --- qcow2 ------------------------------------------------------------------------------
-#
-# No compression: the base is read by every VM on every boot and a compressed cluster is
+# qcow2, with no compression: the base is read by every VM on every boot and a compressed cluster is
 # decompressed on each read. The file is written once and read forever.
 # Written beside the target and renamed over it, never into it.
 #

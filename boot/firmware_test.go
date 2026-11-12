@@ -30,21 +30,19 @@ import (
 // (qemu/qboot/write-pointer.patch), and this asserts it: the table published and a restored
 // guest reseeded.
 //
-// The initrd is not a release artefact: SPIN_PROBE_INITRD's, or boot/probeinit built into one
-// (probe_initrd_test.go):
+// The initrd is diagnostic input, not a release artefact, because what runs as PID 1 is not
+// this repository's business: SPIN_PROBE_INITRD's, or boot/probeinit built into one
+// (probe_initrd_test.go). Its /init must mount proc, print any dmesg line matching vmgenid,
+// print SPIN-READY, stay alive, and keep printing new dmesg output so a reseed after restore is
+// visible.
 //
 //	SPIN_FIRMWARE_PROBE=1        run at all
-//	SPIN_PROBE_INITRD=<cpio>     a diagnostic initrd instead of probeinit's; see below
+//	SPIN_PROBE_INITRD=<cpio>     a diagnostic initrd instead of probeinit's
 //
 // Both firmwares are in the tree's qemu/: bios-256k.bin, the SeaBIOS QEMU ships, and qboot.bin,
 // built beside it with qemu/qboot/'s patches. SPIN_QBOOT names another qboot to try.
 // A relative path there resolves against this package's directory and not the repository
 // root, so `_output/...` on the command line looks right and points at boot/_output.
-//
-// The initrd is diagnostic input because what runs as PID 1 is not this repository's
-// business. Its /init must mount proc, print any dmesg line matching vmgenid, print
-// SPIN-READY, stay alive, and keep printing new dmesg output so a reseed after restore is
-// visible.
 func TestFirmwareRuns(t *testing.T) {
 	if os.Getenv("SPIN_FIRMWARE_PROBE") == "" {
 		t.Skip("set SPIN_FIRMWARE_PROBE=1: this boots dozens of VMs")
@@ -70,10 +68,6 @@ func TestFirmwareRuns(t *testing.T) {
 		t.Logf("qboot, no vmgenid: %.1f ms to SPIN-READY", ms)
 	}
 
-	// And it publishes vmgenid's table and survives a restore with the guest noticing. The
-	// reseed is the point of vmgenid; a firmware that boots and loses it is worse than one that
-	// does not boot, because nothing says so. Stock qboot is that firmware - its linker loader
-	// stops on WRITE_POINTER - which is what the patch it is built with is for.
 	p.mustPublishVMGenID(t)
 
 	// SeaBIOS is kept as the fallback a machine can be told to boot (--bios bios-256k.bin),
@@ -94,8 +88,7 @@ type probe struct {
 	n                                  int
 }
 
-// vm is one QEMU, and the socket paths are numbered because a probe starts dozens and a
-// reused path is a QMP connection to the previous one's corpse.
+// vm is one QEMU.
 type vm struct {
 	cmd    *exec.Cmd
 	stdout *os.File
@@ -106,6 +99,8 @@ type vm struct {
 
 func (p *probe) start(t *testing.T, variant string, gen bool, incoming, kernel, initrd, cpu string) *vm {
 	t.Helper()
+	// Numbered: a probe starts dozens, and a reused path is a QMP connection to the previous
+	// one's corpse.
 	p.n++
 	qmp := filepath.Join(p.dir, fmt.Sprintf("qmp-%d.sock", p.n))
 
@@ -242,8 +237,8 @@ func (p *probe) mustPublishVMGenID(t *testing.T) {
 	t.Log("restored guest reseeded: the WRITE_POINTER path carries the GUID")
 }
 
-// A QMP client small enough to read: connect, swallow the greeting, negotiate, and send
-// commands one at a time. No pipelining, because every call here is followed by a decision.
+// qmp sends commands one at a time, with no pipelining: every call here is followed by a
+// decision.
 type qmp struct {
 	conn net.Conn
 	enc  *json.Encoder

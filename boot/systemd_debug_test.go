@@ -92,14 +92,14 @@ WantedBy=multi-user.target
 	reportSystemd(t, console, top, minGap)
 }
 
+// "Vacuuming done, freed 0B of archived journals from …" — anything but 0B is loss.
+var reVacuumed = regexp.MustCompile(`Vacuuming done, freed ((?:[1-9][0-9]*(?:\.[0-9]+)?)[KMGT]?i?B)`)
+
 // journalctl -o short-monotonic: "[    2.123456] hostname systemd[1]: message".
 //
 // The pid is required, and that is the whole point of the pattern: the kernel's own lines
 // come through as "hostname kernel: message" with no pid, so requiring one is what keeps a
 // kernel message from being counted as a process that spent time.
-// "Vacuuming done, freed 0B of archived journals from …" — anything but 0B is loss.
-var reVacuumed = regexp.MustCompile(`Vacuuming done, freed ((?:[1-9][0-9]*(?:\.[0-9]+)?)[KMGT]?i?B)`)
-
 var reJournal = regexp.MustCompile(`^\[\s*(\d+)\.(\d+)\]\s+\S+\s+([a-zA-Z0-9@._:\\-]+)\[\d+\]:\s*(.*)$`)
 
 func reportSystemd(t *testing.T, console string, top int, minGap float64) {

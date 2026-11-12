@@ -38,7 +38,7 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
 # qemu-utils and not this repository's own qemu-img: the image build would otherwise depend
 # on the QEMU build, which is tens of minutes of compiling to write one qcow2 header. The
 # format is not version-sensitive in the direction that matters — an image written by
-# Ubuntu's qemu-img is read by ours — and `task verify:image` proves it by booting one.
+# Ubuntu's qemu-img is read by ours.
 RUN --mount=type=cache,sharing=locked,id=image-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=image-aptcache,target=/var/cache/apt \
     apt-get update && apt-get install --no-install-recommends -y \

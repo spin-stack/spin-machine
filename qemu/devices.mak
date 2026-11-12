@@ -1,11 +1,11 @@
 # The device set QEMU is built with, passed as `--with-devices-x86_64=spin`.
 #
 # There is one copy of this list, and there has to be. A device set is part of what a
-# machine *is*: two of them is two machines that a template cannot be moved between, and
+# machine *is*: two of them is two machines that a checkpoint cannot be moved between, and
 # nothing says so at run time.
 #
 # A file and not a `sed`/`echo >>` over the source tree, because that tree lives in a
-# BuildKit cache mount keyed by version alone: an edit made there survives every later
+# BuildKit cache mount that outlives the build: an edit made there survives every later
 # build, including ones meant to undo it, and — worse — it is applied inside the
 # `if [ ! -f config.status ]` branch, so whether the tree being compiled is the tree
 # upstream shipped depends on whether some earlier build happened to configure. This file
@@ -16,11 +16,11 @@
 # The obvious alternative is to include upstream's default.mak and switch off some forty
 # symbols. That is a denylist, and it loses by construction: it can only remove what somebody thought to
 # name, and every QEMU release adds devices that arrive switched on. The binary it produced
-# binary it produces can instantiate ich9-ahci, ide-hd, sb16, isa-fdc, isa-parallel, VGA,
+# could instantiate ich9-ahci, ide-hd, sb16, isa-fdc, isa-parallel, VGA,
 # virtio-vga, vfio-pci, intel-iommu and amd-iommu — audited on a shipped binary with
 # `-device help`, not read off a file like this one.
 #
-# Now the build is configured `--without-default-devices`, which makes meson run
+# The build is configured `--without-default-devices`, which makes meson run
 # scripts/minikconf.py with `--allnoconfig` instead of `--defconfig`: nothing is on unless
 # it is named here or `select`ed by something that is. What that changed, resolved with
 # minikconf before any build was attempted:
@@ -38,9 +38,8 @@
 # them, which is the same position the four ISA devices were in before and is why the
 # machine string carries sata=off.
 #
-# MICROVM was kept here until today on the grounds that it "costs nothing and is the obvious
-# next experiment for boot time". That experiment was run on 2026-09-10 and rejected:
-# microvm has no ACPI CPU hotplug, which this machine requires. It goes with the rest.
+# MICROVM is out: tried for boot time on 2026-09-10 and rejected, because microvm has no ACPI
+# CPU hotplug, which this machine requires.
 #
 # ## The rule for this file
 #
@@ -72,12 +71,10 @@
 # CONFIG_VHOST_NET is not here and is not missing: it comes from `--enable-vhost-net` at
 # configure (meson.build sets it from have_vhost_net), not from the device tree.
 
-# --- the board ---------------------------------------------------------------------------
 # q35 is the only machine started here. It brings the ICH9 southbridge, the ISA bus, the
 # ACPI PM object, the RTC, the IOAPIC and fw_cfg — none of which is separable from it.
 CONFIG_Q35=y
 
-# --- the devices a VM gets -----------------------------------------------------------------
 CONFIG_VIRTIO_PCI=y
 CONFIG_VIRTIO_BLK=y
 CONFIG_VIRTIO_NET=y
@@ -100,8 +97,7 @@ CONFIG_ACPI_VMGENID=y
 # extensions the host built.
 CONFIG_VIRTIO_SCSI=y
 
-# --- the console ---------------------------------------------------------------------------
-# One 16550 on ttyS0, which is where the kernel prints and where a debug boot's login lives.
+# One 16550 on ttyS0, which is where the kernel prints and the serial login lives.
 # virtio-serial is deliberately absent: nothing in this repository or in the code that drives
-# it ever attached a virtconsole, and the build asserted one existed until today.
+# it ever attached a virtconsole.
 CONFIG_SERIAL_ISA=y

@@ -5,7 +5,7 @@ name: Release
 # CalVer — v20260909.01 — because that is what a release of this repository is: the machine
 # as it stood on a date. There is no API here to promise compatibility about, and the one
 # thing a version could promise — that checkpoints still resume — is decided by the
-# fingerprint of the artefacts and not by a number anybody chose. A major version bump
+# fingerprint and not by a number anybody chose. A major version bump
 # would say something this repository cannot mean.
 #
 # The `.01` is the run within the day, because two releases on one day is normal when a
@@ -29,12 +29,9 @@ permissions:
   # this ref, which is what a machine that takes the release holds its files to.
   id-token: write
 
-# One release at a time, across every ref, and not per-ref. Per-ref serialises two runs on
-# the same tag and nothing else: a workflow_dispatch on main and a tag push are different
-# refs, so both count the tags already taken today, both generate .01, and the loser finds
-# out at `git tag`, after the whole build. The version is decided at the start of a run and
-# pushed at the end, so that window is the whole build, and there is no reason to build two
-# releases at once anyway.
+# One release at a time. The version is decided at the start of a run by counting the tags
+# already taken today and pushed at the end, so two runs at once both generate .01 and the
+# loser finds out at `git tag`, after the whole build.
 concurrency:
   group: release
   cancel-in-progress: false

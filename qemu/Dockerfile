@@ -1,11 +1,5 @@
 # The QEMU this machine runs on. One build, for every consumer, and statically linked.
 #
-# One and not several, and the reason is not disk. `machine.Spec.Fingerprint` hashes this
-# binary's *contents* into the identity that decides whether a VM may resume from a
-# checkpoint, so two binaries are two machines and a checkpoint taken on one is undefined on
-# the other. A second build of "the same" QEMU with one flag moved is a second machine that
-# looks identical in a file listing.
-#
 # ## Static, and why that is worth a different distribution
 #
 # A dynamically linked QEMU is not one artefact, it is an artefact plus the set of
@@ -66,9 +60,7 @@ FROM ${ALPINE_IMAGE} AS builder
 ARG QEMU_VERSION
 # The tarball this build is made of, by content.
 #
-# https is a claim about who you are talking to, not about what they sent, and this
-# download is the one input to the machine that comes from outside and is not read from a
-# file in this repository. Without the check, an archive that served a different tarball —
+# https is a claim about who you are talking to, not about what they sent. Without the check, an archive that served a different tarball —
 # or a cache mount holding a truncated one from an interrupted build — is compiled and
 # shipped, and the first sign is a fingerprint nobody can explain.
 #
@@ -302,13 +294,13 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
 # which 317 MB is edk2 for aarch64, arm, riscv and loongarch, in a build whose target list
 # is x86_64-softmmu — and it was being copied into the image and out again on every build.
 #
-# Five files, and each is here because something stops without it:
+# Five files:
 #   pvh.bin        the guest kernel is an ELF with Xen PVH notes and QEMU enters it through
 #                  this ROM. No real mode, no bzImage protocol, no bootloader, no UEFI.
 #                  Missing, it fails as a rom-open error that reads like a backend bug.
 #   kvmvapic.bin   loaded by the KVM accelerator on a q35.
-#   bios.bin       the SeaBIOS payload the machine is built around; bios-256k.bin is what
-#                  q35 actually loads.
+#   bios.bin,
+#   bios-256k.bin  SeaBIOS, kept beside qboot to compare the two (`--bios bios-256k.bin`).
 #   efi-virtio.rom the option ROM of the one NIC this build keeps. A device model without
 #                  its ROM does not slow a VM down, it stops it starting — `failed to find
 #                  romfile`, at realize, before any guest code runs.
@@ -388,20 +380,7 @@ RUN for b in /opt/qemu/bin/qemu-system-x86_64 /opt/qemu/bin/qemu-img \
     done && \
     echo "OK: every binary is statically linked"
 
-# ============================================
-# Runtime image
-# ============================================
-#
-# Two binaries and five files on a base that exists only so a human can open a shell in it
-# and look around. There are no libraries to install: that is the whole difference static
-# linking makes here. An Ubuntu base with a hand-written apt list would have to be kept in
-# step with what the builder links against, and the way that is found to be wrong is a CI
-# run.
-# ============================================
-# qboot: the BIOS this machine boots with
-# ============================================
-#
-# QEMU's SeaBIOS is built for every guest a PC can run; this machine boots one Linux kernel
+# qboot, the BIOS this machine boots with. QEMU's SeaBIOS is built for every guest a PC can run; this machine boots one Linux kernel
 # through PVH and nothing else, and qboot is a firmware for exactly that. Measured on the lab
 # runner, 20 boots interleaved (2026-09-29): 121.9 -> 114.8 ms p50 to a diagnostic init, and
 # report's whole matrix boots on it. Stock qboot cannot run this machine: its ACPI linker
@@ -487,6 +466,11 @@ RUN set -eux; \
     grep -q 'setup_mtrr();' src/main.c || { echo "the MTRR patch is not in the tree that was compiled" >&2; exit 1; }; \
     sha256sum /build/qboot.bin
 
+# The runtime image: the binaries and the firmware on a base that exists only so a human can
+# open a shell in it and look around. There are no libraries to install: that is the whole
+# difference static linking makes here. An Ubuntu base with a hand-written apt list would have
+# to be kept in step with what the builder links against, and the way that is found to be wrong
+# is a CI run.
 FROM ${ALPINE_IMAGE} AS runtime
 
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
@@ -502,9 +486,7 @@ RUN /usr/local/bin/qemu-system-x86_64 --version && /usr/local/bin/qemu-img --ver
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
 
-# ============================================
-# Extract stage: the tree onto the host (_output/)
-# ============================================
+# The tree onto the host (_output/).
 FROM scratch AS extract
 
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64

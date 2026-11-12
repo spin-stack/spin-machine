@@ -123,10 +123,6 @@ tasks:
     cmds:
       - '{{.TASK_EXE}} --list'
 
-  # ==========================================================================
-  # Build
-  # ==========================================================================
-
   apk:lock:
     desc: Pin every package QEMU's and e2fsprogs' builders install (each part's apk.list) at what the pinned Alpine's mirror has today, into its apk.lock.
     # A fresh install of the list on the pinned Alpine, its database read back: the versions the
@@ -168,10 +164,6 @@ tasks:
     cmds:
       - mkdir -p {{.OUTPUT_ABS}}/bin
       - CGO_ENABLED=0 go build -ldflags '-s -w' -o {{.OUTPUT_ABS}}/bin/spin-machine ./cmd/spin-machine
-
-  # ==========================================================================
-  # Verify
-  # ==========================================================================
 
   test:
     desc: Test the machine definition, under the race detector, with its coverage in coverage.out and held to a floor.
@@ -344,15 +336,11 @@ tasks:
 
   fingerprint:
     desc: >-
-      Print this machine's identity (machine.Spec.Fingerprint): the files a guest runs, by
-      content, and the arguments that decide its shape.
+      Print this machine's identity (machine.Spec.Fingerprint): its machine type, shape,
+      devices and the BIOS's size.
     deps: [tools]
     cmds:
       - '{{.OUTPUT_ABS}}/bin/spin-machine fingerprint --release {{.OUTPUT_ABS}} {{.CLI_ARGS}}'
-
-  # ==========================================================================
-  # Release
-  # ==========================================================================
 
   osv:
     desc: >-
@@ -530,10 +518,6 @@ tasks:
         git tag "$VERSION"
         git push origin "$VERSION"
 
-  # ==========================================================================
-  # Trying the machine
-  # ==========================================================================
-
   shell:
     desc: >-
       Boot this machine and get a shell inside the base image, to see how it feels and what it
@@ -631,11 +615,7 @@ tasks:
         SPIN_REPORT_ONLY='{{.ONLY}}' SPIN_REPORT_FLAGS='{{.FLAGS}}' REPS={{.REPS}}
         go test ./boot/ -run '^TestReport$' -count=1 -v -timeout 6h
 
-  # ==========================================================================
-  # The KVM runner: what lab.yml and report.yml do around a target
-  # ==========================================================================
-  #
-  # In their order. What the dispatch asked for comes in the job's environment (RELEASE,
+  # The KVM runner: what lab.yml and report.yml do around a target, in their order. What the dispatch asked for comes in the job's environment (RELEASE,
   # EXPERIMENT, KERNEL_RUN, KERNEL_RUN_C, QEMU_RUN, VARIANT, VARS; VERSION for a report), and what
   # one step finds reaches the next through $GITHUB_ENV.
 
@@ -847,10 +827,6 @@ tasks:
         gh release view "$VERSION" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md
         { echo; cat compare.md; } >> notes.md
         gh release edit "$VERSION" -R "$GITHUB_REPOSITORY" --notes-file notes.md
-
-  # ==========================================================================
-  # Keeping the pins and the tree
-  # ==========================================================================
 
   versions:
     desc: Say which of versions.yaml's pins are behind their upstream (exits 1 when any is).

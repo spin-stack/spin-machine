@@ -63,13 +63,10 @@ const (
 	slotNICBase = 0x10
 	slotNICMax  = 0x19
 
-	// The SCSI controller disks that arrive while the machine runs are added to. Taken
-	// off the top of the NIC range, so no slot below it moved; ten NICs is still more
-	// than anything asks for. 0x1b-0x1d are free.
+	// The SCSI controller disks that arrive while the machine runs are added to.
+	// 0x1b-0x1d are free.
 	slotHotplug = 0x1a
 
-	// Taken off the top of the NIC range rather than inserted anywhere earlier, so
-	// no existing device was renumbered.
 	slotMem = 0x1e
 )
 
@@ -85,7 +82,6 @@ const (
 	MaxHotplugDisks = 256
 )
 
-// hotplugController is the virtio-scsi controller's id; its bus is hotplugBus.
 const (
 	hotplugController = "scsi0"
 	hotplugBus        = hotplugController + ".0"
@@ -196,7 +192,7 @@ type Disk struct {
 //
 // JSON, not key=value: "no backing" is JSON null, which key=value cannot say — backing=null
 // names a node called null — and an opaque path needs no comma escaping.
-func (d Disk) chainArgs(i int) []string {
+func (d Disk) chainArgs(i int) ([]string, error) {
 	nodeName := func(j int) string {
 		if j == 0 {
 			return fmt.Sprintf("blk%d", i)
@@ -245,15 +241,22 @@ func (d Disk) chainArgs(i int) []string {
 		}
 		switch {
 		case j < len(d.Chain)-1:
-			// A node name this function made, ASCII with nothing to escape.
-			format.Backing = json.RawMessage(`"` + nodeName(j+1) + `"`)
+			format.Backing = nodeName(j + 1)
 		case img.Format != "raw":
 			// Or QEMU opens whatever the header names.
 			format.Backing = json.RawMessage("null")
 		}
-		args = append(args, "-blockdev", encodeNode(file), "-blockdev", encodeNode(format))
+		fileJSON, err := json.Marshal(file)
+		if err != nil {
+			return nil, fmt.Errorf("encoding %s's file node: %w", node, err)
+		}
+		formatJSON, err := json.Marshal(format)
+		if err != nil {
+			return nil, fmt.Errorf("encoding %s's format node: %w", node, err)
+		}
+		args = append(args, "-blockdev", string(fileJSON), "-blockdev", string(formatJSON))
 	}
-	return args
+	return args, nil
 }
 
 // fileNode and formatNode are the two -blockdev nodes of one chain image. Structs and
@@ -284,17 +287,7 @@ type formatNode struct {
 	// Backing has three states and a pointer has two: absent (a raw image, which has
 	// no backing option at all), null (the last image, which must not follow its
 	// header) and a node name.
-	Backing json.RawMessage `json:"backing,omitempty"`
-}
-
-// encodeNode is a node as QEMU reads it. json.Marshal fails only for a value it cannot
-// represent — a channel, a function, a cycle, a RawMessage that is not JSON — and these
-// nodes hold strings, bools and the RawMessages chainArgs writes, so there is no error
-// to return: a signature that carried one would make every caller handle a case that
-// cannot happen.
-func encodeNode(n any) string {
-	b, _ := json.Marshal(n)
-	return string(b)
+	Backing any `json:"backing,omitempty"`
 }
 
 // driveArg is disk i as one -drive, for a disk given by Path: QEMU opens the image
@@ -303,9 +296,7 @@ func encodeNode(n any) string {
 // aio=io_uring, and QEMU is built with it for this reason. The default is
 // aio=threads, which hands every request to a worker pool and pays a
 // context switch each way; io_uring submits and completes in batches
-// through one ring shared with the kernel. It was compiled in and never
-// asked for, which is the worst of both — the cost of the dependency
-// without the benefit.
+// through one ring shared with the kernel.
 //
 // discard=unmap lets the guest's TRIM reach the image, so a qcow2 overlay
 // gives its blocks back when files are deleted inside the VM instead of
@@ -429,7 +420,6 @@ func (m Monitor) validate() error {
 
 // Spec is one virtual machine.
 type Spec struct {
-	// The files whose contents define the machine, with the firmware below (BIOS).
 	QEMU   string
 	Kernel string
 	Initrd string
@@ -440,8 +430,8 @@ type Spec struct {
 	Firmware string
 
 	// BIOS is the firmware the machine runs, a file in Firmware: DefaultBIOS when
-	// empty. Part of the machine, so its contents are in the fingerprint - it runs
-	// in the guest, and its size is the size of the ROM a saved machine carries.
+	// empty. Its size is in the fingerprint: it is the size of the ROM a saved
+	// machine carries.
 	// SeaBIOS (bios-256k.bin) is beside it, for comparing the two.
 	BIOS string
 
@@ -684,7 +674,6 @@ func (s Spec) Shape() Shape {
 	}
 }
 
-// accel is the accelerator this spec asks for, with the empty default spelt out.
 func (s Spec) accel() string {
 	if s.Accel == "" {
 		return "kvm"
@@ -785,9 +774,7 @@ func smpArg(bootCPUs, maxCPUs int) string {
 	return fmt.Sprintf("%d", bootCPUs)
 }
 
-// memoryArg formats -m.
-//
-// No slots=, and that is the change: slots are ACPI DIMM sockets, and this
+// memoryArg is -m with no slots=: slots are ACPI DIMM sockets, and this
 // machine plugs no DIMMs. maxmem on its own is the address space reserved for
 // memory devices, which is what virtio-mem needs and all it needs — verified by
 // starting a machine with maxmem and no slots.
@@ -833,9 +820,6 @@ func (s Spec) validate() error {
 	case s.Memory.MaxMB != 0 && s.Memory.MaxMB < s.Memory.SizeMB:
 		return fmt.Errorf("Memory.MaxMB %d is below Memory.SizeMB %d",
 			s.Memory.MaxMB, s.Memory.SizeMB)
-	// The two forms of -incoming are one flag, and QEMU takes it once. A spec carrying
-	// both is a caller that has not decided whether the source is named at exec time or
-	// over QMP afterwards, and guessing for them is how a VM restores from the wrong one.
 	case s.Memory.SizeMB < 1:
 		return fmt.Errorf("memory is %d MB", s.Memory.SizeMB)
 	case len(s.Disks) > maxDisks:
@@ -984,7 +968,10 @@ func (s Spec) Args() ([]string, error) {
 	args = appendChipset(args)
 	args = s.appendBoot(args)
 	args = s.appendDevices(args)
-	args = s.appendDisks(args)
+	args, err := s.appendDisks(args)
+	if err != nil {
+		return nil, err
+	}
 	args = s.appendNICs(args)
 	args = s.appendConsole(args)
 	args = s.appendMonitors(args)
@@ -992,11 +979,6 @@ func (s Spec) Args() ([]string, error) {
 	args = s.appendIncoming(args)
 	return args, nil
 }
-
-// The append functions below each add one part of the machine to a command line, and
-// Args calls them in a fixed order so that the same spec is the same command line, byte
-// for byte. Appending into one slice rather than returning a slice each keeps the
-// command line in one backing array rather than one per part.
 
 // appendChipset is the chipset's globals and what a reset does, which no spec changes.
 func appendChipset(args []string) []string {
@@ -1107,10 +1089,14 @@ func (s Spec) appendDevices(args []string) []string {
 }
 
 // appendDisks is each disk, by path or as a chain, on its fixed slot.
-func (s Spec) appendDisks(args []string) []string {
+func (s Spec) appendDisks(args []string) ([]string, error) {
 	for i, d := range s.Disks {
 		if len(d.Chain) != 0 {
-			args = append(args, d.chainArgs(i)...)
+			chain, err := d.chainArgs(i)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, chain...)
 		} else {
 			args = append(args, "-drive", d.driveArg(i))
 		}
@@ -1121,7 +1107,7 @@ func (s Spec) appendDisks(args []string) []string {
 		}
 		args = append(args, "-device", dev)
 	}
-	return args
+	return args, nil
 }
 
 // appendNICs is each NIC and its TAP backend, on its fixed slot.
@@ -1211,7 +1197,7 @@ func (s Spec) appendIncoming(args []string) []string {
 // DefaultBIOS is the firmware a machine runs when Spec.BIOS names none: qboot with
 // WRITE_POINTER, built beside QEMU (qemu/qboot/). 7.14 ms faster than SeaBIOS to a guest's init
 // on the lab runner (2026-09-29, 20 boots interleaved), with vmgenid's table published and a
-// restored guest reseeded, and report's whole matrix booting on it.
+// restored guest reseeded.
 const DefaultBIOS = "qboot.bin"
 
 func (s Spec) bios() string {
@@ -1251,9 +1237,6 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 	// something a caller supplies or a tool prints — a CPU model name, a device
 	// list, a line out of /proc/cpuinfo — and none of them is guaranteed to be
 	// free of the separator. Prefixing costs nothing and removes the question.
-	//
-	// The error is discarded because hash.Hash's Write never returns one; that is
-	// part of the interface's contract.
 	write := func(key, value string) {
 		_, _ = fmt.Fprintf(h, "%s=%d:%s\n", key, len(value), value)
 	}
@@ -1269,7 +1252,6 @@ func (s Spec) fingerprint(hostCPU func() (string, error)) (string, error) {
 	}
 	write("bios-size", strconv.FormatInt(size, 10)) // mutate-exempt: the base the size is written in; any base names each size once
 
-	// The machine's shape, its devices, and the host's own CPU when the guest is being shown it.
 	shape := s.Shape()
 	write("machine", shape.Machine)
 	write("accel", shape.Accel)

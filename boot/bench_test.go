@@ -36,12 +36,6 @@ type variant struct {
 	flags   []string          // spin-machine boot flags after the rest: the feature matrix's axes
 }
 
-// Masks are written into the overlay and never passed as `systemd.mask=`. That parameter is
-// implemented by systemd-debug-generator, which optimize-systemd.sh symlinks to /dev/null,
-// so it parses, reaches /proc/cmdline and does nothing: verified 2026-09-10 with
-// `systemd.mask=chrony.service` on the command line and `systemctl is-active chrony`
-// answering `active`. Anything concluded from that parameter is concluded from a boot in
-// which nothing was masked.
 // A drop-in on the instance beats one on the template, which is where the image's own TERM
 // drop-in lives, so these override it for one boot without touching the image.
 func gettyDropin(body string) map[string]string {
@@ -76,9 +70,8 @@ func gettyDropin(body string) map[string]string {
 // would run two gettys on the one line.
 const gettyEcho = "ExecStart=\nExecStart=-/bin/sh -c 'echo SPIN-READY-login: ; sleep infinity'\n"
 
-// Everything below replaces agetty with an echo, because its unconditional sleep(1) is
-// larger than everything being compared and would hide all of it. `as shipped` is the one
-// row that keeps agetty, so the difference between it and `baseline` is that second.
+// without replaces agetty with an echo, because its unconditional sleep(1) is larger than
+// everything being compared and would hide all of it.
 func without(units ...string) variant {
 	return variant{cpus: "2", memory: "2048", mask: units, files: gettyDropin(gettyEcho)}
 }
@@ -110,8 +103,7 @@ var variants = []variant{
 // kernelB is the kernel SPIN_KERNEL_B names, resolved, or "" when it names none. A test
 // that has one adds it as a row interleaved with the rest rather than run as a second pass,
 // which is the only way to compare two kernel configurations on a host that is not the same
-// host from one minute to the next: three consecutive runs of one kernel read 59.5, 96.8
-// and 167.7 ms.
+// host from one minute to the next.
 //
 // Not a hard-coded path, because a kernel built from a changed config is not in this
 // repository and a row naming a file nobody has fails for everyone who did not build it.
@@ -136,11 +128,6 @@ func kernelB(t *testing.T) string {
 // Interleaved (A B C A B C …) rather than in blocks, because the host is shared with
 // whatever else is running on it: a block schedule gives one variant all of a slow minute
 // and reads it as a regression. Every variant sees the same minutes.
-//
-// It is a test rather than a script for the reason the shell version failed — its own
-// per-line stamping loop was slow enough to throttle QEMU's console writes, and reported a
-// boot at 1424 ms that the guest inside it reported at 190 ms. The part that can be wrong
-// that way is boot.Watch, and it has tests that do not need a VM.
 func TestBootCost(t *testing.T) {
 	if os.Getenv("SPIN_BOOT_BENCH") == "" {
 		t.Skip("set SPIN_BOOT_BENCH=1: this boots dozens of VMs and takes minutes")
@@ -345,11 +332,6 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 	}
 	args = append(args, v.flags...)
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
-	// Its own process group, so the machine can be taken down as a whole. spin-machine
-	// execs QEMU in place now, so the pid is QEMU's; the group stays because it is what
-	// makes that not matter. When spin-machine ran QEMU as a child, killing the parent left
-	// the child running: the first version of this left one `qemu-system-x86_64` per boot
-	// alive, each still holding an overlay open.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -360,8 +342,7 @@ func bootOnce(t *testing.T, out string, v variant) boot.Run {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	// t0 before Start, so exec'ing QEMU and the firmware are inside the measurement. They
-	// are what the old harness left out at this end.
+	// t0 before Start, so exec'ing QEMU and the firmware are inside the measurement.
 	t0 := time.Now()
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("launching the machine: %v", err)
@@ -419,6 +400,12 @@ func editOverlay(t *testing.T, overlay string, v variant) {
 	mnt := t.TempDir()
 	mustRun(t, "sudo", "mount", dev, mnt)
 	defer mustRun(t, "sudo", "umount", mnt)
+	// Masks are written into the overlay and never passed as `systemd.mask=`. That parameter is
+	// implemented by systemd-debug-generator, which optimize-systemd.sh symlinks to /dev/null,
+	// so it parses, reaches /proc/cmdline and does nothing: verified 2026-09-10 with
+	// `systemd.mask=chrony.service` on the command line and `systemctl is-active chrony`
+	// answering `active`. Anything concluded from that parameter is concluded from a boot in
+	// which nothing was masked.
 	for _, u := range v.mask {
 		mustRun(t, "sudo", "ln", "-sf", "/dev/null",
 			filepath.Join(mnt, "etc/systemd/system", u))
@@ -572,9 +559,6 @@ func loadNBD() error {
 	return nil
 }
 
-// nbdAppears waits for dev. modprobe returns when the module is loaded, and the device nodes
-// come after it, from udev: on a runner that had never loaded it, qemu-nbd right after modprobe
-// failed on "/dev/nbd0: No such file or directory" with the node there a moment later.
 // connectNBD attaches overlay to an NBD device nobody holds and returns it. Not /dev/nbd0 alone:
 // the devices are the host kernel's, and two lab runners on one host each took nbd0 - the second
 // got "Failed to set NBD socket" and its run failed (2026-09-29). A device is held while its
@@ -605,6 +589,9 @@ func connectNBD(t *testing.T, overlay string) string {
 	return ""
 }
 
+// nbdAppears waits for dev. modprobe returns when the module is loaded, and the device nodes
+// come after it, from udev: on a runner that had never loaded it, qemu-nbd right after modprobe
+// failed on "/dev/nbd0: No such file or directory" with the node there a moment later.
 func nbdAppears(dev string) bool {
 	for range 50 {
 		if _, err := os.Stat(dev); err == nil {

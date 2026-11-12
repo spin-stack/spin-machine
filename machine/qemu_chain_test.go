@@ -47,11 +47,10 @@ func TestAChainOverDescriptorsIsReadWithoutAPathAndSealedUnderAnOverlay(t *testi
 	_ = open(fifo, os.O_RDONLY|syscall.O_NONBLOCK)
 	files = append(files, open(fifo, os.O_WRONLY))
 	socket := qmpSocket(t)
-	listener, err := net.Listen("unix", socket)
+	unix, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	unix := listener.(*net.UnixListener) //nolint:forcetypeassert // Listen("unix") is one
 	monitor, err := unix.File()
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +58,7 @@ func TestAChainOverDescriptorsIsReadWithoutAPathAndSealedUnderAnOverlay(t *testi
 	// QEMU holds the listening socket from here, at the path this test dials: Go unlinks it
 	// on Close unless told not to.
 	unix.SetUnlinkOnClose(false)
-	_ = listener.Close()
+	_ = unix.Close()
 	files = append(files, monitor)
 
 	// Nothing QEMU could open by name is left where the headers say.

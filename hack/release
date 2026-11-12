@@ -3,10 +3,8 @@
 # One tarball, one version: QEMU, its firmware, the kernel, the base image and the tools that
 # make and read its filesystem.
 #
-# Not because it is tidy. `machine.Spec.Fingerprint` hashes by content the files that make a
-# machine - the ones hack/fingerprint-diff names - so a release in which any of them moved is
-# a different machine. Shipping them separately would let them drift apart and leave the
-# last one to notice.
+# Not because it is tidy: the parts are checked together (boot:compat, boot:roms), and shipped
+# separately they could drift apart and leave the last one to notice.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -79,8 +77,8 @@ echo "Firmware:"
 # pvh.bin is how QEMU enters a PVH ELF kernel and there is no other boot path here;
 # efi-virtio.rom is the option ROM of the one NIC the build keeps, and a VM given a
 # virtio-net-pci without it does not start at all.
-# qboot.bin is the BIOS the machine boots with (machine.DefaultBIOS), built beside QEMU with a
-# patches of this repository's; the patches and qboot's licence ship beside it, as the kernel's
+# qboot.bin is the BIOS the machine boots with (machine.DefaultBIOS), built beside QEMU with
+# this repository's patches; the patches and qboot's licence ship beside it, as the kernel's
 # patches ship beside the kernel.
 for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom qboot.bin; do
   require "${OUTPUT_DIR}/qemu/${f}" "${SHARE}/qemu/${f}" "firmware ${f}"
@@ -160,7 +158,7 @@ sed 's/^/  /' "${SHARE}/machine.env"
 # built, from exactly which source, and how to get that source.
 #
 # Written from the same values the build verified, not from a list maintained by hand:
-# the two SHA-256s are checked against the downloaded tarballs during the build, and
+# the SHA-256s are checked against the downloaded tarballs during the build, and
 # packages.txt is generated from the image tree's own dpkg database.
 cat > "${SHARE}/SOURCES" <<SOURCES
 spin-machine ${VERSION}
@@ -286,7 +284,7 @@ rm -rf "${PARTS}"
 #
 # That is what makes the next release able to say whether it breaks this one:
 # hack/fingerprint-diff fetches this file for the previous release and compares the
-# checksums that decide it. Downloading a whole tarball to read a few lines would be a cost
+# fingerprint that decides it. Downloading a whole tarball to read a few lines would be a cost
 # nobody pays, which is another way of saying the comparison would not happen.
 cp "${SHARE}/machine.env" "${OUTPUT_DIR}/release/machine.env"
 

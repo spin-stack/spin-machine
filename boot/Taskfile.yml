@@ -109,8 +109,8 @@ tasks:
   ssh-load:
     desc: >-
       SSH logins into a guest under load: idle, every vCPU busy from a service and from a login
-      session, and memory down to 64 and 16 MiB available, with what the guest was under (PSI)
-      beside each. Needs /dev/kvm and a built release; no sudo. REPS= boots.
+      session, and /tmp filled to its cap, with what the guest was under (PSI) beside each.
+      Needs /dev/kvm and a built release; no sudo. REPS= boots.
     deps: [':tools']
     cmds:
       - SPIN_SSH_LOAD=1 go test ./boot/ -run '^TestSSHUnderLoad$' -count=1 -v -timeout 30m

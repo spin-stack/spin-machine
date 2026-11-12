@@ -10,7 +10,7 @@ import (
 )
 
 // chunks is a reader that hands out exactly the pieces it was given, so a test can decide
-// where the read boundaries fall. Every interesting bug in Watch is about a boundary.
+// where the read boundaries fall.
 type chunks struct {
 	parts []string
 	i     int
@@ -39,9 +39,8 @@ func ticker(t0 time.Time, step time.Duration) func() time.Time {
 	}
 }
 
-// Watch, one console per row. Every interesting bug in it is about where a read
-// boundary falls or when to stop, so each row fixes the reads and the clock: the nth
-// read is stamped at n*step.
+// Every interesting bug in Watch is about where a read boundary falls or when to stop, so
+// each row fixes the reads and the clock.
 func TestWatch(t *testing.T) {
 	const ms = time.Millisecond
 	for _, tc := range []struct {
@@ -83,10 +82,8 @@ func TestWatch(t *testing.T) {
 		at:        map[Phase]time.Duration{Firmware: ms},
 		unreached: []Phase{Usable},
 	}, {
-		// Watch returns the moment until is reached and reads no further. A machine at
-		// a login prompt sends no EOF, so a Watch that keeps reading ends only when
-		// something kills the process — which is what happened: every boot ran to a
-		// 70 s timeout and left QEMU behind, still holding an overlay in /tmp.
+		// A machine at a login prompt sends no EOF, so a Watch that keeps reading ends only
+		// when something kills the process.
 		name:  "it stops at the requested phase",
 		reads: []string{"SeaBIOS\n", "Startup finished\n", "spin login: ", "MORE"},
 		step:  ms, until: Started,
@@ -129,9 +126,6 @@ func TestWatch(t *testing.T) {
 	}
 }
 
-// Nearest-rank, and without reordering the caller's samples: they arrive
-// interleaved across variants and stay in arrival order, which is what makes a run
-// auditable after the fact.
 func TestPercentile(t *testing.T) {
 	five := []time.Duration{50, 10, 40, 20, 30}
 	for _, tc := range []struct {
@@ -143,8 +137,6 @@ func TestPercentile(t *testing.T) {
 	}{
 		{"p0 is the fastest", five, 0, 10, true},
 		{"p50", five, 0.5, 30, true},
-		// ceil(p*N)-1. Indexing p*(N-1) answered the 4th of five here, so the slowest
-		// boot — the one the number exists to expose — could never be reported.
 		{"p95 of five is the slowest", five, 0.95, 50, true},
 		{"p100", five, 1, 50, true},
 		{"past p100 is still the slowest", five, 1.5, 50, true},

@@ -1,37 +1,5 @@
-# A login prompt on the serial console. Shipped, and NOT enabled.
-#
-# Nothing starts this unless something links it into getty.target.wants, which the debug
-# boot does and production does not. That split is the whole point of the file:
-#
-#   - The unit is static configuration and belongs in the image, next to every other unit.
-#   - Enabling it is a decision about one boot, and belongs to whoever made that boot.
-#
-# Production does not want it. This image's systemd is the first process of a workload
-# inside a VM, and the VM's serial port is where the kernel prints and where whoever runs
-# the guest reads its logs. An agetty there would compete for the console with the machine's
-# own log stream, and on a guest given no serial port at all it would fail and retry until
-# systemd gave up.
-#
-# Why this and not the distribution's serial-getty@.service: it carries
-# `BindsTo=dev-%i.device`, and a .device unit exists only if udev announced it. With
-# systemd-udevd masked, enabling serial-getty gets
-# `[DEPEND] Dependency failed for serial-getty@ttyS0.service`, and a drop-in clearing
-# BindsTo does not lift it either. This unit has no device dependency to fail.
-#
-# THAT REASON NO LONGER HOLDS, and it leaves a hole this file is the wrong place to close.
-# udev runs, so serial-getty@ttyS0 works — and systemd-getty-generator instantiates it
-# on its own from console=ttyS0, with nothing in optimize-systemd.sh disabling that
-# generator. So the split this file is built around does not exist: production gets a
-# login prompt on the console it prints its kernel log to, which is what the paragraph above
-# says production must not have, and it gets it without anybody enabling anything.
-#
-# The exposure is a prompt and not a way in — configure-system.sh runs `passwd --lock` on
-# both accounts — so what it costs is the console competing with the log stream, not access.
-# Closing it is a decision, not a cleanup: either mask serial-getty@ttyS0 in the image and
-# keep this unit for debug boots, or drop this unit and accept the distribution's on the
-# console. Whoever decides should also know that whichever unit runs, agetty sleeps one
-# second before its prompt (see machine/cmdline.go) and that Type=idle below holds it until
-# systemd's job queue drains, measured at 25 ms.
+# A login prompt on the serial console. Shipped, and NOT enabled: nothing in this repository
+# links it into getty.target.wants, and serial-getty@ttyS0 is what runs on the console.
 #
 # The port is fixed at ttyS0 rather than templated, because that is the only serial port
 # this machine has (see the QEMU device set).

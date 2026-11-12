@@ -10,10 +10,9 @@
 # pin of a version and rewrites that entry's two lines and nothing else. Nothing is built by a
 # bump. What a bump is then checked with is the entry's note.
 #
-# A bump of qemu, kernel, debian or debian-snapshot is a new machine: a different QEMU binary
-# or vmlinux is a different fingerprint, and every checkpoint in existence stops resuming (see
-# CLAUDE.md, the first rule). The lane that builds it says so on its summary. That is not a
-# reason not to bump; it is a reason for the bump to be its own commit.
+# The fingerprint hashes none of these (see CLAUDE.md, the first rule): a qemu bump keeps the
+# machine type, and a kernel or toolchain bump is every guest's next boot, not a stranded
+# checkpoint. A bump is still its own commit.
 #
 # Each entry:
 #   kind     image:    an OCI image; version its tag, pin its digest. A Docker Hub image is
@@ -87,8 +86,8 @@
   pin: sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308
   track: digest
   note: >-
-    the kernel's toolchain (and qboot's and the floor kernel's), with its packages from
-    debian-snapshot. A new toolchain is a new vmlinux and so a new machine: bump it together
+    the kernel's toolchain (and qboot's), with its packages from
+    debian-snapshot. A new toolchain is a new vmlinux: bump it together
     with debian-snapshot, then `task kernel:build`, and check the vmlinux is still reproducible
     (kernel/Dockerfile, two --no-cache builds) before `task boot:bench`.
 

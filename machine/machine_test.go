@@ -492,9 +492,8 @@ func TestFingerprint(t *testing.T) {
 			s.Firmware = spec(t).Firmware
 		}},
 		{name: "the default BIOS named", same: true, b: func(_ *testing.T, s *Spec) { s.BIOS = DefaultBIOS }},
-		// A guest's state under TCG is not a guest's state under KVM. The binary's
-		// own hash separates them in practice; this holds the shape to it as well, so
-		// the separation does not rest on a caller changing two things at once.
+		// A guest's state under TCG is not a guest's state under KVM, and the
+		// accelerator is in the shape.
 		{name: "emulation", b: func(_ *testing.T, s *Spec) { s.Accel = "tcg" }},
 		// A vsock and a memory ceiling are there on both sides of a restore.
 		{name: "a vsock", b: func(_ *testing.T, s *Spec) { s.VsockCID = 7 }},
@@ -634,9 +633,8 @@ func TestProfilingLeavesTheCallersCmdlineAlone(t *testing.T) {
 }
 
 // validate is the boundary, and every case in it is something that otherwise
-// fails as a guest that boots and finds the world subtly wrong. There was one
-// test for one of them; a case added without a test is a check nobody notices
-// stopped firing.
+// fails as a guest that boots and finds the world subtly wrong. A case added
+// without a test is a check nobody notices stopped firing.
 func TestValidateRefuses(t *testing.T) {
 	for _, tc := range []struct {
 		what   string
@@ -731,8 +729,6 @@ func TestValidateRefuses(t *testing.T) {
 		{"a NIC with no MAC", func(s *Spec) { s.NICs = []NIC{{TapFD: 3}} }},
 		{"a NIC with a MAC that is not one", func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "52:54:00:00:00:01,romfile=x"}} }},
 		{"a NIC with a 64-bit MAC", func(s *Spec) { s.NICs = []NIC{{TapFD: 3, MAC: "02:00:5e:10:00:00:00:01"}} }},
-		// Both forms of -incoming: QEMU takes the flag once, and which source a VM
-		// restores from is not something to guess at on the caller's behalf.
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			s := spec(t)
