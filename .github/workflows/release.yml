@@ -28,6 +28,9 @@ permissions:
   # Keyless signing: cosign asks Sigstore for a short-lived certificate bound to this workflow at
   # this ref, which is what a machine that takes the release holds its files to.
   id-token: write
+  # The BuildKit cache main's lanes write (Taskfile.yml, CACHE_REGISTRY), read here and by compat,
+  # which a called workflow can be granted no more than its caller holds.
+  packages: read
 
 # One release at a time. The version is decided at the start of a run by counting the tags
 # already taken today and pushed at the end, so two runs at once both generate .01 and the
@@ -71,18 +74,24 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # What main's lanes already compiled is read, not compiled again: the BuildKit scopes are the
+      # What main's lanes already compiled is read, not compiled again: the BuildKit caches are the
       # lanes' (CACHE_BACKEND in Taskfile.yml); a cold release compiles QEMU and the kernel, each
       # tens of minutes, which the ceiling above is for.
+      #
       # A builder of its own (the docker-container driver): Docker's default one cannot export its
-      # cache. What it reads and writes is GitHub's cache, in the scopes Taskfile.yml decides
-      # (CACHE_BACKEND=gha), so the runner itself keeps nothing between runs.
+      # cache. What it reads and writes is the cache image in GitHub's registry that Taskfile.yml
+      # names (CACHE_BACKEND=registry), so the runner itself keeps nothing between runs.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # Without this, `--cache-to type=gha` below is a silent no-op: the tokens BuildKit
-      # needs reach JavaScript actions and not `run:` steps. See the long note in qemu.yml.
-      - name: Expose the Actions cache to buildx
-        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      # The cache is one of this repository's packages, and reading it takes a login as much as
+      # writing it does. Without one BuildKit says it could not import the cache, carries on
+      # without it, and the build passes at the cold time.
+      - name: Log in to GitHub Packages
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Two sources, in order: what the caller typed, or a new one for today. The generated form is deliberately not `date +%s` or a commit
       # hash — it has to be readable, sortable, and the same shape as one typed by hand.
@@ -103,11 +112,11 @@ jobs:
       - name: Build the release
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          # The same scopes the per-artefact workflows write on main, decided in
+          # The same caches the per-artefact workflows write on main, decided in
           # Taskfile.yml. That is the whole point of them being named there: a release
           # reads what the lane on main already paid to compile, instead of starting cold
           # because a workflow file spelled the scope differently.
-          CACHE_BACKEND: gha
+          CACHE_BACKEND: registry
           # Reads what main's lanes exported and writes nothing back: a release is built once, and
           # the next one reads main's newer cache, not this. See CACHE_EXPORT in Taskfile.yml.
           CACHE_EXPORT: "false"

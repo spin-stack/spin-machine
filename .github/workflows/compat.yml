@@ -9,8 +9,8 @@ name: Compat
 # On the KVM fleet (spin-stack/ci), because it boots: the newest release is unpacked as the machine
 # before, and the machine here is that tree with this change's QEMU, firmware and kernel built over
 # it - the base image is the release's, since a checkpoint resumes with the disks it was saved
-# with. The builds read the BuildKit cache main's lanes export (CACHE_BACKEND=gha), so a change
-# that leaves QEMU and the kernel alone compiles neither.
+# with. The builds read the BuildKit cache main's lanes export (CACHE_BACKEND=registry), so a
+# change that leaves QEMU and the kernel alone compiles neither.
 #
 # The test holds the promise only where it is made: when the two fingerprints differ the contract
 # moved on purpose, the test says so and passes, and the release notes say it for the fleet.
@@ -39,6 +39,8 @@ on:
 
 permissions:
   contents: read
+  # The BuildKit cache main's lanes write (Taskfile.yml, CACHE_REGISTRY).
+  packages: read
 
 # Per ref and never cancelled: a run on main is a commit somebody needs the answer for, and a
 # release's waits on it. Called from release.yml it is the release's job and takes its group.
@@ -71,17 +73,23 @@ jobs:
       - name: A BuildKit that reads the lanes' cache
         run: go tool task boot:buildkit
 
-      # The tokens `type=gha` needs in a `run:` step; qemu.yml says why.
-      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      # The cache is one of this repository's packages, and reading it takes a login: without one
+      # BuildKit carries on without the cache and compiles QEMU and the kernel cold.
+      - name: Log in to GitHub Packages
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # The guests' vsock transport, loaded and made this user's: a module on the fleet's kernel
       # that nothing loads before the first QEMU opens /dev/vhost-vsock.
       - name: Load vhost_vsock
         run: go tool task vsock
 
-      # Reads the lanes' scopes and writes none back: main's lanes keep them current.
+      # Reads the lanes' caches and writes none back: main's lanes keep them current.
       - name: Build this change's QEMU and kernel, and the tools
-        run: go tool task qemu:build kernel:build tools CACHE_BACKEND=gha CACHE_EXPORT=false
+        run: go tool task qemu:build kernel:build tools CACHE_BACKEND=registry CACHE_EXPORT=false
 
       # The newest release, checked against its sha256 and its signature, as the machine before;
       # this change's machine is the same tree with what was just built in place of its own. The
