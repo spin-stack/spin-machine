@@ -3,7 +3,8 @@ name: Compat
 # Whether a checkpoint the newest release saved resumes on this change's machine, and whether the
 # fingerprint still accounts for every ROM the machine maps (boot:compat, boot:roms): after every
 # change on main to what a resumed guest is loaded into - the machine's definition, QEMU, the
-# kernel, the firmware and their pins - and before every release.
+# kernel, the firmware and their pins - and before every release. And whether that kernel, booted,
+# is locked down (boot:lockdown).
 #
 # On the KVM fleet (spin-stack/ci), because it boots: the newest release is unpacked as the machine
 # before, and the machine here is that tree with this change's QEMU, firmware and kernel built over
@@ -29,6 +30,8 @@ on:
       - kernel/**
       - boot/compat_test.go
       - boot/roms_test.go
+      - boot/lockdown_test.go
+      - boot/testdata/lockdown-check.sh
       - versions.yaml
       - .github/workflows/compat.yml
   workflow_dispatch:
@@ -91,3 +94,9 @@ jobs:
 
       - name: A checkpoint of the release before resumes here
         run: go tool task boot:compat
+
+      # This change's kernel, booted: lockdown at confidentiality that root cannot lower, the BPF
+      # LSM, no /dev/mem or /proc/kcore. kernel/Dockerfile checks the config; this checks the
+      # kernel that came out of it.
+      - name: The kernel is locked down
+        run: go tool task boot:lockdown
