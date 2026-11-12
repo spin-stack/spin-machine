@@ -218,7 +218,7 @@ in_image() { stat_in_image "$1" | grep -q '^Inode:'; }
 
 # /sbin/init is what this image is: a userland whose first process is systemd, and what a
 # boot with `init=/sbin/init` lands on. /bin/sh is what `spin-machine boot --init /bin/sh` runs.
-for f in /sbin/init /bin/sh /bin/bash /usr/bin/docker /usr/local/bin/task; do
+for f in /sbin/init /bin/sh /bin/bash /usr/bin/docker /usr/local/bin/task /usr/bin/bwrap /usr/bin/socat /usr/bin/rg; do
     in_image "$f" || { echo "ERROR: the image has no $f" >&2; exit 1; }
 done
 
