@@ -76,41 +76,42 @@ vars:
   KERNEL_ARCH: x86_64
 
   # Where BuildKit reads and writes its cache: a directory under the repository for a
-  # developer, GitHub's cache service in CI. One name to switch — `CACHE_BACKEND=gha` — and
-  # every scope below is decided here, next to the builds they belong to, rather than as
-  # cache strings pasted into workflow files.
-  #
-  # The scopes are why this is a var and not a string in a workflow. `type=gha` defaults to
-  # the scope `buildkit`, and Docker's own documentation says what that means for a
-  # repository with more than one build: "each build will overwrite the cache of the
-  # previous, leaving only the final cache." The names have to be distinct, and they have to
-  # be the *same* names in the per-artefact workflows and in the release, or a release warms
+  # developer, a cache image in GitHub's registry in CI. One name to switch -
+  # `CACHE_BACKEND=registry` - and every cache below is decided here, next to the builds they
+  # belong to, rather than as cache strings pasted into workflow files. They have to be the
+  # *same* names in the per-artefact workflows, in compat and in the release, or a release warms
   # nothing that the lane on main already paid for.
   #
-  # `gha` needs one thing this file cannot give it — see the note in
-  # .github/workflows/qemu.yml. The variables that authorise a write to the cache service
-  # are not in a plain `run:` step's environment, and without them `--cache-to type=gha` is
-  # accepted, stores nothing, and says nothing.
+  # The registry and not GitHub's Actions cache (`type=gha`), which this was until 2026-11-12,
+  # for two reasons. The fleet's runners (compat) are not GitHub's: runs-on points
+  # ACTIONS_CACHE_URL and ACTIONS_RESULTS_URL at a cache of its own, so `type=gha` there read a
+  # store nobody wrote, and compat compiled QEMU and the kernel cold on every run - six runs
+  # read, not one cached QEMU layer - and a cold QEMU build fails outright once Alpine's mirror
+  # stops serving what qemu/apk.lock pins. And the Actions cache is 10 GB a repository, evicted
+  # least recently used: it stood at 10.36 GB that day, so a lane's layers could go between a
+  # merge and the release that needed them. The registry is read the same way from both kinds
+  # of runner, with a `docker login` and the job's token, and is not evicted.
+  CACHE_REGISTRY: ghcr.io/spin-stack/spin-machine/cache
   CACHE_BACKEND: '{{.CACHE_BACKEND | default "local"}}'
   # Whether a build writes its cache back, and only CI's main needs it to: a pull request's
-  # build, a release and compat read main's scopes, and what they compiled nobody reads after.
+  # build, a release and compat read main's caches, and what they compiled nobody reads after.
   # Exporting cost 88 s of "preparing build cache for export" on a kernel build (2026-09-30),
   # on every PR and dispatch that warmed nothing a release reads. So the lanes export on a push
   # to main, and nothing else does.
   CACHE_EXPORT: '{{.CACHE_EXPORT | default "true"}}'
   BUILDKIT_CACHE_DIR: '{{.ROOT_DIR}}/.cache/buildkit'
 
-  QEMU_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/qemu{{end}}'
-  QEMU_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=qemu,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qemu,mode=max,compression=zstd{{end}}{{end}}'
-  KERNEL_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kernel{{end}}'
-  KERNEL_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=kernel,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kernel,mode=max,compression=zstd{{end}}{{end}}'
-  E2FSPROGS_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/e2fsprogs{{end}}'
-  E2FSPROGS_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=e2fsprogs,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/e2fsprogs,mode=max,compression=zstd{{end}}{{end}}'
+  QEMU_CACHE_FROM: '{{if eq .CACHE_BACKEND "registry"}}type=registry,ref={{.CACHE_REGISTRY}}:qemu{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/qemu{{end}}'
+  QEMU_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "registry"}}type=registry,ref={{.CACHE_REGISTRY}}:qemu,mode=max,image-manifest=true,oci-mediatypes=true{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/qemu,mode=max,compression=zstd{{end}}{{end}}'
+  KERNEL_CACHE_FROM: '{{if eq .CACHE_BACKEND "registry"}}type=registry,ref={{.CACHE_REGISTRY}}:kernel{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/kernel{{end}}'
+  KERNEL_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "registry"}}type=registry,ref={{.CACHE_REGISTRY}}:kernel,mode=max,image-manifest=true,oci-mediatypes=true{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/kernel,mode=max,compression=zstd{{end}}{{end}}'
+  E2FSPROGS_CACHE_FROM: '{{if eq .CACHE_BACKEND "registry"}}type=registry,ref={{.CACHE_REGISTRY}}:e2fsprogs{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/e2fsprogs{{end}}'
+  E2FSPROGS_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "registry"}}type=registry,ref={{.CACHE_REGISTRY}}:e2fsprogs,mode=max,image-manifest=true,oci-mediatypes=true{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/e2fsprogs,mode=max,compression=zstd{{end}}{{end}}'
   # The container that builds the base image. Small — mkosi, qemu-utils — and cached like
   # the rest: uncached, every CI run reinstalls it from the archive before any image work
   # starts.
-  IMAGE_CACHE_FROM: '{{if eq .CACHE_BACKEND "gha"}}type=gha,scope=image{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/image{{end}}'
-  IMAGE_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "gha"}}type=gha,scope=image,mode=max{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/image,mode=max,compression=zstd{{end}}{{end}}'
+  IMAGE_CACHE_FROM: '{{if eq .CACHE_BACKEND "registry"}}type=registry,ref={{.CACHE_REGISTRY}}:image{{else}}type=local,src={{.BUILDKIT_CACHE_DIR}}/image{{end}}'
+  IMAGE_CACHE_TO: '{{if ne .CACHE_EXPORT "false"}}--cache-to {{if eq .CACHE_BACKEND "registry"}}type=registry,ref={{.CACHE_REGISTRY}}:image,mode=max,image-manifest=true,oci-mediatypes=true{{else}}type=local,dest={{.BUILDKIT_CACHE_DIR}}/image,mode=max,compression=zstd{{end}}{{end}}'
 
   # mkosi's package cache, which is not a BuildKit cache because mkosi does not run under
   # BuildKit (see image/Dockerfile). A rebuild of the base image is ~1.5 GB of apt.

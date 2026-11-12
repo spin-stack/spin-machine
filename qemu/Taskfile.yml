@@ -115,7 +115,7 @@ tasks:
           --file qemu/Dockerfile \
           --target runtime \
           --platform linux/amd64 \
-          --cache-from type=gha,scope=qemu \
+          --cache-from type=registry,ref={{.CACHE_REGISTRY}}:qemu \
           $({{.VERSIONS}} args alpine qemu debian debian-snapshot qboot) \
           --build-arg JOBS=4 \
           --label org.opencontainers.image.source=https://github.com/${repo} \

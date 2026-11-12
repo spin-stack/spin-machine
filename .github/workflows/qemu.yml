@@ -91,27 +91,19 @@ jobs:
           cache: true
 
       # A builder of its own (the docker-container driver): Docker's default one cannot export its
-      # cache. What it reads and writes is GitHub's cache, in the scopes Taskfile.yml decides
-      # (CACHE_BACKEND=gha), so the runner itself keeps nothing between runs.
+      # cache. What it reads and writes is the cache image in GitHub's registry that Taskfile.yml
+      # names (CACHE_BACKEND=registry), so the runner itself keeps nothing between runs.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # What makes `--cache-to type=gha` do anything at all.
-      #
-      # BuildKit writes to GitHub's cache service with $ACTIONS_RUNTIME_TOKEN and
-      # $ACTIONS_RESULTS_URL, and those are handed to JavaScript actions, not to `run:`
-      # steps. Docker's documentation is explicit — "If you invoke the `docker buildx`
-      # command manually from an inline step, then the variables must be manually exposed"
-      # — and names this action for it. Every build here runs through `task`, which is a
-      # `run:` step.
-      #
-      # Without it the flags are accepted, nothing is stored, and nothing says so: the
-      # builds pass and take the cold time, every run. That failure is invisible in a log.
-      # Where it shows is `gh api repos/{owner}/{repo}/actions/cache/usage` — a repository
-      # that builds QEMU and a kernel and reports a handful of megabytes is caching neither.
-      #
-      # Remove this step and nothing breaks; everything just gets slow again.
-      - name: Expose the Actions cache to buildx
-        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      # The cache is one of this repository's packages, and reading it takes a login as much as
+      # writing it does. Without one BuildKit says it could not import the cache, carries on
+      # without it, and the build passes at the cold time.
+      - name: Log in to GitHub Packages
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # The pinned version comes from versions.yaml, never from a literal here: two places
       # to bump is how CI and production end up on different QEMUs.
@@ -121,7 +113,7 @@ jobs:
 
       - name: Build QEMU and verify what came out
         env:
-          CACHE_BACKEND: gha
+          CACHE_BACKEND: registry
           CACHE_EXPORT: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: go tool task qemu:build QEMU_JOBS=4
 
@@ -166,20 +158,13 @@ jobs:
 
       # Publishing is for main only: a fork's token cannot write packages, and an unreviewed
       # branch - a pull request, or one dispatched to build a QEMU for the lab - has no
-      # business claiming the version tag.
-      - name: Log in to GitHub Packages
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
+      # business claiming the version tag. The login is the one made for the cache.
+      #
       # The runtime image, tagged with the pinned QEMU version: what `task qemu:fetch` pulls,
       # so CI's argument check runs main's QEMU in seconds instead of compiling it. The
       # binaries are static, so the image around them carries nothing they need. It reads the
-      # builder stage the step above compiled from the `qemu` scope, and writes no cache: that
-      # scope holds these layers already.
+      # builder stage the step above compiled from the `qemu` cache, and writes no cache: that
+      # cache holds these layers already.
       - name: Publish the runtime image
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: go tool task qemu:publish
