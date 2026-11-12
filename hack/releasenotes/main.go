@@ -312,9 +312,18 @@ func (g git) commits(from, to string) ([]commit, error) {
 // versions are versions.yaml's entries at ref, by name; none where the file is not there.
 func (g git) versions(ref string) (map[string]versions.Entry, error) {
 	out := map[string]versions.Entry{}
+	// ls-tree and not show's error: a tree from before versions.yaml lists nothing, and a ref
+	// git cannot read is still an error.
+	listed, err := g.run("ls-tree", "--name-only", ref, "--", "versions.yaml")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(listed) == "" {
+		return out, nil
+	}
 	body, err := g.run("show", ref+":versions.yaml")
 	if err != nil {
-		return out, nil //nolint:nilerr // a tree from before versions.yaml pins nothing to compare
+		return nil, err
 	}
 	v, err := versions.Parse([]byte(body))
 	if err != nil {

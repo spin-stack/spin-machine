@@ -45,5 +45,5 @@ func TestLogindSessions(t *testing.T) {
 	}
 	root.write("/logind-session.sh", string(content))
 	oneshotAtBoot(t, root, "logind-check", "logind-check.sh", "Environment=LOGIND_EXPECT="+expectedState)
-	t.Log(checkOnConsole(t, out, rel, root, "LOGIND_CHECK_OK", "LOGIND_CHECK_FAILED"))
+	t.Log(checkOnConsole(t, rel, root, "LOGIND_CHECK_OK", "LOGIND_CHECK_FAILED"))
 }

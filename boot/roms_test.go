@@ -93,8 +93,8 @@ func ramBlocks(t *testing.T, out string, flags ...string) string {
 		t.Fatalf("starting QEMU: %v", err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	said := func() []byte { b, _ := os.ReadFile(log.Name()); return b }
-	q := dial(t, socket, &vm{out: said()})
+	said := func() string { b, _ := os.ReadFile(log.Name()); return string(b) }
+	q := dial(t, socket, said)
 	defer q.close()
 	var text string
 	if err := json.Unmarshal(q.do(t, "human-monitor-command", map[string]any{"command-line": "info ramblock"}), &text); err != nil {

@@ -215,7 +215,7 @@ func (p *probe) mustPublishVMGenID(t *testing.T) {
 	t.Logf("qboot, vmgenid on: %.1f ms to SPIN-READY, table present", ms)
 
 	state := filepath.Join(p.dir, "state")
-	q := dial(t, v.qmp, v)
+	q := dial(t, v.qmp, func() string { return string(v.out) })
 	q.do(t, "stop", nil)
 	q.do(t, "migrate", map[string]any{"uri": "file:" + state})
 	q.until(t, "query-migrate", "completed", 20*time.Second)
@@ -224,7 +224,7 @@ func (p *probe) mustPublishVMGenID(t *testing.T) {
 
 	r := p.start(t, "qboot", withVMGenID, state, "", "", "")
 	defer r.close()
-	q = dial(t, r.qmp, r)
+	q = dial(t, r.qmp, func() string { return string(r.out) })
 	defer q.close()
 	// cont only once the incoming migration is done: a cont into a machine still loading
 	// state is a race that passes most of the time.
@@ -238,42 +238,51 @@ func (p *probe) mustPublishVMGenID(t *testing.T) {
 }
 
 // qmp sends commands one at a time, with no pipelining: every call here is followed by a
-// decision.
+// decision. Each read has 30 s, the greeting and every command alike, so how long a caller
+// waits for a state is its own timeout and not the connection's age.
 type qmp struct {
 	conn net.Conn
 	enc  *json.Encoder
 	dec  *json.Decoder
 }
 
-func dial(t *testing.T, socket string, v *vm) *qmp {
+// dial connects to QEMU's monitor and negotiates it. said is what QEMU has printed so far,
+// read when a failure needs it.
+func dial(t *testing.T, socket string, said func() string) *qmp {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		conn, err := net.Dial("unix", socket)
 		if err == nil {
-			if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
-				t.Fatal(err)
-			}
 			q := &qmp{conn: conn, enc: json.NewEncoder(conn), dec: json.NewDecoder(conn)}
+			q.extend(t)
 			var greeting struct {
 				QMP *struct{} `json:"QMP"`
 			}
 			if err := q.dec.Decode(&greeting); err != nil {
-				t.Fatalf("reading the QMP greeting: %v\n\nQEMU said:\n%s", err, tail(v.out, 800))
+				t.Fatalf("reading the QMP greeting: %v\n\nQEMU said:\n%s", err, tail([]byte(said()), 800))
 			}
 			q.do(t, "qmp_capabilities", nil)
 			return q
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("QEMU never answered on %s: %v\n\nQEMU said:\n%s",
-				filepath.Base(socket), err, tail(v.out, 800))
+				filepath.Base(socket), err, tail([]byte(said()), 800))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
+func (q *qmp) extend(t *testing.T) {
+	t.Helper()
+	if err := q.conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (q *qmp) do(t *testing.T, cmd string, args map[string]any) json.RawMessage {
 	t.Helper()
+	q.extend(t)
 	req := map[string]any{"execute": cmd}
 	if args != nil {
 		req["arguments"] = args
@@ -365,9 +374,6 @@ func firmwareFile(t *testing.T, name, dflt string) string {
 func envFile(t *testing.T, name string) string {
 	t.Helper()
 	v := os.Getenv(name)
-	if v == "" {
-		t.Skipf("%s is unset; this probe compares firmware that no release carries", name)
-	}
 	abs, err := filepath.Abs(v)
 	if err != nil {
 		t.Fatalf("resolving %s=%q: %v", name, v, err)

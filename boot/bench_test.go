@@ -76,8 +76,6 @@ func without(units ...string) variant {
 	return variant{cpus: "2", memory: "2048", mask: units, files: gettyDropin(gettyEcho)}
 }
 
-func labelled(l string, v variant) variant { v.label = l; return v }
-
 // Rows measured against baseline and dropped once they had answered, each with what it found:
 //
 //   - logind out of the boot, and logind put back: 24 ms, now the image's (10-seats.conf,
@@ -94,8 +92,8 @@ func labelled(l string, v variant) variant { v.label = l; return v }
 var variants = []variant{
 	// The image as it is, with a real agetty rather than the echo every row below uses. It
 	// reads about a second slower and that is agetty's own sleep, not a fault to hunt: the
-	// terminfo timeout found on spin-machine-console.service was tried here too and
-	// TERM=dumb on this unit changes nothing (1229 against 1232, 12 boots, 2026-09-26).
+	// terminfo timeout that TERM=dumb answers was tried here too, and TERM=dumb on this unit
+	// changes nothing (1229 against 1232, 12 boots, 2026-09-26).
 	{label: "as shipped", cpus: "2", memory: "2048"},
 	{label: "baseline", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho)},
 }

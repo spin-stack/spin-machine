@@ -197,3 +197,16 @@ func TestTheCommandSaysWhyItWroteNothing(t *testing.T) {
 		})
 	}
 }
+
+// A tree from before versions.yaml pins nothing, and is not an error; a ref git cannot read is.
+func TestVersionsAtATreeWithoutTheFile(t *testing.T) {
+	r := newRepo(t)
+	r.commit("before pins", map[string]*string{"README": s("a machine\n")})
+	got, err := git{r.dir}.versions("HEAD")
+	if err != nil || len(got) != 0 {
+		t.Errorf("versions at a tree without versions.yaml: %v, %v; want none and no error", got, err)
+	}
+	if _, err := (git{r.dir}).versions("v0"); err == nil {
+		t.Error("versions at a ref git does not know: no error")
+	}
+}

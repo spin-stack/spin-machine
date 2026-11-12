@@ -4,10 +4,8 @@ package boot_test
 
 import (
 	"bufio"
-	"cmp"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -329,7 +327,7 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		}
 	}
-	timer := time.AfterFunc(cmp.Or(time.Duration(envInt(t, "CACHE_TIMEOUT_S", 240))*time.Second, 4*time.Minute), kill)
+	timer := time.AfterFunc(time.Duration(envInt(t, "CACHE_TIMEOUT_S", 240))*time.Second, kill)
 	defer func() { timer.Stop(); kill(); _ = cmd.Wait() }()
 
 	pid := cmd.Process.Pid
@@ -383,29 +381,17 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 	if seen != len(run.steps) {
 		t.Fatalf("the guest reported %d of %d steps; console tail:\n%s", seen, len(run.steps), tail([]byte(console.String()), 1500))
 	}
-	run.notes = append(run.notes, discardNote(t, out, qmpSock, overlay, probe.trims))
+	run.notes = append(run.notes, discardNote(t, out, qmpSock, overlay, probe.trims, console.String))
 	return run
 }
 
 // discardNote is where the guest's discards went: how many QEMU's block layer took from the
 // guest (query-blockstats' unmap counters), and what the overlay's clusters are now by qemu-img
 // map - data, zeroes, or nothing allocated. trimmed is a guest that ran fstrim just before.
-func discardNote(t *testing.T, out, socket, overlay string, trimmed bool) string {
+func discardNote(t *testing.T, out, socket, overlay string, trimmed bool, said func() string) string {
 	t.Helper()
-	conn, err := net.Dial("unix", socket)
-	if err != nil {
-		t.Fatalf("dialling QMP: %v", err)
-	}
-	defer func() { _ = conn.Close() }()
-	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	q := &qmp{conn: conn, enc: json.NewEncoder(conn), dec: json.NewDecoder(conn)}
-	var greeting struct{ QMP *struct{} }
-	if err := q.dec.Decode(&greeting); err != nil {
-		t.Fatalf("reading the QMP greeting: %v", err)
-	}
-	q.do(t, "qmp_capabilities", nil)
+	q := dial(t, socket, said)
+	defer q.close()
 	var stats []struct {
 		Stats struct {
 			UnmapOperations int64 `json:"unmap_operations"`

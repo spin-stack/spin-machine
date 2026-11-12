@@ -55,7 +55,7 @@ func TestACheckpointOfTheReleaseBeforeResumesHere(t *testing.T) {
 	a := startGuest(t, machineArgs(t, cli, previous, append([]string{"--qmp", filepath.Join(dir, "a.sock")}, disk...)))
 	a.type_(t, "mount -t proc proc /proc; ( i=0; while :; do i=$((i+1)); echo TICK-$i; sleep 0.2; done ) &")
 	a.await(t, regexp.MustCompile(`TICK-5\b`), 60*time.Second)
-	qa := dial(t, filepath.Join(dir, "a.sock"), &vm{})
+	qa := dial(t, filepath.Join(dir, "a.sock"), a.said)
 	qa.do(t, "stop", nil)
 	last := a.lastTick()
 	qa.do(t, "migrate", map[string]any{"uri": "file:" + state})
@@ -64,7 +64,7 @@ func TestACheckpointOfTheReleaseBeforeResumesHere(t *testing.T) {
 	a.kill()
 
 	b := startGuest(t, machineArgs(t, cli, out, append([]string{"--qmp", filepath.Join(dir, "b.sock"), "--incoming", "defer"}, disk...)))
-	qb := dial(t, filepath.Join(dir, "b.sock"), &vm{})
+	qb := dial(t, filepath.Join(dir, "b.sock"), b.said)
 	defer qb.close()
 	qb.do(t, "migrate-incoming", map[string]any{"uri": "file:" + state})
 	qb.until(t, "query-migrate", "completed", 60*time.Second)

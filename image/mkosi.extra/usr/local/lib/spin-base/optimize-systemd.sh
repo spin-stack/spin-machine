@@ -25,9 +25,7 @@ MASK_UNITS=(
     #
     # What masking cost was everything that needs a .device unit to exist.
     #
-    #   * serial-getty@ttyS0 carries BindsTo=dev-%i.device and could not start, which is
-    #     why this image carries a getty unit of its own with the dependency removed — see
-    #     spin-machine-console.service, and the decision left open there.
+    #   * serial-getty@ttyS0 carries BindsTo=dev-%i.device and could not start.
     #   * A hot-plugged CPU or memory block never produced an add event, so nothing could
     #     act on one — see 40-spin-hotadd.rules, which is the thing that acts on it.
 
@@ -68,17 +66,7 @@ MASK_UNITS=(
     multipathd.socket
     lvm2-monitor.service
 
-    motd-news.timer
-    apt-daily-upgrade.timer
-    apt-daily.timer
-    dpkg-db-backup.timer
     e2scrub_all.timer
-
-    getty@tty2.service
-    getty@tty3.service
-    getty@tty4.service
-    getty@tty5.service
-    getty@tty6.service
 
     # ldconfig, already pre-warmed at build time.
     ldconfig.service
@@ -242,21 +230,6 @@ ln -sf /dev/null /etc/systemd/system/multi-user.target.wants/systemd-logind.serv
 
 log "Setting default target to multi-user..."
 ln -sf /lib/systemd/system/multi-user.target /etc/systemd/system/default.target
-
-log "Creating kernel module blacklist..."
-cat <<'EOF' >/etc/modprobe.d/blacklist-vm.conf
-# Hardware not present in VM
-blacklist floppy
-blacklist pcspkr
-blacklist cdrom
-blacklist sr_mod
-blacklist parport
-blacklist parport_pc
-blacklist bluetooth
-blacklist btusb
-blacklist iwlwifi
-blacklist cfg80211
-EOF
 
 log "Optimizing nsswitch.conf..."
 cat <<'EOF' >/etc/nsswitch.conf
