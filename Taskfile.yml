@@ -891,6 +891,35 @@ tasks:
         gh pr list --state open --json number,headRefName --jq ".[] | select((.headRefName | startswith(\"refresh/kernel-\")) and .headRefName != \"$branch\") | .number" |
           while read -r n; do gh pr close "$n" --delete-branch --comment "Superseded by $url."; done
 
+  # The apk locks go stale without anyone touching them: the pinned Alpine's mirror serves only the
+  # newest build of each package, so a lock that resolved yesterday fails a build today (`unable to
+  # select packages`), and a release found it three times (6e7ba47, 8d495c5, release run
+  # 43157106109). refresh.yml asks every day, so the lock moves on a pull request that qemu.yml and
+  # image.yml build, not in the release that needed it. The branch is named for what the locks
+  # hold, so a set already proposed is not proposed again, closed or not.
+  refresh:apk:
+    desc: Propose the apk locks at what the pinned Alpine's mirror has today as a pull request (refresh/apk-<hash>), closing the one it supersedes; nothing when the locks are current or that set was proposed already.
+    env:
+      BODY: >-
+        The apk locks at what the pinned Alpine's mirror serves today, proposed by refresh.yml: the
+        mirror drops the builds a lock names, and a build from a stale lock fails. qemu.yml and
+        image.yml build it on this pull request; boot:compat after merge says checkpoints resume
+        on the new QEMU.
+    cmds:
+      - task: apk:lock
+      - |
+        set -euo pipefail
+        if git diff --quiet -- qemu/apk.lock e2fsprogs/apk.lock; then echo "the apk locks are current" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; exit 0; fi
+        h=$(cat qemu/apk.lock e2fsprogs/apk.lock | sha256sum | cut -c1-12); branch="refresh/apk-$h"
+        if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then echo "$branch was proposed already"; exit 0; fi
+        git switch -c "$branch"
+        git commit -q -m "apk: the locks at what the mirror has today" -- qemu/apk.lock e2fsprogs/apk.lock
+        git push origin "$branch"
+        url=$(gh pr create --base main --head "$branch" --title "apk: the locks at what the mirror has today" --body "$BODY")
+        echo "$url" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        gh pr list --state open --json number,headRefName --jq ".[] | select((.headRefName | startswith(\"refresh/apk-\")) and .headRefName != \"$branch\") | .number" |
+          while read -r n; do gh pr close "$n" --delete-branch --comment "Superseded by $url."; done
+
   clean:
     desc: Remove build output. Leaves the caches; use clean:cache for those.
     cmds:
