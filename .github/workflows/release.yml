@@ -133,7 +133,7 @@ jobs:
 
       # v4 is the one that installs cosign v3. Dependabot moves this pin like every other `uses:`.
       - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
       # Who built each file and from what - this workflow at this commit, every pin in
       # versions.yaml - as SLSA provenance, beside the signature that says who made it. The
@@ -159,7 +159,7 @@ jobs:
         run: go tool task release:tag
 
       - name: Publish
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
