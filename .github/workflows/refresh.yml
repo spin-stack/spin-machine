@@ -5,6 +5,10 @@
 # checkpoints keep resuming, so a stable release is one versions.yaml line. kernel.yml builds it
 # on the pull request; a person boots it and merges it. Nothing here publishes.
 #
+# And the apk locks of QEMU's and e2fsprogs' builders (task refresh:apk), because the pinned
+# Alpine's mirror drops the builds they name and a stale lock fails the next build - a release
+# found that three times. qemu.yml and image.yml build the pull request.
+#
 # The pull request is the release app's (spin-stack-release), so the checks on it run: one opened
 # with this run's own token would start none.
 name: Refresh
@@ -61,3 +65,40 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: go tool task refresh:kernel
+
+  # Its own job: refresh:kernel leaves the checkout on the branch it proposed.
+  apk:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app
+        with:
+          client-id: Iv23licJKNgsPIM00SD0 # spin-stack-release's client ID, public: app-id is deprecated
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: spin-stack
+          repositories: spin-machine
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The branch is pushed as the app, below, and not with this run's token.
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Commit as the app
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: go tool task git:app
+
+      - name: Propose the apk locks at what the mirror has today
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: go tool task refresh:apk
