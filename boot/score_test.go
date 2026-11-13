@@ -196,6 +196,11 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	_ = first.Wait() // save quits it
 	started = started[1:]
 	evict(t, state)
+	// DIAGNOSTIC, not to be merged: no restore, to tell whether the save or the restore leaves
+	// later cold boots slower.
+	if os.Getenv("SCORE_NO_RESTORE") != "" {
+		return r
+	}
 
 	qmp := filepath.Join(dir, "b.qmp")
 	t0 = time.Now()
