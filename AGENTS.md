@@ -21,6 +21,18 @@ name an external component when its protocol, provisioned file, lifecycle, or co
 contract affects this machine; describe the contract here and test the observable behaviour
 where possible.
 
+## The goal
+
+**A cold boot to the first SSH login in under 100 ms.** Measured by `task boot:ssh-first` on the
+bench fleet: from the moment before QEMU is exec'd to `true` having run as the workspace user
+over SSH through vsock. On 2026-11-13 it was 468/494 ms p50/p95 (lab run 43483372488).
+
+The second number is a checkpoint restored to the same first login: 386/399 ms (lab run
+43483852339). A change goes in when it moves one of the two, interleaved against the release,
+without making the other worse - or when it is functional (security, correctness). Every other
+number - the console prompt, a phase, an initcall, a unit's time - is a tool for finding why one
+of the two moved, never a target of its own. `docs/log.md` shows what optimising the others cost.
+
 ## The three rules that are load-bearing
 
 These are release invariants, not defaults. Everything below them is a strong engineering
