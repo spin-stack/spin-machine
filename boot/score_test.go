@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -67,6 +68,7 @@ func TestScore(t *testing.T) {
 	}
 	type samples struct {
 		cold, coldAccept, save, up, running, restoredAccept, restored []time.Duration
+		coldMB, coldHugeMB                                            []float64
 	}
 	got := map[string]*samples{}
 	for range reps {
@@ -80,6 +82,7 @@ func TestScore(t *testing.T) {
 			s.cold, s.coldAccept, s.save = append(s.cold, res.cold), append(s.coldAccept, res.coldAccept), append(s.save, res.save)
 			s.up, s.running = append(s.up, res.up), append(s.running, res.running)
 			s.restoredAccept, s.restored = append(s.restoredAccept, res.restoredAccept), append(s.restored, res.restored)
+			s.coldMB, s.coldHugeMB = append(s.coldMB, res.coldMB), append(s.coldHugeMB, res.coldHugeMB)
 		}
 	}
 
@@ -98,12 +101,18 @@ func TestScore(t *testing.T) {
 		fmt.Fprintf(&b, "  %-14s %s %s   %s   %s %s %s %s\n", r.label,
 			pair(s.coldAccept), pair(s.cold), pair(s.save), pair(s.up), pair(s.running), pair(s.restoredAccept), pair(s.restored))
 	}
+	b.WriteString("\n  the cold guest's RAM on the host at its login, p50 MiB, and of it in huge pages\n")
+	for _, r := range rows {
+		s := got[r.label]
+		fmt.Fprintf(&b, "  %-14s %6.0f %6.0f\n", r.label, pct(s.coldMB, 50), pct(s.coldHugeMB, 50))
+	}
 	t.Log(b.String())
 }
 
 type scoreRun struct {
 	cold, save, up, running, restored time.Duration
 	coldAccept, restoredAccept        time.Duration // when sshd first accepted on vsock
+	coldMB, coldHugeMB                float64       // the cold guest's RAM on the host at its login, and of it in huge pages
 }
 
 // scoreOnce boots v with cli over release, logs in, saves it, and restores it.
@@ -129,7 +138,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	}()
 	launch := func(qmp string, extra ...string) *exec.Cmd {
 		args := append([]string{"boot", "--release", release, "--disk", overlay, "--memory", v.memory,
-			"--cpus", v.cpus, "--vsock-cid", fmt.Sprint(cid), "--qmp", qmp, "--console", "file:"+qmp+".console",
+			"--cpus", v.cpus, "--vsock-cid", fmt.Sprint(cid), "--qmp", qmp, "--console", "file:" + qmp + ".console",
 			"--append", "init=/sbin/init"}, extra...)
 		cmd := exec.Command(cli, args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -168,6 +177,9 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 		t.Fatal("the cold boot was never logged into")
 	}
 	r.cold, r.coldAccept = time.Since(t0), accepted.Sub(t0)
+	if mb, err := strconv.Atoi(v.memory); err == nil {
+		r.coldMB, r.coldHugeMB, _ = guestRAM(first.Process.Pid, mb)
+	}
 
 	t0 = time.Now()
 	mustRun(t, cli, "save", "--qmp", filepath.Join(dir, "a.qmp"), "--to", state)
