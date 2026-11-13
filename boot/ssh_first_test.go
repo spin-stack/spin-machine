@@ -135,7 +135,27 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 	asBuilt.links = map[string]string{
 		"/etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service": "/usr/lib/systemd/system/spin-machine-sshd-keygen.service",
 	}
-	rows := []variant{asBuilt}
+	// The first login's lane, as the image builds it, put into the published release this row
+	// boots: the units' drop-ins read from this tree's image, and configure-system.sh's three
+	// edits done the same way. Measured against the release as it was published, interleaved.
+	rootfs := filepath.Join("..", "image", "mkosi.extra", "usr", "local", "lib", "spin-base", "rootfs")
+	for _, d := range []string{"sshd-vsock.socket.d/10-lane.conf", "sshd@.service.d/10-lane.conf",
+		"systemd-logind.service.d/10-lane.conf", "user-runtime-dir@.service.d/10-lane.conf",
+		"user@.service.d/10-lane.conf", "systemd-udev-trigger.service.d/10-coldplug.conf"} {
+		b, err := os.ReadFile(filepath.Join(rootfs, "etc", "systemd", "system", d))
+		if err != nil {
+			t.Fatal(err)
+		}
+		asBuilt.files["/etc/systemd/system/"+d] = string(b)
+	}
+	asBuilt.setup += `grep -qx 'After=sysinit.target' "$MNT/usr/lib/systemd/system/dbus.socket"
+sed -e '/^Wants=sysinit.target$/d' -e '/^After=sysinit.target$/d' "$MNT/usr/lib/systemd/system/dbus.socket" > "$MNT/etc/systemd/system/dbus.socket"
+ln -sf /dev/null "$MNT/etc/tmpfiles.d/systemd-nologin.conf"
+grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session" ||
+	sed -i 's/^\(session.*pam_systemd\.so\)\(.*\)$/\1\2 class=user-early-light/' "$MNT/etc/pam.d/common-session"
+grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
+`
+	rows := []variant{row("as released", ""), asBuilt}
 
 	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}

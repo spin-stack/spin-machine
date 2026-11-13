@@ -82,6 +82,34 @@ passwd --lock spin
 install -d -m 0755 /var/lib/systemd/linger
 touch /var/lib/systemd/linger/spin
 
+# The rest of the first SSH login's lane (the units' drop-ins say what it is and what it
+# measured, in rootfs/etc/systemd/system/*.d/10-lane.conf).
+#
+# dbus.socket orders itself after sysinit.target in its own [Unit], which a drop-in cannot take
+# back, so the lane has a copy without those two lines.
+echo "The first login's lane..."
+grep -qx 'After=sysinit.target' /usr/lib/systemd/system/dbus.socket
+sed -e '/^Wants=sysinit.target$/d' -e '/^After=sysinit.target$/d' \
+    /usr/lib/systemd/system/dbus.socket > /etc/systemd/system/dbus.socket
+#
+# No /run/nologin at boot. systemd-tmpfiles-setup writes it and systemd-user-sessions.service
+# removes it late, and until then pam_nologin turns every user away - in the lane, the first
+# login's sshd ran first and was refused: "Access denied for user spin by PAM account
+# configuration [preauth]". Shutting down still writes it: systemd-user-sessions.service's
+# ExecStop does.
+ln -sf /dev/null /etc/tmpfiles.d/systemd-nologin.conf
+#
+# Sessions of class user-early-light. logind answers a session request once the session's
+# scope, the runtime directory and, for a class that wants one, the user's service manager are
+# started, and orders the scope after systemd-user-sessions.service unless the class is early
+# (systemd v259.9, src/login/logind-session.c: session_job_pending, session_start_scope). So a
+# login of class user waited for user@1000, a whole systemd --user, and for the end of the
+# boot: 472 against 436 ms on the bench fleet (lab run 43518044150). spin's manager still
+# starts in the boot - spin lingers - and a light session still has its scope and
+# XDG_RUNTIME_DIR; it does not wait for the manager.
+sed -i 's/^\(session.*pam_systemd\.so\)\(.*\)$/\1\2 class=user-early-light/' /etc/pam.d/common-session
+grep -q '^session.*pam_systemd\.so.*class=user-early-light' /etc/pam.d/common-session
+
 # Sudo without a password, because there is no password. The boundary this machine relies
 # on is the VM, not the difference between two accounts inside it — but a workload that
 # expects not to be root by default gets what it expects.

@@ -62,6 +62,26 @@ gone with it. The drop-in is `/etc/ssh/sshd_config.d/10-spin-kex.conf`, written 
 `configure-system.sh` and asserted by `build.sh`; a drop-in that sets `KexAlgorithms` and is
 read before it wins, because sshd keeps the first value it reads.
 
+## The first login's lane
+
+What a first SSH login goes through starts from the boot's first dispatch, ordered only by what
+it needs: the vsock socket and the per-connection sshd (after the host keys), dbus, logind, and
+spin's runtime directory and manager. None of them waits for `sysinit.target` or `basic.target`
+(`etc/systemd/system/*.d/10-lane.conf`). Two settings make that worth it:
+
+- **No `/run/nologin` at boot.** Until `systemd-user-sessions` removes it late in the boot,
+  `pam_nologin` refuses every user, and in the lane the first login arrives before that. Shutting
+  down still writes it.
+- **Sessions of class `user-early-light`.** logind holds a session of class `user` until the
+  user's manager has started and the boot's `systemd-user-sessions` has run. A light, early
+  session has its scope and `XDG_RUNTIME_DIR` and waits for neither; spin's manager still starts
+  in the boot, because spin lingers.
+
+And udev's coldplug replays only the devices something here uses (`10-coldplug.conf`), so the
+lane has the CPU. On the bench fleet the first login went 478 -> 402 ms with all of it (`task
+boot:ssh-first`, lab run 43518915618, 2026-11-13); `configure-system.sh` and the drop-ins say what
+each part did, and `build.sh` asserts each on the finished filesystem.
+
 ## Looking inside
 
 ```
