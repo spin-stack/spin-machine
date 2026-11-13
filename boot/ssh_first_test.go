@@ -123,30 +123,7 @@ grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 	sed -i 's/^\(session.*pam_systemd\.so\)\(.*\)$/\1\2 class=user-early-light/' "$MNT/etc/pam.d/common-session"
 grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 `
-	// One sshd for every connection (experiment): the vsock socket with Accept=no, handed to an
-	// sshd -D started from the boot's first dispatch, as Ubuntu's ssh.socket hands TCP's to
-	// ssh.service. With Accept=yes each connection is a transient sshd@ unit and an sshd -i that
-	// reads its configuration and host keys before it forks sshd-session; here only the fork is
-	// left.
-	persistent := row("one sshd", "")
-	persistent.files["/etc/systemd/system/sshd-vsock.socket.d/20-accept.conf"] = "[Socket]\nAccept=no\n"
-	persistent.files["/etc/systemd/system/sshd-vsock.service"] = `[Unit]
-DefaultDependencies=no
-Wants=spin-machine-sshd-keygen.service
-After=spin-machine-sshd-keygen.service
-Conflicts=shutdown.target
-Before=shutdown.target
-[Service]
-Type=notify
-ExecStart=/usr/sbin/sshd -D
-KillMode=process
-RuntimeDirectory=sshd
-RuntimeDirectoryMode=0755
-`
-	persistent.links = map[string]string{
-		"/etc/systemd/system/sysinit.target.wants/sshd-vsock.service": "/etc/systemd/system/sshd-vsock.service",
-	}
-	rows := []variant{row("as released", ""), persistent}
+	rows := []variant{row("as released", ""), asBuilt}
 
 	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}

@@ -339,6 +339,8 @@ Measured and not shipped:
 
 **11-13 · kernel/qemu · branches `kernel-snapshot`, `qemu-snapshot` (rejected).** QEMU publishes bus 0's configuration space over fw_cfg after the firmware (etc/spin/pci-config) and the kernel answers boot-time configuration reads from it until each dword is written. It works (`PCI: configuration space of 5 devices on bus 0`) and is worth -14 ms against the same kernel without it (lab 43514550646), but only 2-3 ms against 0005, which already removes most repeated reads: 209/217 against 211/222 (lab 43514884598). Not worth a QEMU patch and a 250-line kernel patch.
 
+**11-13 · boot/qemu · branch `first-login-report` (this change).** v20261113.03's report read +11-18% on every row: the report times the serial console's prompt, and the getty drop-in removed in #250 left it Type=idle, waiting for the lane's units. The first login it does not time went 478/500 (v20261113.02, lab 43524334205) -> 381/410 ms (v20261113.03, lab 43524721490), two runs and not interleaved. The report now logs into the release over SSH too (`first_login`), and compare writes it first. The QEMU build asserts static-pie, full RELRO, an NX stack and stack canaries, which come from QEMU's and Alpine's defaults and no flag here. Measured and left out: one sshd for every connection (the vsock socket with Accept=no, an `sshd -D` from the first dispatch), first login 382/393 against 381/410 and a second 40 against 48 ms (lab 43524721490).
+
 ---
 
 ## 3. Rework cycles
@@ -514,6 +516,7 @@ Also the reusable builder, added and reverted on 10-13.
 | sntrup761 (OpenSSH default) | 104 vs 40 ms per login | #245, lab 43479854381 | 11-13 |
 | Configuration-space snapshot over fw_cfg (QEMU + kernel) | 209 vs 211 with 0005 | lab 43514884598 | 11-13 |
 | CPUWeight/IOWeight/Nice on the first login's lane | −2 ms over coldplug filtered; second login 63 vs 45 | lab 43518915618 | 11-13 |
+| One sshd for every connection (vsock Accept=no, `sshd -D` early) | First login 382 vs 381; second 40 vs 48 ms | lab 43524721490 | 11-13 |
 | Login without pam_systemd (diagnostic bound) | 380 vs 436, but no session, no XDG_RUNTIME_DIR | lab 43518044150 | 11-13 |
 | Lower the vCPU ceiling, drop the balloon or ACPI for boot time | Not tried: hotplug and dynamic memory are an invariant | AGENTS.md | 11-13 |
 
