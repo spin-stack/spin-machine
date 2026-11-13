@@ -93,7 +93,7 @@ EOF
 # reboots and advertise a subscription - network calls and package queries in a machine that
 # is started, does one piece of work and is thrown away. This image's own replacement, a line
 # saying how long the boot took, ran systemd-analyze inside every login, which is the one
-# thing a workspace waits for; a boot time belongs to task boot:bench and boot:ssh-first,
+# thing a workspace waits for; a boot time belongs to task boot:ssh-first and the release's report,
 # which measure it on purpose, not to a greeting nobody acts on (removed 2026-11-12).
 #
 # pam_motd goes from every PAM stack that has it, not only ssh's: with it enabled, whatever a

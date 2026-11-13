@@ -31,13 +31,9 @@ on:
         required: true
         type: choice
         options:
-          - boot:bench
           - boot:initcalls
-          - boot:userspace
-          - boot:systemd
           - boot:waits
           - boot:ssh-first
-          - boot:ssh-load
           - boot:page-cache
           - boot:firmware
           - boot:firmware-stages

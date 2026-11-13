@@ -76,7 +76,7 @@
     is the series', kernel/config-<major>.<minor>-x86_64, so a release within the series moves
     this entry and nothing else: refresh.yml proposes it every day, and kernel.yml builds it on
     the pull request. A new series renames the configuration in the same commit, then
-    `task kernel:build`, `task boot:bench`. The series is a person's choice, the same as
+    `task kernel:build`, `task boot:ssh-first`. The series is a person's choice, the same as
     spin-ami's host kernel.
 
 - name: debian
@@ -89,7 +89,7 @@
     the kernel's toolchain (and qboot's), with its packages from
     debian-snapshot. A new toolchain is a new vmlinux: bump it together
     with debian-snapshot, then `task kernel:build`, and check the vmlinux is still reproducible
-    (kernel/Dockerfile, two --no-cache builds) before `task boot:bench`.
+    (kernel/Dockerfile, two --no-cache builds) before `task boot:ssh-first`.
 
 - name: moby-check-config
   kind: download
@@ -145,7 +145,7 @@
   note: >-
     image/Dockerfile. Which mkosi assembles the tree decides what ends up in it. image/mkosi.conf's
     MinimumVersion says the same version, and a test holds the two together. After the bump:
-    `task image:build`, then `task shell` and `task boot:bench`: a new mkosi can change the
+    `task image:build`, then `task shell` and `task boot:ssh-first`: a new mkosi can change the
     tree without failing the build.
 
 - name: task

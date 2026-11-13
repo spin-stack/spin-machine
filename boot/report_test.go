@@ -76,7 +76,7 @@ func combinations() [][]choice {
 // Needs /dev/kvm and a built release tree (SPIN_MACHINE_OUTPUT, or _output). The vsock rows
 // need /dev/vhost-vsock; without it those rows are listed as skipped rather than reported as
 // failing. With sudo and /dev/nbd0 the getty is
-// replaced by an echo, as in TestBootCost, and every variant of the image runs; without them
+// replaced by an echo, and every variant of the image runs; without them
 // the usable column carries agetty's second and the variants that edit the image are skipped.
 func TestReport(t *testing.T) {
 	path := os.Getenv("SPIN_REPORT")

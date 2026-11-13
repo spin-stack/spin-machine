@@ -18,7 +18,7 @@
 #
 # Both are versions.yaml's `debian` and `debian-snapshot`, handed in by kernel/Taskfile.yml with
 # no default here. To move them: `task bump NAME=debian` and `task bump NAME=debian-snapshot`,
-# together, and the boot measured again (`task boot:bench`).
+# together, and the boot measured again (`task boot:ssh-first`).
 ARG DEBIAN_IMAGE
 ARG DEBIAN_SNAPSHOT
 
