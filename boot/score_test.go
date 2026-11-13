@@ -188,6 +188,9 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	if os.Getenv("SCORE_COMPACT") != "" {
 		mustRun(t, "sudo", "sh", "-c", "echo 1 > /proc/sys/vm/compact_memory")
 	}
+	if b, err := exec.Command("sh", "-c", "cat /proc/loadavg; ps -eLo pcpu,stat,pid,comm --sort=-pcpu | head -8").Output(); err == nil {
+		t.Logf("before the cold boot:\n%s", b)
+	}
 	var r scoreRun
 	t0 := time.Now()
 	first := launch(filepath.Join(dir, "a.qmp"))
