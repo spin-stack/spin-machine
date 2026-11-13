@@ -876,7 +876,7 @@ tasks:
     env:
       BODY: >-
         The newest release of the pinned kernel series, proposed by refresh.yml. kernel.yml builds
-        it on this pull request. Before merging, boot it: `task kernel:build boot:bench`.
+        it on this pull request. Before merging, boot it: `task kernel:build boot:ssh-first`.
     cmds:
       - |
         set -euo pipefail

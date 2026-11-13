@@ -83,8 +83,8 @@ MASK_UNITS=(
     modprobe@fuse.service
     modprobe@efi_pstore.service
 
-    # Debug and tracing mounts. Masked, not absent: `task boot:trace` mounts
-    # tracefs by hand when it needs it, which is the only thing here that ever does.
+    # Debug and tracing mounts. Masked, not absent: a probe that needs tracefs
+    # mounts it by hand.
     sys-kernel-debug.mount
     sys-kernel-tracing.mount
 

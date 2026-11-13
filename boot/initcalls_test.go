@@ -38,7 +38,7 @@ import (
 // so every number here is a p50 over REPS boots and the p95 is printed beside it to say how
 // settled it is. A wide spread means the host was shared, not that the kernel changed.
 //
-// Variants are interleaved rather than run in blocks, for the reason TestBootCost is: a
+// Variants are interleaved rather than run in blocks, because a
 // block schedule hands one variant a slow minute and reads it as a difference.
 //
 //	SPIN_INITCALL_PROBE=1   run at all

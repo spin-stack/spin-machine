@@ -25,8 +25,8 @@ import (
 )
 
 // When a workspace can first be logged into, from the host, over SSH - the thing a workspace
-// waits for, where boot:bench's `usable` is the serial console's prompt, which nothing a
-// workspace does waits for.
+// waits for, where the serial console's prompt is something nothing a workspace does waits
+// for.
 //
 // The machine gets a vsock device (--vsock-cid), and the image's systemd-ssh-generator binds
 // sshd to AF_VSOCK port 22 when it finds one. From the moment before QEMU is exec'd the host
@@ -34,7 +34,7 @@ import (
 // `true` run as spin over SSH is `login`. The client is golang.org/x/crypto/ssh offering only
 // mlkem768x25519-sha256, the one key exchange the image's sshd accepts: the runners' OpenSSH
 // (9.6 on 2026-11-13) has no ML-KEM and is refused. The console's prompt is timed in the
-// same boot, with the getty an echo as boot:bench's baseline has it, so the two read side by
+// same boot, with the getty an echo, so the two read side by
 // side.
 //
 // What `login` holds beyond `listen` is the first login's own chain: sshd's host keys, the key

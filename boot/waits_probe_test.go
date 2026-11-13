@@ -32,8 +32,7 @@ import (
 // one boot of five, which it cannot have. Read a difference smaller than that as none. What is
 // before that zero is QEMU and the firmware; task boot:firmware-stages splits it.
 //
-// The login is serial-getty@ttyS0 replaced by an echo (gettyEcho), as task boot:bench's
-// baseline does, so agetty's own second is not in it. The getty keeps Type=idle, so what is
+// The login is serial-getty@ttyS0 replaced by an echo (gettyEcho), so agetty's own second is not in it. The getty keeps Type=idle, so what is
 // between its fork and the prompt is it waiting for the job queue to drain, and that is
 // printed as its own row because it is in no unit's timestamps.
 //
@@ -79,8 +78,8 @@ func TestBootWaits(t *testing.T) {
 // waitsVariant is the boot both probes take: the getty an echo, and spin-waits.service printing
 // every unit's timestamps once startup has finished.
 func waitsVariant(cpus string) variant {
-	// Type=simple and a loop on FinishTimestampMonotonic, for the reason TestUserspaceCost
-	// gives: this unit is one of the initial transaction's jobs.
+	// Type=simple and a loop on FinishTimestampMonotonic: this unit is one of the initial
+	// transaction's jobs, and a oneshot there would hold startup open until it was done.
 	//
 	// The units are list-units --all and not `systemctl show '*'`: the pattern matches only
 	// the units still loaded and active, 57 of them on 2026-11-12, and drops every oneshot
@@ -394,7 +393,7 @@ func waitsReport(boots []waitsBoot, target string, top int, minGap time.Duration
 	// starts: coldplug, then "Activating default unit: default.target" parses every unit file
 	// default.target reaches, and a stub for each name an After= or RequiresMountsFor= gives,
 	// builds the initial transaction (64 jobs), and collects the stubs before the first job is
-	// dispatched - task boot:trace with systemd.log_level=debug, 2026-11-13. It shrinks only with
+	// dispatched - one boot's console with systemd.log_level=debug, 2026-11-13. It shrinks only with
 	// the transaction: eleven of its units whose condition fails on every boot here, masked, did
 	// not move the first SSH login (boot:ssh-first, lab run 43483372488).
 	gaps := x.w.Gaps(x.target().Start, minGap)
