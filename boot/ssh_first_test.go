@@ -7,11 +7,16 @@ import (
 	"cmp"
 	"crypto/ed25519"
 	"fmt"
+	"io"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -142,13 +147,15 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 	floor := row("sshd from init", asThisBranch)
 	floor.files["/sbin/spin-fastinit"] = `#!/bin/sh
 mount -t proc proc /proc
+echo "SPIN-T init $(cut -d' ' -f1 /proc/uptime)" > /dev/ttyS0
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev 2>/dev/null
 mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
 mount -t tmpfs run /run
 mkdir -p -m 0755 /run/sshd
+echo "SPIN-T mounted $(cut -d' ' -f1 /proc/uptime)" > /dev/ttyS0
 ssh-keygen -q -t ed25519 -N "" -f /run/ssh_host_ed25519_key
-echo SPIN-FASTINIT > /dev/ttyS0
+echo "SPIN-T keyed $(cut -d' ' -f1 /proc/uptime)" > /dev/ttyS0
 exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_host_ed25519_key"
 `
 	floor.setup += `chmod 0755 "$MNT/sbin/spin-fastinit"
@@ -159,6 +166,7 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}
 	failed, classical := map[string]int{}, map[string]int{}
+	stamps := map[string][]time.Duration{} // "<row>: <step>" -> guest uptime at that step
 	for range reps {
 		for _, v := range rows {
 			r := firstSSH(t, out, v, signer)
@@ -169,6 +177,11 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 				failed[v.label]++
 				t.Logf("%s: a boot with no login: listen %v, login %v; %s", v.label, r.listen, r.login, r.why)
 				continue
+			}
+			for _, m := range reGuestStamp.FindAllStringSubmatch(r.console, -1) {
+				sec, _ := strconv.ParseFloat(m[2], 64)
+				k := v.label + ": " + m[1]
+				stamps[k] = append(stamps[k], time.Duration(sec*float64(time.Second)))
 			}
 			if r.classical {
 				classical[v.label]++
@@ -198,14 +211,24 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 			ms(g.again, .5), ms(g.again, .95),
 			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], classical[v.label])
 	}
+	if len(stamps) > 0 {
+		fmt.Fprintf(&b, "\n  guest uptime at each step of an init that prints SPIN-T, p50/p95 ms from the kernel's start\n\n")
+		for _, k := range slices.Sorted(maps.Keys(stamps)) {
+			fmt.Fprintf(&b, "  %-36s %7s/%-7s\n", k, ms(stamps[k], .5), ms(stamps[k], .95))
+		}
+	}
 	t.Log(b.String())
 }
+
+// reGuestStamp is a line an experimental init prints: SPIN-T <step> <seconds of uptime>.
+var reGuestStamp = regexp.MustCompile(`SPIN-T (\w+) ([0-9.]+)`)
 
 type firstSSHRun struct {
 	listen, login, prompt time.Duration
 	again                 time.Duration // a second login, right after the first: what any login costs
 	classical             bool          // a login offering only curve25519 got in
 	why                   string
+	console               string // what the guest's console printed up to the login
 }
 
 func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHRun {
@@ -247,8 +270,9 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 
 	var mu sync.Mutex
 	var r firstSSHRun
+	var console lockedBuffer
 	go func() {
-		run, _ := boot.Watch(stdout, t0, time.Now, boot.Usable)
+		run, _ := boot.Watch(io.TeeReader(stdout, &console), t0, time.Now, boot.Usable)
 		mu.Lock()
 		r.prompt = run.At[boot.Usable]
 		mu.Unlock()
@@ -295,7 +319,27 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	r.console = console.String()
 	return r
+}
+
+// lockedBuffer is the console as read so far, written by the reader's goroutine and read once
+// the login is done.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 // vsockAccepts says whether something accepts a connection on cid:port now. The connect
