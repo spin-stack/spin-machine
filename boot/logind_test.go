@@ -25,19 +25,22 @@ func TestLogindSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := newRawRoot(t, out, base)
-	// The shipped image does not start logind at boot: the first login activates it over
-	// the Varlink socket, which is worth 18 ms (see the 10-seats.conf drop-in). So the
-	// state this asserts before any login is `inactive`, and a machine that answers
-	// `active` has put logind back into the boot transaction.
+	// The shipped image starts logind at boot, because spin lingers and logind is what starts
+	// a lingering user's manager (optimize-systemd.sh). So the state this asserts before any
+	// login is `active`, and a machine that answers `inactive` has taken logind out of the boot
+	// again and moved spin's manager back into the first login.
 	//
-	// SPIN_LOGIND_NO_SEATS=1 removes the drop-in and nothing else. It is the experiment
-	// that says what the drop-in does, and it is expected to fail: without
-	// /run/systemd/seats, pam_systemd never asks logind for a session and never activates
-	// it, so every login — SSH and console alike — comes up with XDG_RUNTIME_DIR unset and
-	// no error anywhere (2026-09-12).
-	expectedState := "inactive"
+	// SPIN_LOGIND_NO_SEATS=1 removes the 10-seats.conf drop-in and nothing else, and logind is
+	// then held back from the boot as it once was: that is the case the drop-in exists for - a
+	// login that arrives before logind has run - and it is expected to fail. Without
+	// /run/systemd/seats, pam_systemd never asks logind for a session and never activates it,
+	// so every login - SSH and console alike - comes up with XDG_RUNTIME_DIR unset and no
+	// error anywhere (2026-09-12).
+	expectedState := "active"
 	if os.Getenv("SPIN_LOGIND_NO_SEATS") == "1" {
 		root.remove("/etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf")
+		root.link("/etc/systemd/system/multi-user.target.wants/systemd-logind.service", "/dev/null")
+		expectedState = "inactive"
 	}
 	content, err := os.ReadFile("testdata/logind-session.sh")
 	if err != nil {

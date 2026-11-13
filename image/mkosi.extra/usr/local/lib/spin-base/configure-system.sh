@@ -60,6 +60,14 @@ useradd --create-home --shell /bin/bash --uid 1000 --groups sudo,docker spin
 passwd --lock root
 passwd --lock spin
 
+# spin lingers: logind starts spin's user manager (user@1000.service) during the boot rather
+# than inside the first login, which is the one thing a workspace waits for. The first SSH
+# login came 60 ms sooner for it; the numbers are in optimize-systemd.sh, beside logind being
+# kept in the boot for the same reason. What `loginctl enable-linger` writes, without a logind
+# to ask - this runs in mkosi's chroot. It names a user, not a machine: no identity.
+install -d -m 0755 /var/lib/systemd/linger
+touch /var/lib/systemd/linger/spin
+
 # Sudo without a password, because there is no password. The boundary this machine relies
 # on is the VM, not the difference between two accounts inside it — but a workload that
 # expects not to be root by default gets what it expects.
@@ -67,38 +75,20 @@ install -m 0440 /dev/stdin /etc/sudoers.d/spin <<'EOF'
 spin ALL=(ALL) NOPASSWD: ALL
 EOF
 
-# The MOTD is this image's own. The distribution's goes, all of it: scripts that check for available updates, count
-# reboots and advertise a support subscription — network calls and package queries in a
-# machine that is started, does one piece of work and is thrown away.
+# No MOTD, and no pam_motd to run one. The distribution's scripts check for updates, count
+# reboots and advertise a subscription - network calls and package queries in a machine that
+# is started, does one piece of work and is thrown away. This image's own replacement, a line
+# saying how long the boot took, ran systemd-analyze inside every login, which is the one
+# thing a workspace waits for; a boot time belongs to task boot:bench and boot:ssh-first,
+# which measure it on purpose, not to a greeting nobody acts on (removed 2026-11-12).
 #
-# What replaces it is one line that says how long this machine took to boot.
-#
-# It is there because a number nobody sees is a number nobody defends. A cold boot is 853ms
-# (measured 2026-09-10, `task boot:bench`) and it took a harness to find that out. Printing
-# it at every login means the next regression is noticed by whoever logs in next, rather
-# than by whoever thinks to measure.
-echo "Replacing the distribution MOTD..."
+# pam_motd goes from every PAM stack that has it, not only ssh's: with it enabled, whatever a
+# package upgrade restores into /etc/update-motd.d runs at the next login, and image/build.sh
+# asserts the lines are off rather than that the directory is empty.
+echo "Removing the MOTD..."
 rm -rf /etc/update-motd.d/*
 truncate -s 0 /etc/motd
-
-install -d -m 0755 /etc/update-motd.d
-cat > /etc/update-motd.d/00-spin-boot <<'MOTD'
-#!/bin/sh
-# How long this machine took to boot, printed by pam_motd at every login.
-#
-# `|| true` and a silent exit: a motd script that fails prints its error to somebody's
-# terminal instead of a greeting, and this is a greeting. systemd-analyze answers "Bootup is
-# not yet finished" if a login somehow arrives before the boot does.
-analysis=$(systemd-analyze 2>/dev/null | head -1) || true
-case "$analysis" in
-	Startup*) printf '\n%s\n\n' "$analysis" ;;
-esac
-MOTD
-chmod 0755 /etc/update-motd.d/00-spin-boot
-
-# pam_motd stays enabled, including for ssh, where the distribution ships it commented
-# out. There is something worth printing.
-sed -i 's/^#\(session.*pam_motd.so\)/\1/' /etc/pam.d/sshd
+sed -i 's/^\(session.*pam_motd\.so\)/#\1/' /etc/pam.d/sshd /etc/pam.d/login
 
 
 # The distribution's background maintenance. Ubuntu ships five timers enabled. Four of them have no business in a machine that is
