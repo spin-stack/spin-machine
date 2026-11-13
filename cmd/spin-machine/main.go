@@ -590,49 +590,15 @@ func memory(o memoryFlags, w io.Writer) error {
 }
 
 type saveFlags struct {
-	qmp      string
-	to       string
-	timeout  time.Duration
-	channels int
+	qmp     string
+	to      string
+	timeout time.Duration
 }
 
 func (o *saveFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "the running VM's QMP socket (required)")
 	fs.StringVar(&o.to, "to", "", "where to write the state (required)")
 	fs.DurationVar(&o.timeout, "timeout", 5*time.Minute, "how long the save may take")
-	fs.IntVar(&o.channels, "channels", 0, channelsUsage)
-}
-
-// channelsUsage is --channels, which save and restore both take and must agree on.
-const channelsUsage = "write or read the state as QEMU's mapped-ram layout through this many multifd channels; " +
-	"0 (the default) is the single stream every existing state is, and a state is restored only " +
-	"with the layout it was saved in"
-
-// layout asks QEMU for the state's file layout before a save or a load: with channels, the
-// mapped-ram layout - each RAM page at a fixed offset, written and read by that many multifd
-// channels in parallel, a page that is zero never written - and without, nothing, which leaves
-// QEMU's single stream.
-//
-// The two are different files, and QEMU loads each only with the capabilities it was written
-// with. Nothing in the fingerprint says which a checkpoint is, so a caller that saves one way
-// and restores the other has a checkpoint that does not resume: the layout is part of what a
-// checkpoint is, and choosing it is the caller's, once, for every checkpoint it keeps. It is a
-// flag here because task boot:restore measures what it is worth (QEMU >= 9.0).
-func (q *qmpConn) layout(channels int) error {
-	if channels <= 0 {
-		return nil
-	}
-	caps := []map[string]any{
-		{"capability": "mapped-ram", "state": true},
-		{"capability": "multifd", "state": true},
-	}
-	if err := q.run("migrate-set-capabilities", map[string]any{"capabilities": caps}, nil); err != nil {
-		return fmt.Errorf("asking for the mapped-ram layout: %w", err)
-	}
-	if err := q.run("migrate-set-parameters", map[string]any{"multifd-channels": channels}, nil); err != nil {
-		return fmt.Errorf("asking for %d multifd channels: %w", channels, err)
-	}
-	return nil
 }
 
 // save stops a running VM and writes everything needed to resume it: a checkpoint.
@@ -658,9 +624,6 @@ func save(o saveFlags) error {
 	}
 	defer func() { _ = c.Close() }()
 
-	if err := c.layout(o.channels); err != nil {
-		return fmt.Errorf("the save: %w", err)
-	}
 	if err := c.run("migrate", map[string]any{"uri": "file:" + to}, nil); err != nil {
 		return fmt.Errorf("starting the save: %w", err)
 	}
@@ -677,17 +640,15 @@ func save(o saveFlags) error {
 }
 
 type restoreFlags struct {
-	qmp      string
-	from     string
-	timeout  time.Duration
-	channels int
+	qmp     string
+	from    string
+	timeout time.Duration
 }
 
 func (o *restoreFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.qmp, "qmp", "", "QMP socket of a VM booted with --incoming defer (required)")
 	fs.StringVar(&o.from, "from", "", "the state save wrote (required)")
 	fs.DurationVar(&o.timeout, "timeout", 5*time.Minute, "how long the load may take")
-	fs.IntVar(&o.channels, "channels", 0, channelsUsage)
 }
 
 // restore loads a saved state into a VM waiting for one, and runs it.
@@ -710,9 +671,6 @@ func restore(o restoreFlags) error {
 	}
 	defer func() { _ = c.Close() }()
 
-	if err := c.layout(o.channels); err != nil {
-		return fmt.Errorf("loading %s: %w", from, err)
-	}
 	if err := c.run("migrate-incoming", map[string]any{"uri": "file:" + from}, nil); err != nil {
 		return fmt.Errorf("loading %s: %w", from, err)
 	}
