@@ -34,6 +34,10 @@ type variant struct {
 	profile bool              // boot with `--profile`: initcall profiling, console silent
 	setup   string            // shell run with the overlay mounted, $MNT its root
 	flags   []string          // spin-machine boot flags after the rest: the feature matrix's axes
+	// -device entries taken out of the machine, by prefix ("virtio-rng-pci"): a diagnostic row
+	// of a machine with another fingerprint, which spin-machine deliberately has no flag for.
+	// Only bootWaits honours it; see machineCommand.
+	without []string
 }
 
 // A drop-in on the instance beats one on the template, which is where the image's own TERM
@@ -89,6 +93,10 @@ func without(units ...string) variant {
 //   - 300 more unit files nothing wants: 236 against 246, 12 boots, 2026-09-26. systemd's unit
 //     cache holds names and modification times, so this measures the scan, which is free; it
 //     does not measure parsing, which only units something pulls in pay for.
+//   - the serial getty without BindsTo= and After= on dev-ttyS0.device, which boot:waits found
+//     its start waiting on in 16 of 20 boots: 342/349 against 345/365, 20 boots on the bench
+//     fleet, 2026-11-12 (lab run 43303190733). The prompt does not come sooner when the getty
+//     stops waiting for udev to announce the port; a laptop had read 16 ms of it, which was noise.
 var variants = []variant{
 	// The image as it is, with a real agetty rather than the echo every row below uses. It
 	// reads about a second slower and that is agetty's own sleep, not a fault to hunt: the
@@ -210,6 +218,11 @@ func TestBootTrace(t *testing.T) {
 	// waits separates the two in one boot:
 	//
 	//   SPIN_GETTY_EXEC="/bin/sh -c 'echo SPIN-READY-login: ; sleep infinity'"
+	//
+	// SPIN_TRACE_APPEND is added to the kernel command line, after this probe's own, so a later
+	// parameter wins: systemd.log_level=debug times PID 1's start-up line by line, which on
+	// 2026-11-12 was how the ~45 ms between "Hostname set" and "Queued start job" was split.
+	// Every line is a VM exit, so the gaps between lines are the work and the lines are not.
 	if x := os.Getenv("SPIN_GETTY_EXEC"); x != "" {
 		body += "ExecStart=\nExecStart=-" + x + "\n"
 	}
@@ -227,8 +240,10 @@ func TestBootTrace(t *testing.T) {
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), "boot",
 		"--release", out, "--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
 		"--console", "file:/dev/stdout",
-		"--append", "init=/sbin/init loglevel=7 systemd.show_status=true "+
-			"systemd.log_level=info systemd.log_target=console")
+		"--append", strings.TrimSpace("init=/sbin/init loglevel=7 systemd.show_status=true "+
+			"systemd.log_level=info systemd.log_target=console "+os.Getenv("SPIN_TRACE_APPEND")))
+	// FLAGS, as the other probes take it: spin-machine boot flags after the rest.
+	cmd.Args = append(cmd.Args, strings.Fields(os.Getenv("FLAGS"))...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

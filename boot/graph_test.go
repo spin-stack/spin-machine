@@ -29,6 +29,45 @@ import (
 // It also cannot see what runs before ftrace_init, which is most of start_kernel's memory
 // setup: a root has to be a function entered after tracing is on.
 
+// traceAccess goes into the unit of each probe that reads tracefs, before its trace: the
+// guest's lockdown level and what reading tracefs answered. Both, because a locked-down kernel
+// gives an empty trace and an empty trace has other causes: from the commit that forced
+// lockdown (1400f6a) these probes answered "the trace is empty: is each a function entered
+// after ftrace_init?" for acpi_init, which they had traced before (found 2026-11-12).
+const traceAccess = `echo SPIN-LOCKDOWN $$(cat /sys/kernel/security/lockdown 2>&1); echo SPIN-TRACEFS $$(cat /sys/kernel/tracing/tracing_on 2>&1);`
+
+var (
+	reLockdown = regexp.MustCompile(`SPIN-LOCKDOWN ([^\r\n]*)`)
+	reTracefs  = regexp.MustCompile(`SPIN-TRACEFS ([^\r\n]*)`)
+)
+
+// untraceable says why a kernel booted with traceAccess in its probe's unit could not be
+// traced, with what to do instead, or "" when it could.
+//
+// The release's kernel never can: it runs lockdown at confidentiality from its first
+// instruction (CONFIG_LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY, kernel/README.md), which takes
+// tracefs from root, and a lockdown= parameter only raises the level. So a trace is of a
+// kernel B built without it, which is how lockdown's own cost was measured (2026-10-01).
+func untraceable(console string) string {
+	const how = "trace a kernel built without it: on a branch, take " +
+		"CONFIG_LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY out of kernel/config-* and out of " +
+		"kernel/Dockerfile's check of it, build it (task kernel:build there, or the Kernel workflow), " +
+		"and run this with SPIN_KERNEL_B=<its vmlinux> and GRAPH_KERNEL=b - in the lab, kernel_run=<the run>"
+	l := reLockdown.FindStringSubmatch(console)
+	f := reTracefs.FindStringSubmatch(console)
+	if l == nil || f == nil {
+		return "the probe's unit printed no SPIN-LOCKDOWN or SPIN-TRACEFS line, so it did not run"
+	}
+	if strings.Contains(l[1], "[confidentiality]") {
+		return "this kernel runs lockdown at confidentiality (" + strings.TrimSpace(l[1]) +
+			"), which closes tracefs to root; " + how
+	}
+	if v := strings.TrimSpace(f[1]); v != "0" && v != "1" {
+		return "tracefs answered " + strconv.Quote(v) + " (lockdown " + strings.TrimSpace(l[1]) + "); " + how
+	}
+	return ""
+}
+
 // graphReport boots reps machines with fns traced and prints the tree of p50 durations, on the
 // release's kernel or, with GRAPH_KERNEL=b, on SPIN_KERNEL_B's - which is also the check that a
 // kernel built differently still has a working function tracer: an empty tree fails.
@@ -50,7 +89,7 @@ After=multi-user.target
 [Service]
 Type=oneshot
 StandardOutput=null
-ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; grep -E '[{]$$|[}] /[*]|[+!#*@$$] +[0-9]' /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-INVALID $$(grep -c __ftrace_invalid_address__ /sys/kernel/tracing/available_filter_functions); echo SPIN-DMESG-END; } > /dev/ttyS0"
+ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { ` + traceAccess + ` echo SPIN-TRACE-BEGIN; grep -E '[{]$$|[}] /[*]|[+!#*@$$] +[0-9]' /sys/kernel/tracing/trace; echo SPIN-TRACE-END; echo SPIN-INVALID $$(grep -c __ftrace_invalid_address__ /sys/kernel/tracing/available_filter_functions); echo SPIN-DMESG-END; } > /dev/ttyS0"
 [Install]
 WantedBy=multi-user.target
 `
@@ -79,6 +118,9 @@ WantedBy=multi-user.target
 		// every one.
 		if m := regexp.MustCompile(`SPIN-INVALID (\d+)`).FindStringSubmatch(console); m != nil && m[1] != "0" {
 			t.Errorf("available_filter_functions lists %s __ftrace_invalid_address__ records", m[1])
+		}
+		if why := untraceable(console); why != "" {
+			t.Fatalf("nothing can be traced on this kernel: %s", why)
 		}
 		calls := parseGraph(console[begin:end])
 		if len(calls) == 0 {
@@ -112,14 +154,27 @@ func parseGraph(trace string) map[string]float64 {
 			continue
 		}
 		if m := reGraphClose.FindStringSubmatch(line); m != nil {
-			st := stacks[m[1]]
-			if len(st) == 0 || st[len(st)-1] != m[3] {
-				// A close whose open was before the buffer began, or on another CPU.
-				continue
+			cpu := m[1]
+			if st := stacks[cpu]; len(st) == 0 || st[len(st)-1] != m[3] {
+				// Opened on another CPU: the task migrated while the function ran, which a
+				// function that sleeps does - acpi_init opened on CPU 1 and closed on CPU 0 in a
+				// boot on 2026-11-12, and the whole trace read as empty. Its open is the top of
+				// another CPU's stack. A close found nowhere opened before the buffer began.
+				cpu = ""
+				for c, other := range stacks {
+					if len(other) > 0 && other[len(other)-1] == m[3] {
+						cpu = c
+						break
+					}
+				}
+				if cpu == "" {
+					continue
+				}
 			}
+			st := stacks[cpu]
 			us, _ := strconv.ParseFloat(m[2], 64)
 			total[strings.Join(st, "/")] += us / 1000
-			stacks[m[1]] = st[:len(st)-1]
+			stacks[cpu] = st[:len(st)-1]
 			continue
 		}
 		if m := reGraphLeaf.FindStringSubmatch(line); m != nil {
@@ -207,6 +262,8 @@ func TestAGraphTraceIsSummedByCallPath(t *testing.T) {
  0) + 12.000 us   |    acpi_ev_init();
  0) # 5000.000 us |  } /* acpi_init */
  1)   3.000 us    |  } /* never_opened */
+ 1)               |  migrates() {
+ 0) # 9913.509 us |  } /* migrates */
 `
 	got := parseGraph(trace)
 	want := map[string]float64{
@@ -215,6 +272,7 @@ func TestAGraphTraceIsSummedByCallPath(t *testing.T) {
 		"acpi_init/acpi_bus_scan/acpi_ns_walk": 0.002,
 		"acpi_init/acpi_ev_init":               0.012,
 		"other_cpu_leaf":                       0.009,
+		"migrates":                             9.913509,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("parsed %v, want %v", got, want)

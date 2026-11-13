@@ -1,0 +1,173 @@
+
+113569 C
+113687 L 54 dbus.socket start waiting
+113689 L 59 docker.socket start waiting
+113690 L 64 systemd-user-sessions.service start waiting
+113690 L 55 systemd-hostnamed.socket start waiting
+113691 L 51 ssh.socket start waiting
+113691 L 63 spin-waits.service start waiting
+113691 L 52 sshd-keygen.service start waiting
+113692 L 29 systemd-pcrphase-sysinit.service start waiting
+113692 L 27 systemd-udev-trigger.service start running
+113693 L 31 systemd-tmpfiles-setup.service start waiting
+113693 L 43 systemd-tmpfiles-clean.timer start waiting
+113693 L 66 getty-static.service start waiting
+113694 L 44 fstrim.timer start waiting
+113694 L 3 sysinit.target start waiting
+113695 L 67 getty@tty1.service start waiting
+113695 L 16 systemd-udevd.service start running
+113697 L 73 dev-ttyS0.device start running
+113698 L 2 basic.target start waiting
+113698 L 65 getty.target start waiting
+113699 L 1 multi-user.target start waiting
+113699 L 61 containerd.socket start waiting
+113699 L 57 systemd-logind-varlink.socket start waiting
+113700 L 42 timers.target start waiting
+113700 L 10 systemd-pcrphase.service start waiting
+113700 L 48 sshd-unix-local.socket start waiting
+113701 L 35 systemd-journald.service start running
+113701 L 71 serial-getty@ttyS0.service start waiting
+113701 L 47 sockets.target start waiting
+123367 A systemd-journald.service active
+123371 R 35 systemd-journald.service done
+123372 A systemd-journald-dev-log.socket active
+123373 A systemd-journald.socket active
+123373 A systemd-journald.service active
+125130 A systemd-tmpfiles-setup.service inactive
+125132 A systemd-tmpfiles-setup.service activating
+125132 S 31 running
+128160 A systemd-tmpfiles-setup.service activating
+131111 A systemd-udevd.service activating
+131548 A systemd-udevd-kernel.socket active
+134281 A systemd-tmpfiles-setup.service active
+134282 R 31 systemd-tmpfiles-setup.service done
+134283 A systemd-tmpfiles-setup.service active
+135254 A systemd-udev-trigger.service active
+135255 R 27 systemd-udev-trigger.service done
+135256 A systemd-udev-trigger.service active
+139087 A systemd-udevd.service active
+139088 R 16 systemd-udevd.service done
+139090 A systemd-udevd-control.socket active
+139248 A systemd-udevd-varlink.socket active
+139467 A systemd-udevd-kernel.socket active
+139766 A systemd-udevd.service active
+139768 A sysinit.target inactive
+139768 A sysinit.target active
+139987 R 3 sysinit.target done
+140711 A fstrim.timer inactive
+140712 A fstrim.timer active
+140712 R 44 fstrim.timer done
+140713 A systemd-tmpfiles-clean.timer inactive
+140714 A systemd-tmpfiles-clean.timer active
+140714 R 43 systemd-tmpfiles-clean.timer done
+140715 A timers.target inactive
+140715 A timers.target active
+140715 R 42 timers.target done
+140716 A containerd.socket inactive
+140716 A containerd.socket activating
+140717 A dbus.socket inactive
+140717 A dbus.socket activating
+140718 A dbus.socket active
+140718 R 54 dbus.socket done
+140719 A docker.socket inactive
+141020 A docker.socket activating
+141022 A ssh.socket inactive
+141958 A ssh.socket activating
+143273 A ssh.socket active
+143274 R 51 ssh.socket done
+143276 A sshd-unix-local.socket inactive
+143276 A sshd-unix-local.socket activating
+143277 A sshd-unix-local.socket active
+143277 R 48 sshd-unix-local.socket done
+143278 A systemd-hostnamed.socket inactive
+143279 A systemd-hostnamed.socket activating
+143279 A systemd-hostnamed.socket active
+143279 R 55 systemd-hostnamed.socket done
+145175 A systemd-logind-varlink.socket inactive
+145177 A systemd-pcrphase-sysinit.service inactive
+145178 R 29 systemd-pcrphase-sysinit.service done
+145179 A systemd-pcrphase-sysinit.service inactive
+145179 A systemd-logind-varlink.socket activating
+145180 A systemd-hostnamed.socket active
+145181 A sshd-unix-local.socket active
+145182 A -.mount active
+145183 A shutdown.target inactive
+145184 A basic.target inactive
+145184 A system-sshd.slice inactive
+146625 A sshd-keygen.service inactive
+146702 A auditd.service inactive
+148174 A nss-user-lookup.target inactive
+148176 A ssh.socket active
+148177 A docker.socket activating
+148178 A dbus.socket active
+148179 A containerd.socket activating
+148180 A timers.target active
+148181 A systemd-tmpfiles-clean.timer active
+148181 A fstrim.timer active
+148182 A sysinit.target active
+148182 S 57 running
+148183 S 59 running
+148183 S 61 running
+148184 A containerd.socket active
+148185 R 61 containerd.socket done
+148186 A containerd.socket active
+148186 A docker.socket active
+151131 R 59 docker.socket done
+151205 A docker.socket active
+151277 A systemd-logind-varlink.socket activating
+151278 A systemd-logind-varlink.socket activating
+151354 A systemd-logind-varlink.socket active
+151355 R 57 systemd-logind-varlink.socket done
+151419 A systemd-logind-varlink.socket active
+151484 A sockets.target inactive
+151484 A sockets.target active
+151485 R 47 sockets.target done
+151634 A basic.target inactive
+151635 A basic.target active
+151635 R 2 basic.target done
+151854 A getty-static.service inactive
+151930 R 66 getty-static.service done
+152161 A sshd-keygen.service inactive
+152397 R 52 sshd-keygen.service done
+152476 A systemd-pcrphase.service inactive
+152618 R 10 systemd-pcrphase.service done
+152761 A systemd-user-sessions.service inactive
+153133 A systemd-user-sessions.service activating
+153198 A systemd-pcrphase.service inactive
+154174 A sshd-keygen.service inactive
+154428 A getty-static.service inactive
+154429 A basic.target active
+154500 A sockets.target active
+155090 S 64 running
+155091 A systemd-user-sessions.service activating
+156913 A systemd-user-sessions.service active
+157762 R 64 systemd-user-sessions.service done
+157764 A systemd-user-sessions.service active
+157767 A getty@tty1.service inactive
+157767 R 67 getty@tty1.service done
+157768 A getty@tty1.service inactive
+162125 A dev-ttyS0.device inactive
+162127 A dev-ttyS0.device active
+162127 R 73 dev-ttyS0.device done
+162128 A dev-ttyS0.device active
+164817 A serial-getty@ttyS0.service inactive
+164819 A serial-getty@ttyS0.service active
+164820 R 71 serial-getty@ttyS0.service done
+164820 A getty.target inactive
+164821 A getty.target active
+164821 R 65 getty.target done
+164822 A multi-user.target inactive
+164822 A multi-user.target active
+164823 R 1 multi-user.target done
+167669 A spin-waits.service inactive
+167671 A spin-waits.service active
+167672 R 63 spin-waits.service done
+167672 F
+167674 A spin-waits.service active
+167675 A multi-user.target active
+167676 A getty.target active
+167676 A serial-getty@ttyS0.service active
+168521 A spin-waits.service active
+170950 A dev-vda.device active
+174370 A serial-getty@ttyS0.service active
+496843 A spin-waits.service inactive

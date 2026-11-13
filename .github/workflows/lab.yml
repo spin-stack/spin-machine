@@ -35,6 +35,11 @@ on:
           - boot:initcalls
           - boot:userspace
           - boot:systemd
+          - boot:waits
+          - boot:jobs
+          - boot:ssh-first
+          - boot:exits
+          - boot:mmio
           - boot:ssh-load
           - boot:page-cache
           - boot:firmware

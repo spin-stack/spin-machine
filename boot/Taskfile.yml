@@ -134,9 +134,10 @@ tasks:
     desc: >-
       Check first SSH login, reconnect, user services and logout in a disposable guest.
       Needs a built release; uses KVM when available, otherwise TCG.
-      The image does not start logind at boot, so this checks the thing that makes that
-      safe: that the first login activates it and gets a real session. SPIN_LOGIND_NO_SEATS=1
-      removes the drop-in that allows it and is expected to fail, not to measure anything.
+      The image starts logind at boot, for spin's lingering manager, and this checks that
+      logins get a real session. SPIN_LOGIND_NO_SEATS=1 holds logind back from the boot and
+      removes the drop-in that lets an early login still activate it, and is expected to
+      fail, not to measure anything.
     deps: [':tools']
     cmds:
       - SPIN_LOGIND_TEST=1 go test ./boot/ -run '^TestLogindSessions$' -count=1 -v -timeout 5m
@@ -179,6 +180,64 @@ tasks:
     deps: [':tools']
     cmds:
       - SPIN_SYSTEMD_DEBUG=1 go test ./boot/ -run TestSystemdDebug -count=1 -v -timeout 15m
+
+  waits:
+    desc: >-
+      What waited on what between the kernel handing over and a login prompt, on the host's
+      clock: each unit's own time against the lag before it started, the critical path to the
+      login that accounts for every millisecond of it, the intervals no unit was working, and
+      what is still starting behind the prompt. Read after the boot from systemd's timestamps.
+      Needs KVM, a built release and sudo. REPS= boots, TARGET= the login unit, TOP= rows,
+      GAP= the shortest idle interval in ms, RAW=<dir> keeps each boot's dump.
+    deps: [':tools']
+    cmds:
+      - SPIN_BOOT_WAITS=1 go test ./boot/ -run '^TestBootWaits$' -count=1 -v -timeout 20m
+
+  jobs:
+    desc: >-
+      PID 1's job queue as it changed during the boot, recorded live over systemd's private
+      socket by boot/jobwatch, a diagnostic binary built into each boot's overlay: what was
+      waiting and what was running every BUCKET ms, the boot:waits gaps with the jobs running
+      through them, jobs that did not end done, and the jobs the first SSH login after the boot
+      sets off. Interleaved with boots
+      without it, and the first table is what recording cost. Needs KVM, a built release and
+      sudo. REPS= boots of each, CPUS= vCPUs of both (3 gives the recorder room of its own),
+      LINGER= how long it records after startup, RAW=<dir> keeps the dumps.
+    deps: [':tools']
+    cmds:
+      - SPIN_BOOT_JOBS=1 go test ./boot/ -run '^TestBootJobs$' -count=1 -v -timeout 30m
+
+  ssh-first:
+    desc: >-
+      When a workspace can first be logged into from the host over SSH, through the machine's
+      vsock: sshd accepting, the first login done, a second login's cost, and the console
+      prompt beside them. Needs KVM, /dev/vhost-vsock (task vsock), a built release, sudo
+      and ssh. REPS= boots.
+    deps: [':tools']
+    cmds:
+      - SPIN_SSH_FIRST=1 go test ./boot/ -run '^TestFirstSSH$' -count=1 -v -timeout 30m
+
+  exits:
+    desc: >-
+      What each phase of a boot made KVM do, from the host: VM exits by kind, EPT faults, and
+      how the guest's RAM is mapped (4K/2M/1G, and how much of it the host holds in huge
+      pages), for the machine as built and without its virtio-rng device, interleaved. Reads
+      /sys/kernel/debug/kvm, so the host must run one VM at a time. Needs KVM, a built release
+      and sudo. REPS= boots of each row, CPUS= vCPUs.
+    deps: [':tools']
+    cmds:
+      - SPIN_BOOT_EXITS=1 go test ./boot/ -run '^TestExitTimeline$' -count=1 -v -timeout 30m
+
+  mmio:
+    desc: >-
+      Who the guest's exits to QEMU are, counted from QEMU's own trace from a launch to the
+      login prompt: every PCI configuration access by device and direction, and every MMIO
+      and port access by the region it reached. Counts, not times, so any host answers.
+      SPIN_KERNEL_B= counts a second kernel beside the release's. Needs KVM and a built
+      release; no sudo. TOP= regions.
+    deps: [':tools']
+    cmds:
+      - SPIN_BOOT_MMIO=1 go test ./boot/ -run '^TestMMIOCensus$' -count=1 -v -timeout 10m
 
   firmware-stages:
     desc: >-

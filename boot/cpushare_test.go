@@ -35,7 +35,7 @@ After=multi-user.target
 [Service]
 Type=oneshot
 StandardOutput=null
-ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { echo SPIN-TRACE-BEGIN; sed -n '1,/initcall_finish: func=FN+/p' /sys/kernel/tracing/trace | grep -E 'sched_switch|workqueue_execute|initcall_(start|finish): func=FN[+]'; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
+ExecStart=/bin/sh -c "mount -t tracefs none /sys/kernel/tracing 2>/dev/null; echo 0 > /sys/kernel/tracing/tracing_on; { ` + traceAccess + ` echo SPIN-TRACE-BEGIN; sed -n '1,/initcall_finish: func=FN+/p' /sys/kernel/tracing/trace | grep -E 'sched_switch|workqueue_execute|initcall_(start|finish): func=FN[+]'; echo SPIN-TRACE-END; echo SPIN-DMESG-END; } > /dev/ttyS0"
 [Install]
 WantedBy=multi-user.target
 `
@@ -52,9 +52,23 @@ WantedBy=multi-user.target
 		kernels = append(kernels, struct{ label, path string }{"kernel B", k})
 	}
 	shares := map[string][]map[string]float64{}
+	// The release's kernel cannot be traced (untraceable), so with a kernel B it is left out
+	// after its first boot says so, and without one the probe stops and says what to build.
+	locked := map[string]bool{}
 	for range reps {
 		for _, k := range kernels {
+			if locked[k.label] {
+				continue
+			}
 			console := bootUntil(t, out, v, k.path, "SPIN-DMESG-END", 180*time.Second)
+			if why := untraceable(console); why != "" {
+				if k.label == "release" && len(kernels) > 1 {
+					t.Logf("the release's kernel is left out: %s", why)
+					locked[k.label] = true
+					continue
+				}
+				t.Fatalf("nothing can be traced on the %s kernel: %s", k.label, why)
+			}
 			begin, end := strings.Index(console, "SPIN-TRACE-BEGIN"), strings.Index(console, "SPIN-TRACE-END")
 			if begin < 0 || end < begin {
 				t.Fatalf("no trace in the console:\n%s", tail([]byte(console), 2000))
