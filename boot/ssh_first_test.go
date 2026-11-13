@@ -217,6 +217,20 @@ sed -e '/^Wants=sysinit.target$/d' -e '/^After=sysinit.target$/d' "$MNT/usr/lib/
 			`ExecStart=-/usr/sbin/sshd -i -e -o "AuthorizedKeysFile ${CREDENTIALS_DIRECTORY}/ssh.ephemeral-authorized_keys-all .ssh/authorized_keys"` +
 			"\nStandardError=append:/dev/ttyS0\n"
 	}
+	// EXPERIMENT: the lane with sessions of class user-early-light. logind answers a session
+	// request once its scope, the runtime directory and - for a class that wants one - the
+	// user's service manager are started, and orders the scope after
+	// systemd-user-sessions.service unless the class is early (systemd v259.9,
+	// src/login/logind-session.c: session_job_pending, session_start_scope). Light: no wait
+	// for user@1000, which spin's linger starts anyway; early: no wait for the barrier that
+	// only exists for /run/nologin, which the lane no longer writes. The session keeps its
+	// scope and XDG_RUNTIME_DIR.
+	early := fast
+	early.label = "fast lane, user-early-light"
+	early.setup += `grep -q '^session.*pam_systemd.so' "$MNT/etc/pam.d/common-session"
+sed -i 's/^\(session.*pam_systemd\.so\)\(.*\)$/\1\2 class=user-early-light/' "$MNT/etc/pam.d/common-session"
+grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
+`
 	// DIAGNOSTIC bound: the lane without pam_systemd, so a login waits on no logind session
 	// and no user manager. Not a candidate: a login without a session has no
 	// XDG_RUNTIME_DIR. It says how much of the lane's session is that wait.
@@ -228,7 +242,7 @@ sed -i '/pam_systemd/d' "$MNT/etc/pam.d/common-session"
 	var rows []variant
 	for _, tr := range trees {
 		for _, k := range kernels {
-			for _, base := range []variant{asBuilt, fast, nopam, async} {
+			for _, base := range []variant{asBuilt, fast, early, nopam, async} {
 				v := base
 				v.label += tr.name + k.name
 				v.kernel = k.path
