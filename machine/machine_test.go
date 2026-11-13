@@ -645,6 +645,9 @@ func TestCmdline(t *testing.T) {
 			// fails if it goes, the machine just takes five times as long.
 			"TERM=dumb",
 			"console=ttyS0",
+			// The probes nothing before init waits for run beside the initcalls; the
+			// root disk's is not among them, because the mount needs it.
+			"driver_async_probe=virtio_rng,virtio_balloon,vmw_vsock_virtio_transport",
 		},
 		// No root named, no root= at all: an empty one would be a kernel looking for "".
 		absent: []string{"root="},

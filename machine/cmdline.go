@@ -170,6 +170,16 @@ func (c Cmdline) String() string {
 	//   rcupdate.rcu_expedited=1 expedite RCU grace periods during boot.
 	parts = append(parts, "no_timer_check", "tsc=reliable", "rcupdate.rcu_expedited=1")
 
+	// The virtio devices nothing before init needs - the entropy source, the balloon and
+	// the vsock transport - probed asynchronously, on the second vCPU beside the
+	// initcalls, rather than one after the other on the boot CPU. Each probe is a run of
+	// VM exits (2.2, 2.8 and 3.0 ms on the bench fleet, boot:initcalls lab run
+	// 43505126131). The root mount still waits for them (wait_for_device_probe), so this
+	// takes them off the boot CPU, not out of the boot: with kernel patches 0005 and 0006
+	// the first SSH login of a minimal init went 214 -> 209 ms (boot:ssh-first, lab run
+	// 43506390106). The root disk's driver is not here: the mount needs it first.
+	parts = append(parts, "driver_async_probe=virtio_rng,virtio_balloon,vmw_vsock_virtio_transport")
+
 	// The single largest thing in this machine's boot, and it is not the kernel's.
 	//
 	// The kernel execs /sbin/init at 59 ms and systemd's first log line arrives at 852.
