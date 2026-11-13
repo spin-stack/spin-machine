@@ -253,7 +253,7 @@ grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 	coldplug.label = "lane, coldplug filtered"
 	coldplug.files = maps.Clone(early.files)
 	coldplug.files["/etc/systemd/system/systemd-udev-trigger.service.d/filter.conf"] = "[Service]\nExecStart=\n" +
-		"ExecStart=-udevadm trigger --type=devices --action=add --subsystem-match=block --subsystem-match=net --subsystem-match=virtio --subsystem-match=vsock\n" +
+		"ExecStart=-udevadm trigger --type=devices --action=add --subsystem-match=block --subsystem-match=net --subsystem-match=virtio --subsystem-match=misc --subsystem-match=input --subsystem-match=rtc --subsystem-match=ptp\n" +
 		"ExecStart=-udevadm trigger --type=devices --action=add --subsystem-match=tty --sysname-match=ttyS0\n"
 	both := prio
 	both.label = "lane, priority, coldplug filtered"
@@ -444,6 +444,12 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 		}
 		// DIAGNOSTIC: SPIN_SESSION_CHECK=1 says what the first login's session is: its runtime
 		// directory, the class logind gave it, and whether the user's manager answers.
+		// DIAGNOSTIC: SPIN_CHECK_CMD runs a command of the caller's in the guest after the first
+		// login and prints what it said, for a functional comparison between rows.
+		if c := os.Getenv("SPIN_CHECK_CMD"); c != "" {
+			out, err := sshOutput(cid, signer, c)
+			t.Logf("%s: check: %v\n%s", v.label, err, out)
+		}
 		if os.Getenv("SPIN_SESSION_CHECK") != "" {
 			out, err := sshOutput(cid, signer, `d=$XDG_RUNTIME_DIR; test -d "$d" && echo "runtime $d"; loginctl show-session "$XDG_SESSION_ID" -p Class -p Type -p State | tr '\n' ' '; echo; systemctl --user is-system-running 2>&1 | head -1`)
 			t.Logf("%s: session: %v\n%s", v.label, err, out)
