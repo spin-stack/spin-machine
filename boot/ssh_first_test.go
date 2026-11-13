@@ -55,39 +55,7 @@ func TestFirstSSH(t *testing.T) {
 		t.Skip("no /dev/vhost-vsock: run task vsock")
 	}
 	reps := envInt(t, "REPS", 10)
-
-	pub, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := xssh.NewSignerFromKey(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshPub, err := xssh.NewPublicKey(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(key+".pub", xssh.MarshalAuthorizedKey(sshPub), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Every row has the key, the echo getty, and sshd@.service ordered after the image's host
-	// key generation. The image carries that drop-in itself since 2026-11-12; it is written
-	// here as well because the lab boots published releases, and one from before it cannot be
-	// logged into over vsock at all - the per-connection sshd finds no host keys.
-	keySetup := `ids=$(awk -F: '$1=="spin"{print $3":"$4}' "$MNT/etc/passwd"); test -n "$ids"
-install -d -m 700 -o "${ids%:*}" -g "${ids#*:}" "$MNT/home/spin/.ssh"
-install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ssh/authorized_keys"
-`
-	row := func(label, setup string) variant {
-		files := gettyDropin(gettyEcho)
-		files["/etc/systemd/system/sshd@.service.d/keygen.conf"] = "[Unit]\nWants=spin-machine-sshd-keygen.service\nAfter=spin-machine-sshd-keygen.service\n"
-		// The key in spin's own directory, owned by spin: sshd's StrictModes refuses one it
-		// cannot trust, and a refused key reads as a login that never comes.
-		return variant{label: label, cpus: cmp.Or(os.Getenv("CPUS"), "2"), memory: "2048", files: files, setup: keySetup + setup}
-	}
+	row, signer := sshRow(t)
 	// Rows measured against "as built" and dropped once they had answered, on the bench fleet,
 	// 10 boots of each interleaved, lab run 43308825692 (2026-11-12), p50/p95 ms of the first
 	// login: as built then 570/626; pam_motd off 558/588; logind back in the boot 558/593;
@@ -202,6 +170,43 @@ grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 	t.Log(b.String())
 }
 
+// sshRow makes a key to log in with and returns it with a function that makes a row of the
+// release logged into with it: the key in spin's authorized_keys, the echo getty, sshd@ ordered
+// after the image's host key generation, and setup run after those. The image carries that last
+// drop-in itself since 2026-11-12; it is written here as well because the lab boots published
+// releases, and one from before it cannot be logged into over vsock at all - the per-connection
+// sshd finds no host keys.
+func sshRow(t *testing.T) (func(label, setup string) variant, xssh.Signer) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := xssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := xssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(key+".pub", xssh.MarshalAuthorizedKey(sshPub), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The key in spin's own directory, owned by spin: sshd's StrictModes refuses one it cannot
+	// trust, and a refused key reads as a login that never comes.
+	keySetup := `ids=$(awk -F: '$1=="spin"{print $3":"$4}' "$MNT/etc/passwd"); test -n "$ids"
+install -d -m 700 -o "${ids%:*}" -g "${ids#*:}" "$MNT/home/spin/.ssh"
+install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ssh/authorized_keys"
+`
+	return func(label, setup string) variant {
+		files := gettyDropin(gettyEcho)
+		files["/etc/systemd/system/sshd@.service.d/keygen.conf"] = "[Unit]\nWants=spin-machine-sshd-keygen.service\nAfter=spin-machine-sshd-keygen.service\n"
+		return variant{label: label, cpus: cmp.Or(os.Getenv("CPUS"), "2"), memory: "2048", files: files, setup: keySetup + setup}
+	}, signer
+}
+
 type firstSSHRun struct {
 	listen, login, prompt time.Duration
 	again                 time.Duration // a second login, right after the first: what any login costs
@@ -219,10 +224,11 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 	// Context ids are the host's: two machines with one fail to start, so this one's is drawn
 	// from a range nothing else here uses.
 	cid := uint32(100000 + rand.IntN(1<<20))
-	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), "boot", "--release", out,
+	args := append([]string{"boot", "--release", out,
 		"--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
 		"--vsock-cid", fmt.Sprint(cid),
-		"--console", "file:/dev/stdout", "--append", "init=/sbin/init")
+		"--console", "file:/dev/stdout", "--append", "init=/sbin/init"}, v.flags...)
+	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

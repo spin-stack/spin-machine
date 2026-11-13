@@ -150,3 +150,42 @@ func TestDiff(t *testing.T) {
 		t.Errorf("a row a partial run did not ask about is reported gone, or one under the threshold is listed:\n%s", got)
 	}
 }
+
+// The goal's number comes before the console's sections, moved or not, and reads "-" on the
+// side of a release from before it was measured.
+func TestDiffFirstLogin(t *testing.T) {
+	login := func(accepts, login float64) *Boot {
+		return &Boot{Boots: 20, Phases: map[string]Summary{
+			"accepts": {P50: accepts, P95: accepts + 10, N: 20}, "login": {P50: login, P95: login + 20, N: 20}}}
+	}
+	var b bytes.Buffer
+	Diff(&b, Report{Release: "v1", FirstLogin: login(300, 400)}, Report{Release: "v2", FirstLogin: login(300, 360)}, 0.05)
+	out := b.String()
+	for _, want := range []string{
+		"| accepts | 300.0 / 310.0 → 300.0 / 310.0 | +0.0% |",
+		"| login | 400.0 / 420.0 → 360.0 / 380.0 | -10.0% |",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Index(out, "First SSH login") > strings.Index(out, "Feature matrix") {
+		t.Errorf("the first login is not before the console's sections:\n%s", out)
+	}
+
+	b.Reset()
+	nw := login(300, 360)
+	nw.Failed, nw.Error = 2, "sshd never accepted"
+	Diff(&b, Report{Release: "v1"}, Report{Release: "v2", FirstLogin: nw}, 0.05)
+	for _, want := range []string{"| login | - → 360.0 / 380.0 | - |", "2 of 20 boots had no login: sshd never accepted"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, b.String())
+		}
+	}
+
+	b.Reset()
+	Diff(&b, Report{Release: "v1"}, Report{Release: "v2"}, 0.05)
+	if strings.Contains(b.String(), "First SSH login") {
+		t.Errorf("two reports with no first login have a section for one:\n%s", b.String())
+	}
+}

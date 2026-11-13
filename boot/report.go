@@ -34,10 +34,17 @@ type Report struct {
 	Only string `json:"only,omitempty"`
 	// Login is how a login prompt was reached: "echo" when the getty was replaced by one, so
 	// agetty's unconditional second is not in the usable column; "agetty" when it was not.
-	Login    string    `json:"login"`
-	Specs    []Row     `json:"specs"`
-	Variants []Row     `json:"variants"`
-	Skipped  []Skipped `json:"skipped,omitempty"`
+	Login string `json:"login"`
+	// FirstLogin is the goal's number: the release as built, logged into over SSH through its
+	// vsock from the moment before QEMU is exec'd, in phases "accepts" (sshd takes a
+	// connection) and "login" (`true` has run as spin). The rows below time the serial
+	// console's prompt, which nothing a workspace does waits for: a change can move the two
+	// in opposite directions, as v20261113.03 did. Absent from a report made without sudo or
+	// /dev/vhost-vsock, and from releases before it was added.
+	FirstLogin *Boot     `json:"first_login,omitempty"`
+	Specs      []Row     `json:"specs"`
+	Variants   []Row     `json:"variants"`
+	Skipped    []Skipped `json:"skipped,omitempty"`
 }
 
 // Host is what the boot times were measured on.
@@ -101,14 +108,21 @@ func Summarise(runs []Run, failure string) Boot {
 				ds = append(ds, d)
 			}
 		}
-		p50, ok := Percentile(ds, 0.5)
-		if !ok {
-			continue
+		if s, ok := SummaryOf(ds); ok {
+			b.Phases[p.String()] = s
 		}
-		p95, _ := Percentile(ds, 0.95)
-		b.Phases[p.String()] = Summary{P50: ms(p50), P95: ms(p95), N: len(ds)}
 	}
 	return b
+}
+
+// SummaryOf is the p50 and p95 of ds, and false when ds is empty.
+func SummaryOf(ds []time.Duration) (Summary, bool) {
+	p50, ok := Percentile(ds, 0.5)
+	if !ok {
+		return Summary{}, false
+	}
+	p95, _ := Percentile(ds, 0.95)
+	return Summary{P50: ms(p50), P95: ms(p95), N: len(ds)}, true
 }
 
 func ms(d time.Duration) float64 { return math.Round(float64(d.Microseconds())/10) / 100 }
@@ -136,9 +150,49 @@ func Diff(w io.Writer, old, new Report, threshold float64) {
 			fmt.Fprintf(w, "- `%s` changed: `%s` → `%s`\n", k, short(a), short(b))
 		}
 	}
+	firstLogin(w, old.FirstLogin, new.FirstLogin)
 	partial := new.Only != ""
 	section(w, "Feature matrix", old.Specs, new.Specs, threshold, partial)
 	section(w, "Image variants", old.Variants, new.Variants, threshold, partial)
+}
+
+// firstLogin writes the goal's number first and always, moved or not: it is the one a change is
+// decided on, and the sections after it time the console's prompt.
+func firstLogin(w io.Writer, old, new *Boot) {
+	if old == nil && new == nil {
+		return
+	}
+	fmt.Fprintf(w, "\n### First SSH login\n\n")
+	fmt.Fprintln(w, "| phase | p50 / p95 (ms) | p50 |")
+	fmt.Fprintln(w, "|---|---|---|")
+	for _, p := range []string{"accepts", "login"} {
+		a, aok := phase(old, p)
+		b, bok := phase(new, p)
+		move := "-"
+		if aok && bok && a.P50 > 0 {
+			move = fmt.Sprintf("%+.1f%%", 100*(b.P50-a.P50)/a.P50)
+		}
+		fmt.Fprintf(w, "| %s | %s → %s | %s |\n", p, summary(a, aok), summary(b, bok), move)
+	}
+	if new != nil && new.Failed > 0 {
+		fmt.Fprintf(w, "\n%d of %d boots had no login: %s\n", new.Failed, new.Boots, new.Error)
+	}
+	fmt.Fprintln(w, "\nThe sections below time the serial console's prompt, which no workspace waits for.")
+}
+
+func phase(b *Boot, p string) (Summary, bool) {
+	if b == nil {
+		return Summary{}, false
+	}
+	s, ok := b.Phases[p]
+	return s, ok
+}
+
+func summary(s Summary, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f / %.1f", s.P50, s.P95)
 }
 
 func section(w io.Writer, title string, old, new []Row, threshold float64, partial bool) {
@@ -303,10 +357,7 @@ func outcome(r Row) string {
 
 func usable(r Row) string {
 	s, ok := r.Boot.Phases["usable"]
-	if !ok {
-		return "-"
-	}
-	return fmt.Sprintf("%.1f / %.1f", s.P50, s.P95)
+	return summary(s, ok)
 }
 
 func name(r Report) string {
