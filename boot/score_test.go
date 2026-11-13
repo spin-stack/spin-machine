@@ -208,6 +208,9 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	}
 	r.cold, r.coldAccept = time.Since(t0), accepted.Sub(t0)
 	r.coldPrompt = <-prompt
+	if b, err := exec.Command("sudo", "sh", "-c", "cd /sys/kernel/debug/kvm && for f in pages_4k pages_2m pages_1g nx_lpage_splits; do printf '%s=%s ' $f $(cat $f); done").Output(); err == nil {
+		t.Logf("cold boot, KVM: %s", b)
+	}
 	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
 		b, _ := os.ReadFile(filepath.Join(dir, "a.qmp.console"))
 		c := string(b)
