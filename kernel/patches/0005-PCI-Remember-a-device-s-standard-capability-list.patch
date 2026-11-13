@@ -1,0 +1,169 @@
+From: Manuel de Brito Fontes <aledbf@gmail.com>
+Date: Thu, 12 Nov 2026 19:45:27 -0300
+Subject: [PATCH 5/6] PCI: Remember a device's standard capability list
+
+pci_find_capability() reads the status register and walks the
+capability list from its start on every call, and
+pci_find_next_capability() walks from where it is told. A device is
+asked for its capabilities a dozen times or more while it is set up
+(PM, MSI, MSI-X, VPD, EA, the reset methods, the PCIe port type) and
+again by its driver: virtio-pci looks for four vendor capabilities, each
+search a walk of its own. Each step of a walk is a configuration read.
+
+Under a hypervisor every configuration read is a trap. On this machine
+each virtio-pci device took about 240 of them while it was set up, some
+110 of which walked the same list again - the status register, the
+pointer and six links, fourteen to sixteen times.
+
+Walk the list once in pci_setup_device(), keep each capability's ID and
+offset in struct pci_dev, and answer both searches from there. A
+position the list does not hold falls back to walking configuration
+space, as does pci_bus_find_capability(), which has no pci_dev to keep
+anything in.
+
+Measured on QEMU's q35 with three virtio-pci devices, nested under KVM
+on an AWS c8i.4xlarge, 20 boots interleaved: ECAM accesses per boot
+1,032 -> 680, kernel start to "Freeing unused kernel image" 95.1 ->
+88.9 ms p50, acpi_init 14 -> 10 ms, virtio_pci_driver_init 6.5 -> 4.7
+ms; inet_init, which reads no configuration space, 7.50 -> 7.49 ms.
+It costs 98 bytes in every struct pci_dev.
+
+The list is read before the early fixups run, so a quirk that changes
+which capabilities a device shows would leave it stale. This kernel
+runs only in a QEMU guest, where no such quirk applies.
+
+Local patch for this machine. Not upstream.
+
+Assisted-by: LLM
+---
+ drivers/pci/pci.c   | 57 +++++++++++++++++++++++++++++++++++++++++++++
+ drivers/pci/pci.h   |  2 ++
+ drivers/pci/probe.c |  1 +
+ include/linux/pci.h |  4 ++++
+ 4 files changed, 64 insertions(+)
+
+diff --git a/drivers/pci/pci.c b/drivers/pci/pci.c
+index f852564..691c73d 100644
+--- a/drivers/pci/pci.c
++++ b/drivers/pci/pci.c
+@@ -420,6 +420,20 @@ static u8 __pci_find_next_cap(struct pci_bus *bus, unsigned int devfn,
+ 
+ u8 pci_find_next_capability(struct pci_dev *dev, u8 pos, int cap)
+ {
++	int i;
++
++	if (dev->cap_cached) {
++		for (i = 0; i < dev->cap_count && dev->cap_pos[i] != pos; i++)
++			;
++		/* A position the list does not hold is the caller's own walk. */
++		if (i < dev->cap_count) {
++			while (++i < dev->cap_count)
++				if (dev->cap_id[i] == cap)
++					return dev->cap_pos[i];
++			return 0;
++		}
++	}
++
+ 	return __pci_find_next_cap(dev->bus, dev->devfn,
+ 				   pos + PCI_CAP_LIST_NEXT, cap);
+ }
+@@ -467,6 +481,14 @@ static u8 __pci_bus_find_cap_start(struct pci_bus *bus,
+ u8 pci_find_capability(struct pci_dev *dev, int cap)
+ {
+ 	u8 pos;
++	int i;
++
++	if (dev->cap_cached) {
++		for (i = 0; i < dev->cap_count; i++)
++			if (dev->cap_id[i] == cap)
++				return dev->cap_pos[i];
++		return 0;
++	}
+ 
+ 	pos = __pci_bus_find_cap_start(dev->bus, dev->devfn, dev->hdr_type);
+ 	if (pos)
+@@ -503,6 +525,41 @@ u8 pci_bus_find_capability(struct pci_bus *bus, unsigned int devfn, int cap)
+ }
+ EXPORT_SYMBOL(pci_bus_find_capability);
+ 
++/**
++ * pci_cache_capabilities - read a device's standard capability list once
++ * @dev: PCI device whose header type is known
++ *
++ * Walks the list the way PCI_FIND_NEXT_CAP() does - the same TTL, the same
++ * stop at an ID of 0xff - and keeps each capability's ID and offset, so that
++ * pci_find_capability() and pci_find_next_capability() answer from memory
++ * instead of walking configuration space again.
++ */
++void pci_cache_capabilities(struct pci_dev *dev)
++{
++	int ttl = PCI_FIND_CAP_TTL;
++	u8 pos, id;
++	u16 ent;
++
++	dev->cap_count = 0;
++	pos = __pci_bus_find_cap_start(dev->bus, dev->devfn, dev->hdr_type);
++	if (pos)
++		pci_bus_read_config_byte(dev->bus, dev->devfn, pos, &pos);
++
++	while (ttl-- && pos >= PCI_STD_HEADER_SIZEOF &&
++	       dev->cap_count < ARRAY_SIZE(dev->cap_id)) {
++		pos = ALIGN_DOWN(pos, 4);
++		pci_bus_read_config_word(dev->bus, dev->devfn, pos, &ent);
++		id = FIELD_GET(PCI_CAP_ID_MASK, ent);
++		if (id == 0xff)
++			break;
++		dev->cap_id[dev->cap_count] = id;
++		dev->cap_pos[dev->cap_count++] = pos;
++		pos = FIELD_GET(PCI_CAP_LIST_NEXT_MASK, ent);
++	}
++
++	dev->cap_cached = true;
++}
++
+ /**
+  * pci_find_next_ext_capability - Find an extended capability
+  * @dev: PCI device to query
+diff --git a/drivers/pci/pci.h b/drivers/pci/pci.h
+index ba3c3fd..f23ea45 100644
+--- a/drivers/pci/pci.h
++++ b/drivers/pci/pci.h
+@@ -18,6 +18,8 @@ struct pcie_tlp_log;
+ 
+ #define PCI_FIND_CAP_TTL	48
+ 
++void pci_cache_capabilities(struct pci_dev *dev);
++
+ #define PCI_VSEC_ID_INTEL_TBT	0x1234	/* Thunderbolt */
+ 
+ #define PCIE_LINK_RETRAIN_TIMEOUT_MS	1000
+diff --git a/drivers/pci/probe.c b/drivers/pci/probe.c
+index 52a79b0..a0e6232 100644
+--- a/drivers/pci/probe.c
++++ b/drivers/pci/probe.c
+@@ -2031,6 +2031,7 @@ int pci_setup_device(struct pci_dev *dev)
+ 	dev->dev.bus = &pci_bus_type;
+ 	dev->hdr_type = FIELD_GET(PCI_HEADER_TYPE_MASK, hdr_type);
+ 	dev->multifunction = FIELD_GET(PCI_HEADER_TYPE_MFD, hdr_type);
++	pci_cache_capabilities(dev);
+ 	dev->error_state = pci_channel_io_normal;
+ 	set_pcie_port_type(dev);
+ 
+diff --git a/include/linux/pci.h b/include/linux/pci.h
+index 272378d..fbaa2fc 100644
+--- a/include/linux/pci.h
++++ b/include/linux/pci.h
+@@ -370,6 +370,10 @@ struct pci_dev {
+ 	unsigned int	class;		/* 3 bytes: (base,sub,prog-if) */
+ 	u8		revision;	/* PCI revision, low byte of class word */
+ 	u8		hdr_type;	/* PCI header type (`multi' flag masked out) */
++	u8		cap_count;	/* Entries in cap_id[] and cap_pos[] */
++	bool		cap_cached;	/* The standard capability list is in cap_id[] */
++	u8		cap_id[48];	/* Standard capability IDs, in list order */
++	u8		cap_pos[48];	/* and their offsets in configuration space */
+ #ifdef CONFIG_PCIEAER
+ 	u16		aer_cap;	/* AER capability offset */
+ 	struct aer_info	*aer_info;	/* AER info for this device */
+-- 
+2.53.0
+
