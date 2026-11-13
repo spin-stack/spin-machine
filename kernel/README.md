@@ -62,6 +62,13 @@ Lockdown at confidentiality also takes away the tenant's kernel tracing: kprobes
 `bpf_probe_read_kernel` and perf on the kernel. User-space tracing and networking eBPF are
 untouched, and so is a BPF LSM program that reads no kernel memory.
 
+It takes tracefs too, and with it this repository's own kernel tracing: `task boot:initcalls`
+with `SPIN_GRAPH` (function_graph) or `SPIN_CPU_SHARE` (scheduler events) cannot trace the
+release's kernel, and says so. They trace a kernel B built with
+`CONFIG_LOCK_DOWN_KERNEL_FORCE_NONE=y` instead - that option swapped in this config and taken out
+of `Dockerfile`'s check, on a branch or in a scratch worktree, never in a release. The rest of
+the boot probes read the ring buffer and systemd, which lockdown leaves alone.
+
 systemd notices at boot, and the console shows two lines that read like missing protection
 and are lockdown working:
 
