@@ -37,8 +37,8 @@ import (
 // same boot, with the getty an echo as boot:bench's baseline has it, so the two read side by
 // side.
 //
-// What `login` holds beyond `listen` is the first login's own chain, which boot:jobs records
-// from inside: sshd's host keys generated, the key exchange, PAM, logind, the user's manager.
+// What `login` holds beyond `listen` is the first login's own chain: sshd's host keys, the key
+// exchange, PAM, logind, the user's manager.
 //
 //	SPIN_SSH_FIRST=1  run at all
 //	REPS=<n>          boots of each row (default 10)

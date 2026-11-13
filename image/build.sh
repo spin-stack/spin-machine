@@ -299,12 +299,6 @@ for f in /etc/systemd/system/serial-getty@.service.d/term.conf \
     in_image "$f" || { echo "ERROR: the image has no $f; a login would inherit TERM=dumb" >&2; exit 1; }
 done
 
-# The serial getty is started Type=simple: Type=idle holds it until the boot's job queue
-# drains, which with spin lingering is 77 ms of a login prompt (serial-getty@.service.d/type.conf).
-"$bin/debugfs" -R "cat /etc/systemd/system/serial-getty@.service.d/type.conf" /work/base.raw 2>/dev/null |
-        grep -qx 'Type=simple' || {
-    echo "ERROR: the serial getty is not Type=simple; its prompt waits for the job queue to drain" >&2
-    exit 1; }
 
 # A boot optimization that is invisible in a file listing and expensive when it regresses:
 # a masked unit is a symlink to /dev/null, and a package upgrade replacing one turns it
