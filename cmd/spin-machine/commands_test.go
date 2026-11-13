@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -136,6 +137,39 @@ func TestSaveAndRestoreSayWhatQEMUNeeds(t *testing.T) {
 		do:      func(s string) error { return restore(restoreFlags{qmp: s, from: state, timeout: time.Minute}) },
 		want:    []string{"migrate-incoming"},
 		wantErr: "loading",
+	}, {
+		name:    "a save with channels asks for the mapped-ram layout first",
+		replies: []string{ok, ok, ok, ok, completed, ok},
+		do: func(s string) error {
+			return save(saveFlags{qmp: s, to: state, timeout: time.Minute, channels: 4})
+		},
+		want: []string{"migrate-set-capabilities", "migrate-set-parameters", "migrate", "query-migrate", "quit"},
+	}, {
+		name:    "a restore with channels asks for it before the load",
+		replies: []string{ok, ok, ok, ok, completed, `{"return": {"status": "running"}}`},
+		do: func(s string) error {
+			return restore(restoreFlags{qmp: s, from: state, timeout: time.Minute, channels: 4})
+		},
+		want: []string{"migrate-set-capabilities", "migrate-set-parameters", "migrate-incoming", "query-migrate", "query-status"},
+	}, {
+		name:    "one channel is the mapped-ram layout too",
+		replies: []string{ok, ok, ok, ok, completed, ok},
+		do: func(s string) error {
+			return save(saveFlags{qmp: s, to: state, timeout: time.Minute, channels: 1})
+		},
+		want: []string{"migrate-set-capabilities", "migrate-set-parameters", "migrate", "query-migrate", "quit"},
+	}, {
+		name:    "a QEMU without mapped-ram refuses the save, and says so",
+		replies: []string{ok, `{"error": {"class": "GenericError", "desc": "no mapped-ram"}}`},
+		do:      func(s string) error { return save(saveFlags{qmp: s, to: state, channels: 2}) },
+		want:    []string{"migrate-set-capabilities"},
+		wantErr: "asking for the mapped-ram layout",
+	}, {
+		name:    "refused channels are the restore's error",
+		replies: []string{ok, ok, `{"error": {"class": "GenericError", "desc": "no"}}`},
+		do:      func(s string) error { return restore(restoreFlags{qmp: s, from: state, channels: 2}) },
+		want:    []string{"migrate-set-capabilities", "migrate-set-parameters"},
+		wantErr: "asking for 2 multifd channels",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newMonitor(t, tc.replies...)
@@ -153,6 +187,21 @@ func TestSaveAndRestoreSayWhatQEMUNeeds(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("asked %v, want %v", got, tc.want)
+			}
+			// With channels, the layout is mapped-ram over multifd, with that many channels.
+			for _, r := range asked {
+				switch r.Execute {
+				case "migrate-set-capabilities":
+					caps, _ := json.Marshal(r.Arguments["capabilities"])
+					want := `[{"capability":"mapped-ram","state":true},{"capability":"multifd","state":true}]`
+					if string(caps) != want {
+						t.Errorf("capabilities %s, want %s", caps, want)
+					}
+				case "migrate-set-parameters":
+					if n, _ := r.Arguments["multifd-channels"].(float64); n != 4 && n != 2 && n != 1 {
+						t.Errorf("parameters %v, want the channels given", r.Arguments)
+					}
+				}
 			}
 			// The file named is the one given, absolute, in QEMU's file: form.
 			for _, r := range asked {
@@ -561,5 +610,22 @@ func TestATargetIsOneTheControllerAddresses(t *testing.T) {
 		if err := checkTarget(target); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("target %d: %v, want an error containing %q", target, err, want)
 		}
+	}
+}
+
+// Without --channels a state is QEMU's single stream, the layout of every checkpoint saved
+// before the flag existed: a default anything else would leave them unresumable.
+func TestChannelsDefaultToTheStream(t *testing.T) {
+	var sv saveFlags
+	var rs restoreFlags
+	for _, register := range []func(*flag.FlagSet){sv.register, rs.register} {
+		fs := flag.NewFlagSet("", flag.ContinueOnError)
+		register(fs)
+		if err := fs.Parse(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sv.channels != 0 || rs.channels != 0 {
+		t.Errorf("--channels defaults to %d on save and %d on restore, want 0", sv.channels, rs.channels)
 	}
 }

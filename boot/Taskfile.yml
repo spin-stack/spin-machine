@@ -239,6 +239,17 @@ tasks:
     cmds:
       - SPIN_BOOT_MMIO=1 go test ./boot/ -run '^TestMMIOCensus$' -count=1 -v -timeout 10m
 
+  restore:
+    desc: >-
+      What resuming a checkpoint costs, from the host: a settled guest saved, then from QEMU's
+      exec its QMP up, the state loaded and running, and the first SSH login over vsock, the
+      state read cold from the disk - in QEMU's single stream and in the mapped-ram layout
+      through CHANNELS multifd channels, interleaved. Needs KVM, /dev/vhost-vsock (task vsock),
+      a built release, sudo, ssh and Go (save and restore are this tree's). REPS= of each.
+    deps: [':tools']
+    cmds:
+      - SPIN_BOOT_RESTORE=1 go test ./boot/ -run '^TestRestoreCost$' -count=1 -v -timeout 60m
+
   firmware-stages:
     desc: >-
       Where the time before the kernel goes on the machine a workspace boots: QEMU's start and

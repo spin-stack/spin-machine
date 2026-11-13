@@ -51,30 +51,8 @@ func TestFirstSSH(t *testing.T) {
 	}
 	reps := envInt(t, "REPS", 10)
 
-	dir := t.TempDir()
-	proxy := filepath.Join(dir, "vsockproxy")
-	build := exec.Command("go", "build", "-trimpath", "-o", proxy, "./vsockproxy")
-	if b, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building vsockproxy: %v\n%s", err, b)
-	}
-	key := filepath.Join(dir, "key")
-	mustRun(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key)
-
-	// Every row has the key, the echo getty, and sshd@.service ordered after the image's host
-	// key generation. The image carries that drop-in itself since 2026-11-12; it is written
-	// here as well because the lab boots published releases, and one from before it cannot be
-	// logged into over vsock at all - the per-connection sshd finds no host keys.
-	keySetup := `ids=$(awk -F: '$1=="spin"{print $3":"$4}' "$MNT/etc/passwd"); test -n "$ids"
-install -d -m 700 -o "${ids%:*}" -g "${ids#*:}" "$MNT/home/spin/.ssh"
-install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ssh/authorized_keys"
-`
-	row := func(label, setup string) variant {
-		files := gettyDropin(gettyEcho)
-		files["/etc/systemd/system/sshd@.service.d/keygen.conf"] = "[Unit]\nWants=spin-machine-sshd-keygen.service\nAfter=spin-machine-sshd-keygen.service\n"
-		// The key in spin's own directory, owned by spin: sshd's StrictModes refuses one it
-		// cannot trust, and a refused key reads as a login that never comes.
-		return variant{label: label, cpus: cmp.Or(os.Getenv("CPUS"), "2"), memory: "2048", files: files, setup: keySetup + setup}
-	}
+	proxy, key := sshTools(t)
+	row := func(label, setup string) variant { return sshVariant(key, label, setup) }
 	// Rows measured against "as built" and dropped once they had answered, on the bench fleet,
 	// 10 boots of each interleaved, lab run 43308825692 (2026-11-12), p50/p95 ms of the first
 	// login: as built then 570/626; pam_motd off 558/588; logind back in the boot 558/593;
@@ -194,9 +172,7 @@ func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRu
 		r.why = "sshd never accepted on vsock; QEMU: " + strings.TrimSpace(stderr.String())
 		return r
 	}
-	ssh := []string{"-F", "/dev/null", "-i", key, "-o", "BatchMode=yes",
-		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=error",
-		"-o", "ConnectTimeout=10", "-o", fmt.Sprintf("ProxyCommand=%s %d 22", proxy, cid), "spin@vsock", "true"}
+	ssh := sshArgs(proxy, key, cid)
 	for time.Now().Before(deadline) {
 		b, err := exec.Command("ssh", ssh...).CombinedOutput()
 		if err == nil {
@@ -239,4 +215,42 @@ func vsockAccepts(cid, port uint32) bool {
 	tv := unix.NsecToTimeval((50 * time.Millisecond).Nanoseconds())
 	_ = unix.SetsockoptTimeval(fd, unix.AF_VSOCK, unix.SO_VM_SOCKETS_CONNECT_TIMEOUT, &tv)
 	return unix.Connect(fd, &unix.SockaddrVM{CID: cid, Port: port}) == nil
+}
+
+// sshTools builds vsockproxy and makes a key, for the probes that log into a guest from the host.
+func sshTools(t *testing.T) (proxy, key string) {
+	t.Helper()
+	dir := t.TempDir()
+	proxy = filepath.Join(dir, "vsockproxy")
+	build := exec.Command("go", "build", "-trimpath", "-o", proxy, "./vsockproxy")
+	if b, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building vsockproxy: %v\n%s", err, b)
+	}
+	key = filepath.Join(dir, "key")
+	mustRun(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key)
+	return proxy, key
+}
+
+// sshVariant is a boot that can be logged into from the host: the key, the echo getty, and
+// sshd@.service ordered after the image's host key generation. The image carries that drop-in
+// itself since v20261113.01; it is written here as well because the lab boots published
+// releases, and one from before it cannot be logged into over vsock at all - the per-connection
+// sshd finds no host keys.
+func sshVariant(key, label, setup string) variant {
+	files := gettyDropin(gettyEcho)
+	files["/etc/systemd/system/sshd@.service.d/keygen.conf"] = "[Unit]\nWants=spin-machine-sshd-keygen.service\nAfter=spin-machine-sshd-keygen.service\n"
+	// The key in spin's own directory, owned by spin: sshd's StrictModes refuses one it
+	// cannot trust, and a refused key reads as a login that never comes.
+	keySetup := `ids=$(awk -F: '$1=="spin"{print $3":"$4}' "$MNT/etc/passwd"); test -n "$ids"
+install -d -m 700 -o "${ids%:*}" -g "${ids#*:}" "$MNT/home/spin/.ssh"
+install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ssh/authorized_keys"
+`
+	return variant{label: label, cpus: cmp.Or(os.Getenv("CPUS"), "2"), memory: "2048", files: files, setup: keySetup + setup}
+}
+
+// sshArgs is `ssh spin@ true` into the guest with context id cid, through vsockproxy.
+func sshArgs(proxy, key string, cid uint32) []string {
+	return []string{"-F", "/dev/null", "-i", key, "-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=error",
+		"-o", "ConnectTimeout=10", "-o", fmt.Sprintf("ProxyCommand=%s %d 22", proxy, cid), "spin@vsock", "true"}
 }

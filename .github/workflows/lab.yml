@@ -40,6 +40,7 @@ on:
           - boot:ssh-first
           - boot:exits
           - boot:mmio
+          - boot:restore
           - boot:ssh-load
           - boot:page-cache
           - boot:firmware
