@@ -91,11 +91,62 @@ install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ss
 test -e "$MNT/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service"
 install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/spin"
 `
+	// EXPERIMENT (cold-boot-batch, 2026-11-13): the three image changes of that branch, one row
+	// each and together, against the image as built.
+	//
+	// keys early: the host keys generated from the boot's first dispatch, beside udev and
+	// journald, rather than by the first connection's sshd@, which waits for them before it
+	// sends its banner. Lab run 43463472762 measured it alone: accept to login 177 -> 155 ms.
+	keysEarly := func(v *variant) {
+		v.files["/etc/systemd/system/spin-machine-sshd-keygen.service.d/early.conf"] =
+			"[Unit]\nDefaultDependencies=no\nConflicts=shutdown.target\nBefore=shutdown.target\n"
+		v.links["/etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service"] =
+			"/usr/lib/systemd/system/spin-machine-sshd-keygen.service"
+	}
+	// generators: the two system generators that decide nothing here masked. sshd-socket-generator
+	// moves ssh.socket to sshd_config's Port and ListenAddress, which the image leaves at the
+	// default, and it loads libcrypto to say so: 3.5-23.5 ms in a guest against ~1.5 ms for each
+	// of systemd's, which run beside it (a laptop, 2026-11-13). systemd-run-generator reads
+	// systemd.run= off a command line spin-machine writes.
+	gens := []string{"sshd-socket-generator", "systemd-run-generator"}
+	generators := func(v *variant) {
+		for _, g := range gens {
+			v.setup += "test -x \"$MNT/usr/lib/systemd/system-generators/" + g + "\"\n"
+			v.links["/etc/systemd/system-generators/"+g] = "/dev/null"
+		}
+	}
+	// inert units: the initial transaction's jobs whose condition fails on every boot of this
+	// machine - no UKI or TPM to measure into, no AppArmor or modules in the kernel, no virtual
+	// console, and the distribution's keygen, which waits for a first boot that never comes.
+	// Each is a unit file PID 1 parses, and its dependencies, while no unit is running, between
+	// the unit load and the first job (task boot:trace with systemd.log_level=debug).
+	inert := []string{"systemd-pcrextend.socket", "systemd-pcrlock.socket", "systemd-pcrnvdone.service",
+		"systemd-pcrproduct.service", "systemd-pcrphase-sysinit.service", "systemd-pcrphase.service",
+		"kmod-static-nodes.service", "apparmor.service", "sshd-keygen.service", "getty-static.service",
+		"getty@tty1.service"}
+	inertUnits := func(v *variant) {
+		for _, u := range inert {
+			v.setup += "test -e \"$MNT/usr/lib/systemd/system/" + strings.Replace(u, "@tty1", "@", 1) + "\"\n"
+			v.links["/etc/systemd/system/"+u] = "/dev/null"
+		}
+	}
+	edited := func(label string, edits ...func(*variant)) variant {
+		v := row(label, asThisBranch)
+		v.links = map[string]string{}
+		for _, e := range edits {
+			e(&v)
+		}
+		return v
+	}
 	rows := []variant{
-		row("as this branch", asThisBranch),
+		row("as built", asThisBranch),
+		edited("keys early", keysEarly),
+		edited("generators", generators),
+		edited("inert units", inertUnits),
+		edited("batch", keysEarly, generators, inertUnits),
 	}
 
-	type samples struct{ listen, login, again, prompt []time.Duration }
+	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}
 	failed := map[string]int{}
 	for range reps {
@@ -111,6 +162,7 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 			}
 			g := got[v.label]
 			g.listen, g.login, g.again, g.prompt = append(g.listen, r.listen), append(g.login, r.login), append(g.again, r.again), append(g.prompt, r.prompt)
+			g.accepted = append(g.accepted, r.login-r.listen)
 		}
 	}
 	ms := func(ds []time.Duration, q float64) string {
@@ -122,14 +174,15 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nms from the moment before QEMU is exec'd, p50/p95 over %d boots of each, interleaved, %s vCPUs\n\n", reps, rows[0].cpus)
-	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %9s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN")
+	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %15s %9s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "ACCEPT TO LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN")
 	for _, v := range rows {
 		g := got[v.label]
 		if g == nil {
 			g = &samples{}
 		}
-		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d\n", v.label,
-			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.again, .5), ms(g.again, .95),
+		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d\n", v.label,
+			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.accepted, .5), ms(g.accepted, .95),
+			ms(g.again, .5), ms(g.again, .95),
 			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label])
 	}
 	t.Log(b.String())
