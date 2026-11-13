@@ -81,7 +81,10 @@ install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ss
 	// logind in the boot and spin lingering 510/525, with sshd accepting no later. The image
 	// now has no motd and lingers. Then, lab run 43312419007, 15 boots of each: the host keys
 	// generated in the boot (the keygen wanted by multi-user.target) 518/542 against 514/531 -
-	// nothing, so the keys stay with the first sshd that needs them. Each row's edit was checked in its setup, so a row that
+	// nothing, so the keys stay with the first sshd that needs them. Then, lab run 43374641932
+	// (2026-11-13), 10 of each: started with --qmp, as boot:score starts it, sshd accepted at 311
+	// and the first login came at 491 ms p50, against 309 and 497 without - a QMP socket costs the
+	// boot nothing. Each row's edit was checked in its setup, so a row that
 	// matched nothing failed rather than measuring the image under another name.
 	//
 	// The rows below are written so they hold on a release from before this branch as well as

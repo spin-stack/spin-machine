@@ -13,6 +13,22 @@ before it has the state in hand).
 `spin-machine boot --incoming file:state` or `boot --incoming defer` followed by
 `spin-machine restore --qmp … --from state`.
 
+## The state is mapped-ram
+
+Every checkpoint this machine writes is QEMU's mapped-ram layout: each page of RAM at a fixed
+offset in the file, written and read by multifd channels in parallel, a page that is zero never
+written - a file as long as the guest's memory and as large on the disk as what it used. The
+machine sets it on its command line (`machine.appendCheckpoint`), so every save and every load
+use it, the one-step `boot --incoming file:` included, with nothing said over QMP.
+
+It is the file's format, so it is in the fingerprint: QEMU loads a state only with the
+capabilities it was written with, so a checkpoint of the single stream that came before it has
+another fingerprint and is another machine's. How many channels move it is not part of the file (a state written
+through four loads through two), and not part of the fingerprint.
+
+On the bench fleet, a settled 2 GiB guest, the state read cold from the disk: restored and logged
+into in 394/410 ms p50/p95 against 877/1888 for the single stream (lab run 43364516874).
+
 ## The CPU decides whether a VM can move at all
 
 The default, `host`, shows the guest this host's own feature set through CPUID — which the

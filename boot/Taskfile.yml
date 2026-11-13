@@ -239,6 +239,17 @@ tasks:
     cmds:
       - SPIN_BOOT_MMIO=1 go test ./boot/ -run '^TestMMIOCensus$' -count=1 -v -timeout 10m
 
+  score:
+    desc: >-
+      The two numbers a change is held to: a guest booted cold and a guest restored from a
+      checkpoint, each to its first SSH login over vsock from QEMU's exec, for the release's
+      spin-machine and this tree's over the same release, interleaved, and over
+      SPIN_MACHINE_OUTPUT_B when set. Needs KVM, /dev/vhost-vsock (task vsock), a built
+      release, sudo, ssh and Go. REPS= of each row.
+    deps: [':tools']
+    cmds:
+      - SPIN_BOOT_SCORE=1 go test ./boot/ -run '^TestScore$' -count=1 -v -timeout 60m
+
   firmware-stages:
     desc: >-
       Where the time before the kernel goes on the machine a workspace boots: QEMU's start and

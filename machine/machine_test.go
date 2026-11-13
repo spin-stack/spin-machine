@@ -866,8 +866,11 @@ func TestTheContractIsTheDevicesPresentAtRestore(t *testing.T) {
 				"device virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on,disable-legacy=on,addr=0x4",
 				"global ICH9-LPC.disable_s3=1",
 				"global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off",
+				// The checkpoint's layout is the file's format; how many channels read it is not.
+				"global migration.mapped-ram=on",
+				"global migration.x-multifd=on",
 			},
-			absent: []string{"vhost-vsock-pci", "virtio-mem-pci", "isa-serial", "virtio-scsi-pci", "virtio-net-pci", "virtio-blk-pci"}},
+			absent: []string{"vhost-vsock-pci", "virtio-mem-pci", "isa-serial", "virtio-scsi-pci", "virtio-net-pci", "virtio-blk-pci", "multifd-channels"}},
 		{name: "a vsock, without its context id or descriptor", set: func(s *Spec) { s.VsockCID, s.VsockFD = 7, 14 },
 			want: []string{"device vhost-vsock-pci,disable-legacy=on,addr=0x2"}, absent: []string{"guest-cid", "vhostfd"}},
 		{name: "a memory ceiling, without its backend", set: func(s *Spec) { s.Memory.MaxMB = s.Memory.SizeMB + 1 },
@@ -948,5 +951,24 @@ func TestIncomingNamesTheSourceOnTheCommandLine(t *testing.T) {
 				t.Errorf("-incoming %d times, value %q, want once with %q", n, argValue(args, "-incoming"), tc.want)
 			}
 		})
+	}
+}
+
+// Every save and every load take the checkpoint's layout from the command line, so it is
+// there - with how many channels move it, which the contract leaves out.
+func TestArgsCarryTheCheckpointLayout(t *testing.T) {
+	args, err := spec(t).Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Join(args, " ")
+	for _, want := range []string{
+		"-global migration.mapped-ram=on",
+		"-global migration.x-multifd=on",
+		"-global migration.multifd-channels=4",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the command line has no %q:\n%s", want, line)
+		}
 	}
 }

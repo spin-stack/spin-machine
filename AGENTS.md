@@ -29,8 +29,8 @@ and makes its scope and result clear.
 
 1. **A checkpoint resumes on any release with its fingerprint, and the fingerprint is the
    machine's contract.** `machine.Spec.Fingerprint` hashes the versioned machine type
-   (`machine.MachineType`), the shape, the chipset's globals and every device as the command
-   line gives it (`Spec.Contract`), the BIOS's size, and the host CPU under `-cpu host`. Not
+   (`machine.MachineType`), the shape, the chipset's globals, the checkpoint's layout and every
+   device as the command line gives it (`Spec.Contract`), the BIOS's size, and the host CPU under `-cpu host`. Not
    the QEMU binary, the kernel, the initrd or pvh.bin: QEMU promises a newer release loads what
    an older one of the same versioned type saved, and a resumed guest runs the kernel in its
    saved memory. `task boot:compat` holds every change to that promise - a checkpoint the newest
