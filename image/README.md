@@ -101,7 +101,11 @@ from outside:
   them instead: every boot here *is* a first boot, since the root filesystem is a fresh
   overlay, so the keys live exactly as long as the VM does. Every sshd waits for it,
   including the per-connection `sshd@.service` that `systemd-ssh-generator` starts for vsock
-  and `ssh .host`: without that, those connections found no host keys and were dropped.
+  and `ssh .host`: without that, those connections found no host keys and were dropped. It
+  starts from the boot's first dispatch, wanted by `sysinit.target` without default
+  dependencies, so the keys exist before the vsock socket listens and the first login does not
+  wait for them. A guest checkpointed after it has booted therefore carries its host keys, and
+  whoever restores it hands each VM its own.
 - **Two thirds of the boot was systemd asking the console questions.** The kernel execs
   `/sbin/init` at 59 ms and systemd's first log line arrived at 852, with nothing running in
   between. It was a terminfo query and a terminal reset, 334 ms of timeout each, waiting for

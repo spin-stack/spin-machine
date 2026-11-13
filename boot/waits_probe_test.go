@@ -388,6 +388,15 @@ func waitsReport(boots []waitsBoot, target string, top int, minGap time.Duration
 			fmt.Fprintf(&b, "  %8s %8s %7s %7s  %s\n", ms(u.Ready), ms(x.usable), ms(x.usable-u.Ready), "", "(Type=idle: the job queue draining, then exec)")
 		}
 	}
+	// The first gap, from the end of the unit load to the first job (32 ms p50 on the bench
+	// fleet, lab run 43361486792), is PID 1 and nothing else. systemd stamps UnitsLoadFinish
+	// after enumerating mounts, devices and slices, and only then loads the units the boot
+	// starts: coldplug, then "Activating default unit: default.target" parses every unit file
+	// default.target reaches, and a stub for each name an After= or RequiresMountsFor= gives,
+	// builds the initial transaction (64 jobs), and collects the stubs before the first job is
+	// dispatched - task boot:trace with systemd.log_level=debug, 2026-11-13. It shrinks only with
+	// the transaction: eleven of its units whose condition fails on every boot here, masked, did
+	// not move the first SSH login (boot:ssh-first, lab run 43483372488).
 	gaps := x.w.Gaps(x.target().Start, minGap)
 	fmt.Fprintf(&b, "\n  no unit activating, for at least %s ms: systemd waiting on the kernel, or on itself\n\n", ms(minGap))
 	var idle time.Duration

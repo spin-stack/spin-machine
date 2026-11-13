@@ -213,6 +213,12 @@ log "Configuring SSH for socket activation..."
 rm -f /etc/systemd/system/multi-user.target.wants/ssh.service 2>/dev/null || true
 mkdir -p /etc/systemd/system/sockets.target.wants
 ln -sf /lib/systemd/system/ssh.socket /etc/systemd/system/sockets.target.wants/ssh.socket
+# The host keys from the boot's first dispatch rather than the first login's: the unit says why
+# and what it was worth. Its [Install] says sysinit.target, and this is that enable. Dangling
+# until mkosi.postinst.chroot copies the unit in, as the containerd and docker links above are.
+mkdir -p /etc/systemd/system/sysinit.target.wants
+ln -sf /usr/lib/systemd/system/spin-machine-sshd-keygen.service \
+    /etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service
 
 # logind stays in the boot transaction, as the package wants it
 # (/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service), because spin

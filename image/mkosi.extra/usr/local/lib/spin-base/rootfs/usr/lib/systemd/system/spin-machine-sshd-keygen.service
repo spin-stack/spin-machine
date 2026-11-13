@@ -17,17 +17,33 @@
 
 [Unit]
 Description=Generate SSH host keys for this VM
-# Ordered before the daemon and pulled in by it, and deliberately NOT by ssh.socket.
-# Hanging it off the socket puts it inside sockets.target, which is ordered before
-# basic.target, which a service is ordered after by default — and systemd breaks the loop
-# by dropping an edge at random:
+# Started from the boot's first dispatch, beside journald and udev - wanted by sysinit.target,
+# without default dependencies - and not by the first sshd that needs the keys. The first login
+# over vsock is accepted by a per-connection sshd@.service, which waits for this unit (its
+# drop-in, sshd@.service.d/keygen.conf) before it sends its banner, so a keygen started by that
+# connection put the key generation inside the login. Started from the boot, it is done before
+# sysinit.target is, and sshd-vsock.socket listens only after that: accept to first login went
+# from 177 to 155 ms p50, and the first login from 486 to 468, 20 boots of each interleaved on
+# the bench fleet (task boot:ssh-first, lab run 43463472762, 2026-11-13).
+#
+# Wanted by sysinit.target but not ordered before it: nothing in sysinit waits for host keys,
+# and ordering it there would hold the vsock socket behind the key generation instead.
+# DefaultDependencies=no takes away the After=sysinit.target and basic.target a service gets by
+# default, which would make it wait for the target that wants it. The writes go to /etc/ssh on
+# the root filesystem, which the kernel mounts read-write before PID 1 starts.
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+# Ordered before the daemons, and NOT pulled in by ssh.socket: hanging it off the socket put it
+# inside sockets.target, and with default dependencies systemd broke the loop that made by
+# dropping an edge at random:
 #
 #   basic.target: Found ordering cycle: sockets.target/start after ssh.socket/start
 #   after spin-machine-sshd-keygen.service/start after basic.target/start
 #
-# Socket activation still works: the socket starts ssh.service, and ssh.service waits for
-# this. The per-connection sshd@.service that systemd-ssh-generator's vsock and AF_UNIX
-# sockets start waits for it through a drop-in of its own (sshd@.service.d/keygen.conf).
+# The per-connection sshd@.service that systemd-ssh-generator's vsock and AF_UNIX sockets start
+# waits for it through a drop-in of its own (sshd@.service.d/keygen.conf), which stays: it is
+# what makes a connection that arrives first wait rather than find no keys.
 Before=ssh.service sshd.service
 ConditionPathExists=/usr/bin/ssh-keygen
 
@@ -43,4 +59,4 @@ RemainAfterExit=yes
 ExecStart=/bin/sh -c 'for t in ed25519 ecdsa; do f=/etc/ssh/ssh_host_$${t}_key; [ -e "$$f" ] || /usr/bin/ssh-keygen -q -t "$$t" -N "" -f "$$f" || exit 1; done'
 
 [Install]
-WantedBy=ssh.service sshd.service
+WantedBy=sysinit.target
