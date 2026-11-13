@@ -53,6 +53,14 @@ func TestScore(t *testing.T) {
 	reps := envInt(t, "REPS", 5)
 	proxy, key := sshTools(t)
 	v := sshVariant(key, "score", "")
+	// DIAGNOSTIC: boot:waits's unit, which prints systemd's timestamps to the console once the
+	// boot has finished, to say which phase of a cold boot a restore before it slows.
+	for k, val := range waitsVariant(v.cpus).files {
+		if strings.Contains(k, "spin-waits") {
+			v.files[k] = val
+		}
+	}
+	v.links = waitsVariant(v.cpus).links
 	tree := filepath.Join(t.TempDir(), "spin-machine")
 	if b, err := exec.Command("go", "build", "-o", tree, "../cmd/spin-machine").CombinedOutput(); err != nil {
 		t.Fatalf("building spin-machine: %v\n%s", err, b)
@@ -200,6 +208,22 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	}
 	r.cold, r.coldAccept = time.Since(t0), accepted.Sub(t0)
 	r.coldPrompt = <-prompt
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		b, _ := os.ReadFile(filepath.Join(dir, "a.qmp.console"))
+		c := string(b)
+		i, j := strings.Index(c, "SPIN-WAITS-BEGIN"), strings.Index(c, "SPIN-WAITS-END")
+		if i < 0 || j < i {
+			continue
+		}
+		if m, us, err := boot.ParseWaits(c[i+len("SPIN-WAITS-BEGIN") : j]); err == nil {
+			w := boot.NewWaits(m, us)
+			g, _ := w.Unit("serial-getty@ttyS0.service")
+			t.Logf("cold boot, guest ms: PID 1 at %.1f, security %.1f, generators %.1f-%.1f, units loaded %.1f, getty forked %.1f, finished %.1f",
+				m.Userspace.Seconds()*1000, m.SecurityFinish.Seconds()*1000, m.GeneratorsStart.Seconds()*1000,
+				m.GeneratorsFinish.Seconds()*1000, m.UnitsLoadFinish.Seconds()*1000, g.Start.Seconds()*1000, m.Finish.Seconds()*1000)
+		}
+		break
+	}
 	if mb, err := strconv.Atoi(v.memory); err == nil {
 		r.coldMB, r.coldHugeMB, _ = guestRAM(first.Process.Pid, mb)
 	}
