@@ -87,6 +87,9 @@ func without(units ...string) variant {
 //   - tmpfs /tmp against /tmp on the disk: 3 ms, within noise (220/232 against 223/230, 20
 //     boots, 2026-09-26); image/build.sh forbids the disk.
 //   - serial-getty Type=simple instead of Type=idle: within noise of the echo (2026-09-10).
+//     And again once spin lingered and user@1000.service was in the boot transaction: 346/358
+//     against 423/441, 20 boots, lab run 43362067503 (2026-11-13) - now the image's
+//     (serial-getty@.service.d/type.conf).
 //   - loop.max_loop=0 8250.nr_uarts=1, and CONFIG_VT=n: no change to a login prompt
 //     (2026-09-26). udev's coldplug overlaps the boot rather than delaying it.
 //   - 19 udev rule files for hardware the machine cannot have, masked: no change, same day.
@@ -104,11 +107,6 @@ var variants = []variant{
 	// changes nothing (1229 against 1232, 12 boots, 2026-09-26).
 	{label: "as shipped", cpus: "2", memory: "2048"},
 	{label: "baseline", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho)},
-	// Experiment, 2026-11-13: since spin lingers, user@1000.service and its chain are jobs of the
-	// boot transaction, and the getty, Type=idle, waits for the queue to drain before it execs -
-	// 91.8 ms of boot:waits's median boot on v20261113.01, against 3-5 before. This row is the
-	// getty Type=simple. Drop the row once it has answered.
-	{label: "getty simple", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho + "Type=simple\n")},
 }
 
 // kernelB is the kernel SPIN_KERNEL_B names, resolved, or "" when it names none. A test
