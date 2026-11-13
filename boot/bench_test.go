@@ -104,6 +104,11 @@ var variants = []variant{
 	// changes nothing (1229 against 1232, 12 boots, 2026-09-26).
 	{label: "as shipped", cpus: "2", memory: "2048"},
 	{label: "baseline", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho)},
+	// Experiment, 2026-11-13: since spin lingers, user@1000.service and its chain are jobs of the
+	// boot transaction, and the getty, Type=idle, waits for the queue to drain before it execs -
+	// 91.8 ms of boot:waits's median boot on v20261113.01, against 3-5 before. This row is the
+	// getty Type=simple. Drop the row once it has answered.
+	{label: "getty simple", cpus: "2", memory: "2048", files: gettyDropin(gettyEcho + "Type=simple\n")},
 }
 
 // kernelB is the kernel SPIN_KERNEL_B names, resolved, or "" when it names none. A test
