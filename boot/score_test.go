@@ -103,7 +103,7 @@ func TestScore(t *testing.T) {
 
 type scoreRun struct {
 	cold, save, up, running, restored time.Duration
-	coldAccept, restoredAccept       time.Duration // when sshd first accepted on vsock
+	coldAccept, restoredAccept        time.Duration // when sshd first accepted on vsock
 }
 
 // scoreOnce boots v with cli over release, logs in, saves it, and restores it.
@@ -129,7 +129,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	}()
 	launch := func(qmp string, extra ...string) *exec.Cmd {
 		args := append([]string{"boot", "--release", release, "--disk", overlay, "--memory", v.memory,
-			"--cpus", v.cpus, "--vsock-cid", fmt.Sprint(cid), "--qmp", qmp, "--console", "file:/dev/null",
+			"--cpus", v.cpus, "--vsock-cid", fmt.Sprint(cid), "--qmp", qmp, "--console", "file:"+qmp+".console",
 			"--append", "init=/sbin/init"}, extra...)
 		cmd := exec.Command(cli, args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
