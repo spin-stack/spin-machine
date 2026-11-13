@@ -335,6 +335,8 @@ Measured and not shipped:
 
 **11-13 · kernel · #255 (this change).** Where the kernel's ~100 ms goes on the bench fleet (boot:initcalls lab 43495583323): initcalls 52 (acpi_init 12, of which `acpi_pci_root_create` - bus 0's enumeration - 11.2 traced on a kernel without forced lockdown, lab 43499868986; inet_init 7.9, which is vmlinux BTF's first parse; the virtio probes ~17), before the first initcall ~15-20 (SPIN_EARLY, lab 43507472288; ~4 of it the probe's own 18 MB log buffer), SMP ~4, the root mount ~6. Kept: patch 0005 back, 0006 (BTF parsed in the background from a core_initcall), `CONFIG_DEFERRED_STRUCT_PAGE_INIT=y`: kernel 96.3 → 87.1 ms (lab 43505126131), first login 466 → 456 as built and 223 → 214 at the floor (lab 43501992969). `driver_async_probe` for rng, balloon and vsock on the command line: 214 → 209 at the floor (lab 43506390106).
 
+**11-13 · image · the first login's lane (this change).** Where systemd's ~250 ms over the floor went, on the bench fleet: ~60 before sshd accepts (sysinit, udev, journald), ~105 in pam_systemd - logind answers a session of class `user` only once the user's manager has started and orders its scope after `systemd-user-sessions` (systemd v259.9 source, `logind-session.c`) - and ~65 in a handshake competing for the CPU. The vsock socket, `sshd@`, dbus, logind, `user-runtime-dir@` and `user@` without default dependencies, no `/run/nologin` at boot (pam_nologin refused the lane's first login: "Access denied for user spin by PAM account configuration"), sessions of class `user-early-light`, and udev's coldplug filtered to block, net, virtio, misc, input, rtc, ptp and ttyS0: first login 478 → 402 ms (lab 43518915618). Measured and left out: priority (`CPUWeight`, `Nice`) on the lane, −2 ms over the filter and a slower second login (63 vs 45 ms).
+
 **11-13 · kernel/qemu · branches `kernel-snapshot`, `qemu-snapshot` (rejected).** QEMU publishes bus 0's configuration space over fw_cfg after the firmware (etc/spin/pci-config) and the kernel answers boot-time configuration reads from it until each dword is written. It works (`PCI: configuration space of 5 devices on bus 0`) and is worth -14 ms against the same kernel without it (lab 43514550646), but only 2-3 ms against 0005, which already removes most repeated reads: 209/217 against 211/222 (lab 43514884598). Not worth a QEMU patch and a 250-line kernel patch.
 
 ---
@@ -511,6 +513,8 @@ Also the reusable builder, added and reverted on 10-13.
 | mapped-ram checkpoints (multifd ×4) | Restore login 385/400 vs 386/399 | #246, lab 43483852339 | 11-13 |
 | sntrup761 (OpenSSH default) | 104 vs 40 ms per login | #245, lab 43479854381 | 11-13 |
 | Configuration-space snapshot over fw_cfg (QEMU + kernel) | 209 vs 211 with 0005 | lab 43514884598 | 11-13 |
+| CPUWeight/IOWeight/Nice on the first login's lane | −2 ms over coldplug filtered; second login 63 vs 45 | lab 43518915618 | 11-13 |
+| Login without pam_systemd (diagnostic bound) | 380 vs 436, but no session, no XDG_RUNTIME_DIR | lab 43518044150 | 11-13 |
 | Lower the vCPU ceiling, drop the balloon or ACPI for boot time | Not tried: hotplug and dynamic memory are an invariant | AGENTS.md | 11-13 |
 
 ---

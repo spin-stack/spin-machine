@@ -370,6 +370,34 @@ stat_in_image /etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.
         grep -qx 'DefaultDependencies=no' || {
     echo "ERROR: spin-machine-sshd-keygen.service has default dependencies; it starts after sysinit.target" >&2
     exit 1; }
+# The first SSH login's lane (configure-system.sh and the units' 10-lane.conf), read back from
+# the finished filesystem: each piece alone gains little and leaves the login waiting on the
+# next, so a missing one costs the lane without failing anything.
+for u in sshd-vsock.socket sshd@.service systemd-logind.service user-runtime-dir@.service user@.service; do
+    "$bin/debugfs" -R "cat /etc/systemd/system/$u.d/10-lane.conf" /work/base.raw 2>/dev/null |
+            grep -qx 'DefaultDependencies=no' || {
+        echo "ERROR: $u is not in the first login's lane (10-lane.conf)" >&2
+        exit 1; }
+done
+dbus=$("$bin/debugfs" -R "cat /etc/systemd/system/dbus.socket" /work/base.raw 2>/dev/null)
+printf '%s\n' "$dbus" | grep -q '^ListenStream=/run/dbus/system_bus_socket' || {
+    echo "ERROR: /etc/systemd/system/dbus.socket is missing or is not the bus's socket" >&2
+    exit 1; }
+if printf '%s\n' "$dbus" | grep -qx 'After=sysinit.target'; then
+    echo "ERROR: dbus.socket is ordered after sysinit.target; logind waits for udev and journald" >&2
+    exit 1
+fi
+stat_in_image /etc/tmpfiles.d/systemd-nologin.conf | grep -q '/dev/null' || {
+    echo "ERROR: tmpfiles writes /run/nologin at boot; pam_nologin refuses the lane's first login" >&2
+    exit 1; }
+"$bin/debugfs" -R "cat /etc/pam.d/common-session" /work/base.raw 2>/dev/null |
+        grep -q '^session.*pam_systemd\.so.*class=user-early-light' || {
+    echo "ERROR: sessions are not user-early-light; a login waits for the user's manager" >&2
+    exit 1; }
+"$bin/debugfs" -R "cat /etc/systemd/system/systemd-udev-trigger.service.d/10-coldplug.conf" /work/base.raw 2>/dev/null |
+        grep -q -- '--subsystem-match=input' || {
+    echo "ERROR: udev's coldplug is not filtered, or lost input (the power button logind shuts down on)" >&2
+    exit 1; }
 if stat_in_image /etc/systemd/system/systemd-logind.service | grep -q '/dev/null'; then
     echo "ERROR: systemd-logind.service is masked - it never starts, no login gets a" \
          "session, and spin's manager never starts either" >&2
