@@ -183,6 +183,25 @@ func TestDiffFirstLogin(t *testing.T) {
 		}
 	}
 
+	// The other way round: a report made without sudo or vsock has no first login, and the
+	// release before it does. Nothing moved by -100%.
+	b.Reset()
+	Diff(&b, Report{Release: "v1", FirstLogin: login(300, 400)}, Report{Release: "v2"}, 0.05)
+	if want := "| login | 400.0 / 420.0 → - | - |"; !strings.Contains(b.String(), want) {
+		t.Errorf("missing %q in:\n%s", want, b.String())
+	}
+
+	// A p50 under a millisecond is still one to move from, and one failed boot is said.
+	b.Reset()
+	nw = login(1, 360)
+	nw.Failed, nw.Error = 1, "refused"
+	Diff(&b, Report{Release: "v1", FirstLogin: login(0.5, 360)}, Report{Release: "v2", FirstLogin: nw}, 0.05)
+	for _, want := range []string{"| accepts | 0.5 / 10.5 → 1.0 / 11.0 | +100.0% |", "1 of 20 boots had no login: refused"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, b.String())
+		}
+	}
+
 	b.Reset()
 	Diff(&b, Report{Release: "v1"}, Report{Release: "v2"}, 0.05)
 	if strings.Contains(b.String(), "First SSH login") {
