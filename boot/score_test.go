@@ -112,6 +112,16 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	cid := uint32(100000 + rand.IntN(1<<20))
 	state := filepath.Join(dir, "state")
 
+	// Every machine this starts is gone when it returns, not when the test does: left running,
+	// the restored guests of earlier repetitions piled up on the host - twenty of them by the
+	// tenth - and were what the later ones measured (2026-11-13).
+	var started []*exec.Cmd
+	defer func() {
+		for _, cmd := range started {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Wait()
+		}
+	}()
 	launch := func(qmp string, extra ...string) *exec.Cmd {
 		args := append([]string{"boot", "--release", release, "--disk", overlay, "--memory", v.memory,
 			"--cpus", v.cpus, "--vsock-cid", fmt.Sprint(cid), "--qmp", qmp, "--console", "file:/dev/null",
@@ -121,10 +131,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("launching the machine: %v", err)
 		}
-		t.Cleanup(func() {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			_ = cmd.Wait()
-		})
+		started = append(started, cmd)
 		return cmd
 	}
 	// The port probed with a short connect until it accepts, and only then ssh. vsockproxy's own
@@ -159,6 +166,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	mustRun(t, cli, "save", "--qmp", filepath.Join(dir, "a.qmp"), "--to", state)
 	r.save = time.Since(t0)
 	_ = first.Wait() // save quits it
+	started = started[1:]
 	evict(t, state)
 
 	qmp := filepath.Join(dir, "b.qmp")
