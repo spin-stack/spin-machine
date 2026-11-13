@@ -88,8 +88,8 @@ func without(units ...string) variant {
 //     boots, 2026-09-26); image/build.sh forbids the disk.
 //   - serial-getty Type=simple instead of Type=idle: within noise of the echo (2026-09-10).
 //     And again once spin lingered and user@1000.service was in the boot transaction: 346/358
-//     against 423/441, 20 boots, lab run 43362067503 (2026-11-13) - now the image's
-//     (serial-getty@.service.d/type.conf).
+//     against 423/441, 20 boots, lab run 43362067503 (2026-11-13), and in the image for a day:
+//     removed because nothing a workspace does waits for the console's prompt.
 //   - loop.max_loop=0 8250.nr_uarts=1, and CONFIG_VT=n: no change to a login prompt
 //     (2026-09-26). udev's coldplug overlaps the boot rather than delaying it.
 //   - 19 udev rule files for hardware the machine cannot have, masked: no change, same day.

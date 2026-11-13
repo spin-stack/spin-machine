@@ -290,10 +290,9 @@ RUN <<EOT
     # patches/0003 takes another 9.0 ms from event tracing, which BPF_EVENTS needs: the eval map
     # rewrite of every event format, now done on first use. All three: 109.9 -> 78.5 ms; with
     # patches/0004 (PCI configuration through ECAM, one trap an access), 73.7.
-    # patches/0005 has each device's capability list walked once rather than per search: ECAM
-    # accesses per boot 1,032 -> 680 (task boot:mmio) and the kernel 95.1 -> 88.9 ms, 20 boots
-    # interleaved on the bench fleet, nested under KVM on a c8i.4xlarge (lab run 43327612594,
-    # 2026-11-12) - a baseline of that day, not comparable with the 73.7 above.
+    # A patch that walked each device's capability list once rather than per search took the
+    # kernel 95.1 -> 88.9 ms (lab run 43327612594, 2026-11-12) and was dropped on 2026-11-13: a
+    # first SSH login is ~470 ms, and 6 ms of it was not worth a local patch to carry.
 
     # Boot performance: the RAID6 PQ benchmark probes all SIMD implementations at boot to
     # pick the fastest. It must stay disabled. (RAID6_PQ itself is not selected today, so
