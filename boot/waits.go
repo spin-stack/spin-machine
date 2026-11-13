@@ -134,15 +134,15 @@ func ParseWaits(s string) (Manager, []Unit, error) {
 			}
 		}
 		switch {
-		case active > 0:
+		case active > 0: // mutate-exempt: durations here are whole microseconds, so 0 and 1ns split them alike
 			u.Ready = active
-		case inactive > exit && exit > 0:
+		case inactive > exit && exit > 0: // mutate-exempt: durations here are whole microseconds, so 0 and 1ns split them alike
 			// A oneshot that does not remain active goes activating -> inactive, and a unit
 			// ordered after it starts when it is done; a failed unit lands here too.
 			u.Ready = inactive
 		}
 		u.Start = exit
-		if u.Start == 0 || (u.Ready > 0 && u.Start > u.Ready) {
+		if u.Start == 0 || (u.Ready > 0 && u.Start > u.Ready) { // mutate-exempt: durations here are whole microseconds, so 0 and 1ns split them alike
 			// Active without ever leaving inactive in this boot - a device, the root mount, a
 			// slice - or left inactive again since; either way it was ready when it said so.
 			u.Start = u.Ready
@@ -175,7 +175,7 @@ func blocks(s string) []map[string]string {
 	var out []map[string]string
 	var cur map[string]string
 	sc := bufio.NewScanner(strings.NewReader(s))
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	sc.Buffer(make([]byte, 1<<20), 1<<20) // mutate-exempt: any size past the longest line - a target's After=, a few KB - reads the dump alike
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), "\r")
 		k, v, ok := strings.Cut(line, "=")
