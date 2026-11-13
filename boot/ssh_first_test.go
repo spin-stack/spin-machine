@@ -81,70 +81,40 @@ install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ss
 	// logind in the boot and spin lingering 510/525, with sshd accepting no later. The image
 	// now has no motd and lingers. Then, lab run 43312419007, 15 boots of each: the host keys
 	// generated in the boot (the keygen wanted by multi-user.target) 518/542 against 514/531 -
-	// nothing, so the keys stay with the first sshd that needs them. Each row's edit was checked in its setup, so a row that
+	// nothing: with default dependencies the keygen starts after basic.target, no sooner than the
+	// first connection's sshd@ starts it. Each row's edit was checked in its setup, so a row that
 	// matched nothing failed rather than measuring the image under another name.
 	//
-	// The rows below are written so they hold on a release from before this branch as well as
-	// after it, because the lab boots published releases: each puts the image in the state this
-	// branch builds - logind in the boot, spin lingering - whether or not it already was.
+	//
+	// Then three image changes, one row each and the three together, 20 boots of each, lab run
+	// 43483372488 (2026-11-13), p50/p95 ms of the first login and of accept to login: as built
+	// 489/506, 177/194; the host keys generated from the boot's first dispatch 468/494, 154/168;
+	// sshd-socket-generator and systemd-run-generator masked 489/501, 180/192; the eleven units
+	// of the initial transaction whose condition fails on every boot here masked (the pcr*
+	// units, kmod-static-nodes, apparmor, the distribution's sshd-keygen, getty-static,
+	// getty@tty1) 484/501, 178/191; all three 469/490, 156/173. Only the keys moved the login,
+	// so the image makes them early and the other two stay out. What those two were after:
+	// sshd-socket-generator loads libcrypto to find sshd_config at its defaults and is the
+	// slowest generator, 3.5-23.5 ms in a guest against ~1.5 for each of systemd's, but the
+	// generators run side by side and masking both took their phase from 5.3 to 3.7 ms p50 (a
+	// laptop, 8 boots of each); the units are parsed in the gap boot:waits shows after the unit
+	// load, which is PID 1 building the initial transaction (see waits_probe_test.go).
+	//
+	// The row below is written so it holds on a release from before this branch as well as
+	// after it, because the lab boots published releases: it puts the image in the state this
+	// branch builds - logind in the boot, spin lingering, the host keys made from the boot's
+	// first dispatch - whether or not it already was.
 	const asThisBranch = `rm -f "$MNT/etc/systemd/system/multi-user.target.wants/systemd-logind.service"
 test -e "$MNT/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service"
 install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/spin"
 `
-	// EXPERIMENT (cold-boot-batch, 2026-11-13): the three image changes of that branch, one row
-	// each and together, against the image as built.
-	//
-	// keys early: the host keys generated from the boot's first dispatch, beside udev and
-	// journald, rather than by the first connection's sshd@, which waits for them before it
-	// sends its banner. Lab run 43463472762 measured it alone: accept to login 177 -> 155 ms.
-	keysEarly := func(v *variant) {
-		v.files["/etc/systemd/system/spin-machine-sshd-keygen.service.d/early.conf"] =
-			"[Unit]\nDefaultDependencies=no\nConflicts=shutdown.target\nBefore=shutdown.target\n"
-		v.links["/etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service"] =
-			"/usr/lib/systemd/system/spin-machine-sshd-keygen.service"
+	asBuilt := row("as this branch", asThisBranch)
+	asBuilt.files["/etc/systemd/system/spin-machine-sshd-keygen.service.d/early.conf"] =
+		"[Unit]\nDefaultDependencies=no\nConflicts=shutdown.target\nBefore=shutdown.target\n"
+	asBuilt.links = map[string]string{
+		"/etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service": "/usr/lib/systemd/system/spin-machine-sshd-keygen.service",
 	}
-	// generators: the two system generators that decide nothing here masked. sshd-socket-generator
-	// moves ssh.socket to sshd_config's Port and ListenAddress, which the image leaves at the
-	// default, and it loads libcrypto to say so: 3.5-23.5 ms in a guest against ~1.5 ms for each
-	// of systemd's, which run beside it (a laptop, 2026-11-13). systemd-run-generator reads
-	// systemd.run= off a command line spin-machine writes.
-	gens := []string{"sshd-socket-generator", "systemd-run-generator"}
-	generators := func(v *variant) {
-		for _, g := range gens {
-			v.setup += "test -x \"$MNT/usr/lib/systemd/system-generators/" + g + "\"\n"
-			v.links["/etc/systemd/system-generators/"+g] = "/dev/null"
-		}
-	}
-	// inert units: the initial transaction's jobs whose condition fails on every boot of this
-	// machine - no UKI or TPM to measure into, no AppArmor or modules in the kernel, no virtual
-	// console, and the distribution's keygen, which waits for a first boot that never comes.
-	// Each is a unit file PID 1 parses, and its dependencies, while no unit is running, between
-	// the unit load and the first job (task boot:trace with systemd.log_level=debug).
-	inert := []string{"systemd-pcrextend.socket", "systemd-pcrlock.socket", "systemd-pcrnvdone.service",
-		"systemd-pcrproduct.service", "systemd-pcrphase-sysinit.service", "systemd-pcrphase.service",
-		"kmod-static-nodes.service", "apparmor.service", "sshd-keygen.service", "getty-static.service",
-		"getty@tty1.service"}
-	inertUnits := func(v *variant) {
-		for _, u := range inert {
-			v.setup += "test -e \"$MNT/usr/lib/systemd/system/" + strings.Replace(u, "@tty1", "@", 1) + "\"\n"
-			v.links["/etc/systemd/system/"+u] = "/dev/null"
-		}
-	}
-	edited := func(label string, edits ...func(*variant)) variant {
-		v := row(label, asThisBranch)
-		v.links = map[string]string{}
-		for _, e := range edits {
-			e(&v)
-		}
-		return v
-	}
-	rows := []variant{
-		row("as built", asThisBranch),
-		edited("keys early", keysEarly),
-		edited("generators", generators),
-		edited("inert units", inertUnits),
-		edited("batch", keysEarly, generators, inertUnits),
-	}
+	rows := []variant{asBuilt}
 
 	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}

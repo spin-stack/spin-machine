@@ -357,6 +357,18 @@ in_image /etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf || {
         grep -qx 'After=spin-machine-sshd-keygen.service' || {
     echo "ERROR: sshd@.service does not wait for spin-machine-sshd-keygen.service" >&2
     exit 1; }
+# And the keys are made from the boot's first dispatch, not by the first login's sshd@, which
+# would wait for them before its banner: 18 ms of the first login over vsock (the numbers are in
+# the unit). Both halves: the link is what starts it in the boot, and without
+# DefaultDependencies=no the unit waits for the sysinit.target that wants it and is late anyway.
+stat_in_image /etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service |
+        grep -qF '/usr/lib/systemd/system/spin-machine-sshd-keygen.service' || {
+    echo "ERROR: spin-machine-sshd-keygen.service is not wanted by sysinit.target" >&2
+    exit 1; }
+"$bin/debugfs" -R "cat /usr/lib/systemd/system/spin-machine-sshd-keygen.service" /work/base.raw 2>/dev/null |
+        grep -qx 'DefaultDependencies=no' || {
+    echo "ERROR: spin-machine-sshd-keygen.service has default dependencies; it starts after sysinit.target" >&2
+    exit 1; }
 if stat_in_image /etc/systemd/system/systemd-logind.service | grep -q '/dev/null'; then
     echo "ERROR: systemd-logind.service is masked - it never starts, no login gets a" \
          "session, and spin's manager never starts either" >&2
