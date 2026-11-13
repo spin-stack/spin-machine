@@ -37,23 +37,23 @@ Assisted-by: LLM
  extern const struct pci_raw_ops pci_mmcfg;
 --- a/arch/x86/pci/common.c
 +++ b/arch/x86/pci/common.c
-@@ -40,6 +40,8 @@
- int raw_pci_read(unsigned int domain, unsigned int bus, unsigned int devfn,
- 						int reg, int len, u32 *val)
- {
+@@ -47,6 +47,8 @@
+ 	 * ECAM region covers every bus, as it does on QEMU's q35. Until then
+ 	 * raw_pci_ext_ops is NULL and type 1 is used.
+ 	 */
 +	if (pci_snapshot_read(domain, bus, devfn, reg, len, val))
 +		return 0;
- 	if (domain == 0 && reg < 256 && raw_pci_ops)
- 		return raw_pci_ops->read(domain, bus, devfn, reg, len, val);
  	if (raw_pci_ext_ops)
-@@ -50,6 +52,7 @@
- int raw_pci_write(unsigned int domain, unsigned int bus, unsigned int devfn,
+ 		return raw_pci_ext_ops->read(domain, bus, devfn, reg, len, val);
+ 	if (domain == 0 && reg < 256 && raw_pci_ops)
+@@ -58,6 +60,7 @@
  						int reg, int len, u32 val)
  {
+ 	/* See raw_pci_read(). */
 +	pci_snapshot_write(domain, bus, devfn, reg, len);
- 	if (domain == 0 && reg < 256 && raw_pci_ops)
- 		return raw_pci_ops->write(domain, bus, devfn, reg, len, val);
  	if (raw_pci_ext_ops)
+ 		return raw_pci_ext_ops->write(domain, bus, devfn, reg, len, val);
+ 	if (domain == 0 && reg < 256 && raw_pci_ops)
 --- a/arch/x86/pci/Makefile
 +++ b/arch/x86/pci/Makefile
 @@ -1,5 +1,5 @@
