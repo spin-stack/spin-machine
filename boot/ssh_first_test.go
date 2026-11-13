@@ -135,7 +135,26 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 	asBuilt.links = map[string]string{
 		"/etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service": "/usr/lib/systemd/system/spin-machine-sshd-keygen.service",
 	}
-	rows := []variant{asBuilt}
+	// EXPERIMENT, the floor of the userspace: no systemd before sshd. PID 1 is a script that
+	// mounts what sshd needs, makes an Ed25519 host key, and has socat accept on vsock port 22
+	// and hand each connection to `sshd -i`. Same kernel, machine and image otherwise; what is
+	// left between the kernel and the login is sshd itself.
+	floor := row("sshd from init", asThisBranch)
+	floor.files["/sbin/spin-fastinit"] = `#!/bin/sh
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev 2>/dev/null
+mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+mount -t tmpfs run /run
+mkdir -p -m 0755 /run/sshd
+ssh-keygen -q -t ed25519 -N "" -f /run/ssh_host_ed25519_key
+echo SPIN-FASTINIT > /dev/ttyS0
+exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_host_ed25519_key"
+`
+	floor.setup += `chmod 0755 "$MNT/sbin/spin-fastinit"
+`
+	floor.extra = "init=/sbin/spin-fastinit"
+	rows := []variant{asBuilt, floor}
 
 	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}
@@ -202,7 +221,12 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), "boot", "--release", out,
 		"--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
 		"--vsock-cid", fmt.Sprint(cid),
-		"--console", "file:/dev/stdout", "--append", "init=/sbin/init")
+		"--console", "file:/dev/stdout", "--append", strings.TrimSpace("init=/sbin/init "+v.extra))
+	// A variant's own kernel and flags; the kernel takes the last init= on its command line.
+	if v.kernel != "" {
+		cmd.Args = append(cmd.Args, "--kernel", v.kernel)
+	}
+	cmd.Args = append(cmd.Args, v.flags...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -258,8 +282,9 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 		r.classical = err == nil
 		break
 	}
-	// The prompt is usually there by now; it is waited for so the row is not empty.
-	for time.Now().Before(deadline) {
+	// The prompt is usually there by now; it is waited for so the row is not empty - unless the
+	// variant runs an init of its own, which starts no getty.
+	for !strings.Contains(v.extra, "init=") && time.Now().Before(deadline) {
 		mu.Lock()
 		p := r.prompt
 		mu.Unlock()
