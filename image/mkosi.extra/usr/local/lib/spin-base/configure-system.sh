@@ -33,6 +33,20 @@ cat <<'EOF' > /etc/ssh/sshd_config.d/10-spin-user-ca.conf
 TrustedUserCAKeys /etc/ssh/spin_user_ca.pub
 EOF
 
+# One key exchange, mlkem768x25519-sha256, and a client that has no ML-KEM is refused rather
+# than downgraded: "no matching key exchange method found". It is post-quantum and costs what
+# curve25519 does - on the bench fleet a login with each took 40 and 39 ms (task
+# boot:ssh-first, lab run 43479854381, 2026-11-13) - while sntrup761x25519, the other
+# post-quantum exchange and what OpenSSH 8.5-9.8 picks, took 104, its key generation alone
+# ~39 ms of the client's. A client needs OpenSSH 9.9 or later, or golang.org/x/crypto/ssh
+# v0.38.0 or later built with Go 1.24 or later; docs/machine.md says who that leaves out.
+#
+# sshd takes the first value it reads for a keyword, and spin's handoff writes drop-ins
+# named 00-*, read before this one: none of them may set KexAlgorithms.
+cat <<'EOF' > /etc/ssh/sshd_config.d/10-spin-kex.conf
+KexAlgorithms mlkem768x25519-sha256
+EOF
+
 # The drop-in only counts if sshd_config includes the directory. Asserted rather than
 # assumed, because the way this fails is silent: sshd starts, key logins keep working, and
 # only certificate authentication is dead.

@@ -357,6 +357,13 @@ in_image /etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf || {
         grep -qx 'After=spin-machine-sshd-keygen.service' || {
     echo "ERROR: sshd@.service does not wait for spin-machine-sshd-keygen.service" >&2
     exit 1; }
+# sshd offers one key exchange, ML-KEM, and refuses a client without it (configure-system.sh).
+# Read back from the finished filesystem: a drop-in that is not there leaves OpenSSH's own list,
+# with three classical exchanges in it, and every login still works.
+"$bin/debugfs" -R "cat /etc/ssh/sshd_config.d/10-spin-kex.conf" /work/base.raw 2>/dev/null |
+        grep -qx 'KexAlgorithms mlkem768x25519-sha256' || {
+    echo "ERROR: sshd does not offer mlkem768x25519-sha256 alone" >&2
+    exit 1; }
 if stat_in_image /etc/systemd/system/systemd-logind.service | grep -q '/dev/null'; then
     echo "ERROR: systemd-logind.service is masked - it never starts, no login gets a" \
          "session, and spin's manager never starts either" >&2
