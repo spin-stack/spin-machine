@@ -994,17 +994,17 @@ func (s Spec) Args() ([]string, error) {
 // state written through four loads through two (verified 2026-11-13) - so CheckpointChannels is
 // in Args and not here, and changing it strands no checkpoint.
 //
-// Measured on the bench fleet against the single stream, a settled 2 GiB guest saved and its state
-// read cold from the disk, 10 of each interleaved (task boot:restore, lab run 43364516874,
-// 2026-11-13): restored and running 283/296 against 764/1777 ms p50/p95, logged into 394/410
-// against 877/1888, saved 924 against 1113 ms; the file 2 GiB long, sparse, and 148 MiB on the
-// disk against the stream's 156. x-multifd is QEMU's name for the capability as a property.
+// What it costs against the single stream is in docs/migration.md: on the bench fleet a restore
+// to the first login was no faster (385/400 against 386/399 ms p50/p95, lab run 43483852339,
+// 2026-11-13); on a laptop, a lead, it was twice as fast. x-multifd is QEMU's name for the
+// capability as a property.
 func appendCheckpoint(args []string) []string {
 	return append(args, "-global", "migration.mapped-ram=on", "-global", "migration.x-multifd=on")
 }
 
 // CheckpointChannels is how many multifd channels write and read a checkpoint: threads of
-// QEMU's, not part of the file. Four was what boot:restore measured (lab run 43364516874).
+// QEMU's, not part of the file. No measurement chose four - the fleet's restore was no faster
+// than the stream's, so there was nothing for a count to win - and changing it strands nothing.
 const CheckpointChannels = 4
 
 // appendChipset is the chipset's globals and what a reset does, which no spec changes.

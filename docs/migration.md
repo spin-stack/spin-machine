@@ -26,8 +26,22 @@ capabilities it was written with, so a checkpoint of the single stream that came
 another fingerprint and is another machine's. How many channels move it is not part of the file (a state written
 through four loads through two), and not part of the fingerprint.
 
-On the bench fleet, a settled 2 GiB guest, the state read cold from the disk: restored and logged
-into in 394/410 ms p50/p95 against 877/1888 for the single stream (lab run 43364516874).
+What it costs against the single stream, a settled 2 GiB guest whose state - ~150 MiB on the
+disk in either layout - is evicted from the page cache before it is restored (`task boot:score`,
+the release's spin-machine, which saves the stream, against this tree's, interleaved, every
+cold boot before every restore; ms p50/p95 from QEMU's exec):
+
+| 2026-11-13, 10 of each | cold boot, login | save | restore, running | restore, login |
+|---|---|---|---|---|
+| bench fleet, stream (lab run 43483852339) | 487/516 | 1017/1861 | 277/290 | 386/399 |
+| bench fleet, mapped-ram ×4 | 492/499 | 1017/1057 | 275/293 | 385/400 |
+
+On the fleet the two layouts restore alike: lab run 43482829958, without the check that the
+state had left the page cache, read 376/416 against 373/402. A laptop, which is a lead and not a
+finding (12 of each, the state on a disk and not tmpfs), read the restore's login at 412/732 for the
+stream against 188/358. A stream p95 of 1228-1900 ms that #242's fleet runs read appeared only
+while each restore was interleaved with cold boots and saves, and did not come back once every
+restore ran after every cold boot; what caused it was not found.
 
 ## The CPU decides whether a VM can move at all
 
