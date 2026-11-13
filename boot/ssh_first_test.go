@@ -94,12 +94,29 @@ install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ss
 	// logind in the boot and spin lingering 510/525, with sshd accepting no later. The image
 	// now has no motd and lingers. Then, lab run 43312419007, 15 boots of each: the host keys
 	// generated in the boot (the keygen wanted by multi-user.target) 518/542 against 514/531 -
-	// nothing, so the keys stay with the first sshd that needs them. Each row's edit was checked in its setup, so a row that
+	// nothing: with default dependencies the keygen starts after basic.target, no sooner than the
+	// first connection's sshd@ starts it. Each row's edit was checked in its setup, so a row that
 	// matched nothing failed rather than measuring the image under another name.
 	//
-	// The rows below are written so they hold on a release from before this branch as well as
-	// after it, because the lab boots published releases: each puts the image in the state this
-	// branch builds - logind in the boot, spin lingering - whether or not it already was.
+	//
+	// Then three image changes, one row each and the three together, 20 boots of each, lab run
+	// 43483372488 (2026-11-13), p50/p95 ms of the first login and of accept to login: as built
+	// 489/506, 177/194; the host keys generated from the boot's first dispatch 468/494, 154/168;
+	// sshd-socket-generator and systemd-run-generator masked 489/501, 180/192; the eleven units
+	// of the initial transaction whose condition fails on every boot here masked (the pcr*
+	// units, kmod-static-nodes, apparmor, the distribution's sshd-keygen, getty-static,
+	// getty@tty1) 484/501, 178/191; all three 469/490, 156/173. Only the keys moved the login,
+	// so the image makes them early and the other two stay out. What those two were after:
+	// sshd-socket-generator loads libcrypto to find sshd_config at its defaults and is the
+	// slowest generator, 3.5-23.5 ms in a guest against ~1.5 for each of systemd's, but the
+	// generators run side by side and masking both took their phase from 5.3 to 3.7 ms p50 (a
+	// laptop, 8 boots of each); the units are parsed in the gap boot:waits shows after the unit
+	// load, which is PID 1 building the initial transaction (see waits_probe_test.go).
+	//
+	// The row below is written so it holds on a release from before this branch as well as
+	// after it, because the lab boots published releases: it puts the image in the state this
+	// branch builds - logind in the boot, spin lingering, the host keys made from the boot's
+	// first dispatch - whether or not it already was.
 	const asThisBranch = `rm -f "$MNT/etc/systemd/system/multi-user.target.wants/systemd-logind.service"
 test -e "$MNT/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service"
 install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/spin"
@@ -112,11 +129,15 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 	// connections. Then lab run 43479854381, 20 of each, first login / a second: the runner's
 	// OpenSSH 9.6, which took sntrup761x25519, 489/104; x/crypto/ssh with mlkem768x25519
 	// 461/40, and with curve25519 461/39.
-	rows := []variant{
-		row("as this branch", asThisBranch),
+	asBuilt := row("as this branch", asThisBranch)
+	asBuilt.files["/etc/systemd/system/spin-machine-sshd-keygen.service.d/early.conf"] =
+		"[Unit]\nDefaultDependencies=no\nConflicts=shutdown.target\nBefore=shutdown.target\n"
+	asBuilt.links = map[string]string{
+		"/etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service": "/usr/lib/systemd/system/spin-machine-sshd-keygen.service",
 	}
+	rows := []variant{asBuilt}
 
-	type samples struct{ listen, login, again, prompt []time.Duration }
+	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}
 	failed, classical := map[string]int{}, map[string]int{}
 	for range reps {
@@ -135,6 +156,7 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 			}
 			g := got[v.label]
 			g.listen, g.login, g.again, g.prompt = append(g.listen, r.listen), append(g.login, r.login), append(g.again, r.again), append(g.prompt, r.prompt)
+			g.accepted = append(g.accepted, r.login-r.listen)
 		}
 	}
 	ms := func(ds []time.Duration, q float64) string {
@@ -146,14 +168,15 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nms from the moment before QEMU is exec'd, p50/p95 over %d boots of each, interleaved, %s vCPUs\n\n", reps, rows[0].cpus)
-	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %9s %14s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "CURVE25519 IN")
+	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %15s %9s %14s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "ACCEPT TO LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "CURVE25519 IN")
 	for _, v := range rows {
 		g := got[v.label]
 		if g == nil {
 			g = &samples{}
 		}
-		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %14d\n", v.label,
-			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.again, .5), ms(g.again, .95),
+		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %14d\n", v.label,
+			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.accepted, .5), ms(g.accepted, .95),
+			ms(g.again, .5), ms(g.again, .95),
 			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], classical[v.label])
 	}
 	t.Log(b.String())
