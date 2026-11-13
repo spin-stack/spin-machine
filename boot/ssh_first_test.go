@@ -182,22 +182,67 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 			kernels = append(kernels, k)
 		}
 	}
+	// EXPERIMENT, the fast lane: systemd stays PID 1 and the image stays as it is, but what
+	// the first SSH login goes through starts from the boot's first dispatch, ordered only by
+	// what it really needs - the vsock socket and the per-connection sshd (after the host
+	// keys, already early), the bus and logind (pam_systemd's session), and the user's
+	// runtime directory and manager. Without default dependencies none of them waits for
+	// sysinit.target (journald, udev) or basic.target. dbus.socket orders itself after
+	// sysinit.target in its own [Unit], which a drop-in cannot take back, so it is copied
+	// without that line.
+	fast := asBuilt
+	fast.label = "fast lane"
+	fast.files = maps.Clone(asBuilt.files)
+	fast.links = maps.Clone(asBuilt.links)
+	lane := "[Unit]\nDefaultDependencies=no\nConflicts=shutdown.target\nBefore=shutdown.target\n"
+	for _, u := range []string{"sshd-vsock.socket", "sshd@.service", "systemd-logind.service", "user-runtime-dir@.service", "user@.service"} {
+		fast.files["/etc/systemd/system/"+u+".d/fast.conf"] = lane
+	}
+	// And no /run/nologin at boot. systemd-tmpfiles-setup writes it and
+	// systemd-user-sessions.service removes it late, and until then pam_nologin turns every
+	// user away: "Access denied for user spin by PAM account configuration [preauth]", which
+	// the client sees as EOF in the handshake - every lane boot's first attempt on a laptop.
+	// Shutting down still writes it: systemd-user-sessions.service's ExecStop does.
+	fast.setup += `test -e "$MNT/usr/lib/tmpfiles.d/systemd-nologin.conf"
+ln -sf /dev/null "$MNT/etc/tmpfiles.d/systemd-nologin.conf"
+grep -qx 'After=sysinit.target' "$MNT/usr/lib/systemd/system/dbus.socket"
+sed -e '/^Wants=sysinit.target$/d' -e '/^After=sysinit.target$/d' "$MNT/usr/lib/systemd/system/dbus.socket" > "$MNT/etc/systemd/system/dbus.socket"
+`
+	// DIAGNOSTIC: SPIN_SYSTEMD_CONSOLE=1 has systemd say on the console what it started and
+	// what failed, for the refused-attempt log above.
+	if os.Getenv("SPIN_SYSTEMD_CONSOLE") != "" {
+		fast.extra = strings.TrimSpace(fast.extra + " systemd.log_target=console systemd.log_level=info systemd.show_status=true")
+		// sshd's own errors on the console too: journald is not up yet when it starts.
+		fast.files["/etc/systemd/system/sshd@.service.d/zz-debug.conf"] = "[Service]\nExecStart=\n" +
+			`ExecStart=-/usr/sbin/sshd -i -e -o "AuthorizedKeysFile ${CREDENTIALS_DIRECTORY}/ssh.ephemeral-authorized_keys-all .ssh/authorized_keys"` +
+			"\nStandardError=append:/dev/ttyS0\n"
+	}
+	// DIAGNOSTIC bound: the lane without pam_systemd, so a login waits on no logind session
+	// and no user manager. Not a candidate: a login without a session has no
+	// XDG_RUNTIME_DIR. It says how much of the lane's session is that wait.
+	nopam := fast
+	nopam.label = "fast lane, no pam_systemd"
+	nopam.setup += `grep -q pam_systemd "$MNT/etc/pam.d/common-session"
+sed -i '/pam_systemd/d' "$MNT/etc/pam.d/common-session"
+`
 	var rows []variant
 	for _, tr := range trees {
 		for _, k := range kernels {
-			v := async
-			v.label += tr.name + k.name
-			v.kernel = k.path
-			if tr.dir != "" {
-				treeOf[v.label] = tr.dir
+			for _, base := range []variant{asBuilt, fast, nopam, async} {
+				v := base
+				v.label += tr.name + k.name
+				v.kernel = k.path
+				if tr.dir != "" {
+					treeOf[v.label] = tr.dir
+				}
+				rows = append(rows, v)
 			}
-			rows = append(rows, v)
 		}
 	}
 
-	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
+	type samples struct{ listen, login, accepted, again, prompt, handshake []time.Duration }
 	got := map[string]*samples{}
-	failed, classical := map[string]int{}, map[string]int{}
+	failed, classical, refused := map[string]int{}, map[string]int{}, map[string]int{}
 	stamps := map[string][]time.Duration{} // "<row>: <step>" -> guest uptime at that step
 	for range reps {
 		for _, v := range rows {
@@ -214,6 +259,18 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 				t.Logf("%s: a boot with no login: listen %v, login %v; %s", v.label, r.listen, r.login, r.why)
 				continue
 			}
+			// DIAGNOSTIC: a first login that took more than one attempt, with what the console
+			// said about the units on its path (a row that logs systemd there shows them).
+			if r.refused > 0 {
+				refused[v.label]++
+				var said []string
+				for l := range strings.SplitSeq(r.console, "\n") {
+					if os.Getenv("SPIN_SYSTEMD_CONSOLE") != "" || strings.Contains(l, "ssh") || strings.Contains(l, "logind") || strings.Contains(l, "dbus") || strings.Contains(l, "user@") || strings.Contains(l, "Failed") {
+						said = append(said, strings.TrimSpace(l))
+					}
+				}
+				t.Logf("%s: %d attempts refused before the login (%s); console:\n%s", v.label, r.refused, r.why, strings.Join(said, "\n"))
+			}
 			for _, m := range reGuestStamp.FindAllStringSubmatch(r.console, -1) {
 				sec, _ := strconv.ParseFloat(m[2], 64)
 				k := v.label + ": " + m[1]
@@ -225,6 +282,7 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 			g := got[v.label]
 			g.listen, g.login, g.again, g.prompt = append(g.listen, r.listen), append(g.login, r.login), append(g.again, r.again), append(g.prompt, r.prompt)
 			g.accepted = append(g.accepted, r.login-r.listen)
+			g.handshake = append(g.handshake, r.handshake)
 		}
 	}
 	ms := func(ds []time.Duration, q float64) string {
@@ -236,16 +294,16 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nms from the moment before QEMU is exec'd, p50/p95 over %d boots of each, interleaved, %s vCPUs\n\n", reps, rows[0].cpus)
-	fmt.Fprintf(&b, "  %-34s %15s %15s %15s %15s %15s %9s %14s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "ACCEPT TO LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "CURVE25519 IN")
+	fmt.Fprintf(&b, "  %-34s %15s %15s %15s %15s %15s %9s %9s %14s %15s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "ACCEPT TO LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "REFUSED", "CURVE25519 IN", "HANDSHAKE")
 	for _, v := range rows {
 		g := got[v.label]
 		if g == nil {
 			g = &samples{}
 		}
-		fmt.Fprintf(&b, "  %-34s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %14d\n", v.label,
+		fmt.Fprintf(&b, "  %-34s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %9d %14d %7s/%-7s\n", v.label,
 			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.accepted, .5), ms(g.accepted, .95),
 			ms(g.again, .5), ms(g.again, .95),
-			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], classical[v.label])
+			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], refused[v.label], classical[v.label], ms(g.handshake, .5), ms(g.handshake, .95))
 	}
 	if len(stamps) > 0 {
 		fmt.Fprintf(&b, "\n  guest uptime at each step of an init that prints SPIN-T, p50/p95 ms from the kernel's start\n\n")
@@ -264,7 +322,9 @@ type firstSSHRun struct {
 	again                 time.Duration // a second login, right after the first: what any login costs
 	classical             bool          // a login offering only curve25519 got in
 	why                   string
-	console               string // what the guest's console printed up to the login
+	refused               int           // first-login attempts that failed before one got in
+	handshake             time.Duration // of the first login: the connect to authenticated
+	console               string        // what the guest's console printed up to the login
 }
 
 func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHRun {
@@ -329,18 +389,20 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 		return r
 	}
 	for time.Now().Before(deadline) {
-		if _, err := sshLogin(cid, signer, xssh.KeyExchangeMLKEM768X25519); err != nil {
+		hs, _, err := sshLogin(cid, signer, xssh.KeyExchangeMLKEM768X25519)
+		if err != nil {
 			r.why = err.Error()
+			r.refused++
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
-		r.login = time.Since(t0)
-		if d, err := sshLogin(cid, signer, xssh.KeyExchangeMLKEM768X25519); err == nil {
+		r.login, r.handshake = time.Since(t0), hs
+		if _, d, err := sshLogin(cid, signer, xssh.KeyExchangeMLKEM768X25519); err == nil {
 			r.again = d
 		}
 		// Whether sshd turns away a client with no ML-KEM, as the image's drop-in has it do. A
 		// release from before it lets one in, so this is counted rather than failed.
-		_, err := sshLogin(cid, signer, xssh.KeyExchangeCurve25519)
+		_, _, err = sshLogin(cid, signer, xssh.KeyExchangeCurve25519)
 		r.classical = err == nil
 		break
 	}
@@ -396,15 +458,15 @@ func vsockAccepts(cid, port uint32) bool {
 
 // sshLogin runs `true` as spin over SSH on cid's port 22, offering only the key exchange kex,
 // and says how long it took from the connect.
-func sshLogin(cid uint32, signer xssh.Signer, kex string) (time.Duration, error) {
+func sshLogin(cid uint32, signer xssh.Signer, kex string) (handshake, all time.Duration, err error) {
 	t0 := time.Now()
 	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
-		return 0, fmt.Errorf("opening a vsock socket: %w", err)
+		return 0, 0, fmt.Errorf("opening a vsock socket: %w", err)
 	}
 	if err := unix.Connect(fd, &unix.SockaddrVM{CID: cid, Port: 22}); err != nil {
 		_ = unix.Close(fd)
-		return 0, fmt.Errorf("connecting to vsock %d:22: %w", cid, err)
+		return 0, 0, fmt.Errorf("connecting to vsock %d:22: %w", cid, err)
 	}
 	conn := vsockConn{os.NewFile(uintptr(fd), "vsock")}
 	defer conn.Close()
@@ -415,19 +477,20 @@ func sshLogin(cid uint32, signer xssh.Signer, kex string) (time.Duration, error)
 		Config:          xssh.Config{KeyExchanges: []string{kex}},
 	})
 	if err != nil {
-		return 0, fmt.Errorf("ssh to vsock %d:22: %w", cid, err)
+		return 0, 0, fmt.Errorf("ssh to vsock %d:22: %w", cid, err)
 	}
+	handshake = time.Since(t0)
 	client := xssh.NewClient(c, chans, reqs)
 	defer client.Close()
 	s, err := client.NewSession()
 	if err != nil {
-		return 0, fmt.Errorf("opening a session on vsock %d:22: %w", cid, err)
+		return 0, 0, fmt.Errorf("opening a session on vsock %d:22: %w", cid, err)
 	}
 	defer s.Close()
 	if err := s.Run("true"); err != nil {
-		return 0, fmt.Errorf("running true on vsock %d:22: %w", cid, err)
+		return 0, 0, fmt.Errorf("running true on vsock %d:22: %w", cid, err)
 	}
-	return time.Since(t0), nil
+	return handshake, time.Since(t0), nil
 }
 
 // vsockConn is a connected vsock socket as the net.Conn x/crypto/ssh takes: net.FileConn
