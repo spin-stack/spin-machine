@@ -177,7 +177,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	// the cold boot, to tell whether what slows a cold boot after a save and a restore is the
 	// host's memory.
 	if os.Getenv("SCORE_COMPACT") != "" {
-		mustRun(t, "sudo", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory")
+		mustRun(t, "sudo", "sh", "-c", "echo 1 > /proc/sys/vm/compact_memory")
 	}
 	var r scoreRun
 	t0 := time.Now()
