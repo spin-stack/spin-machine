@@ -173,6 +173,12 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 		return false
 	}
 
+	// DIAGNOSTIC, not to be merged: the host's page cache dropped and its memory compacted before
+	// the cold boot, to tell whether what slows a cold boot after a save and a restore is the
+	// host's memory.
+	if os.Getenv("SCORE_COMPACT") != "" {
+		mustRun(t, "sudo", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory")
+	}
 	var r scoreRun
 	t0 := time.Now()
 	first := launch(filepath.Join(dir, "a.qmp"))
