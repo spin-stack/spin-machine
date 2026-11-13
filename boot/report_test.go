@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spin-stack/spin-machine/boot"
 )
@@ -75,7 +76,8 @@ func combinations() [][]choice {
 //
 // Needs /dev/kvm and a built release tree (SPIN_MACHINE_OUTPUT, or _output). The vsock rows
 // need /dev/vhost-vsock; without it those rows are listed as skipped rather than reported as
-// failing. With sudo and /dev/nbd0 the getty is
+// failing. With sudo, /dev/nbd0 and /dev/vhost-vsock the release as built is also logged into
+// over SSH, the goal's number (Report.FirstLogin). With sudo and /dev/nbd0 the getty is
 // replaced by an echo, and every variant of the image runs; without them
 // the usable column carries agetty's second and the variants that edit the image are skipped.
 func TestReport(t *testing.T) {
@@ -161,6 +163,16 @@ func TestReport(t *testing.T) {
 		r.Specs = append(r.Specs, row)
 	}
 
+	switch {
+	case !only.MatchString("first login"):
+	case !sudo:
+		r.Skipped = append(r.Skipped, boot.Skipped{ID: "first login", Why: "writes a key into the overlay, which needs sudo and /dev/nbd0"})
+	case missing["vsock=on"] != "":
+		r.Skipped = append(r.Skipped, boot.Skipped{ID: "first login", Why: missing["vsock=on"]})
+	default:
+		r.FirstLogin = measureFirstLogin(t, out, reps, flags)
+	}
+
 	vs := variants
 	if k := kernelB(t); k != "" {
 		vs = append(vs[:len(vs):len(vs)], variant{label: "kernel B", cpus: "2", memory: "2048",
@@ -202,6 +214,36 @@ func measure(t *testing.T, out string, v variant, reps int) boot.Boot {
 	}
 	b := boot.Summarise(runs, failure)
 	t.Logf("%s: %d/%d boots reached a login prompt", v.label, b.Boots-b.Failed, b.Boots)
+	return b
+}
+
+// measureFirstLogin boots the release as built reps times and logs into each over SSH through
+// its vsock, as boot:ssh-first does: the goal's number, in the report beside the console's.
+func measureFirstLogin(t *testing.T, out string, reps int, flags []string) *boot.Boot {
+	t.Helper()
+	row, signer := sshRow(t)
+	v := row("first login", "")
+	v.flags = flags
+	b := &boot.Boot{Boots: reps, Phases: map[string]boot.Summary{}}
+	var accepts, logins []time.Duration
+	for range reps {
+		r := firstSSH(t, out, v, signer)
+		if r.listen == 0 || r.login == 0 {
+			b.Failed++
+			if b.Error == "" {
+				b.Error = r.why
+			}
+			continue
+		}
+		accepts, logins = append(accepts, r.listen), append(logins, r.login)
+	}
+	if s, ok := boot.SummaryOf(accepts); ok {
+		b.Phases["accepts"] = s
+	}
+	if s, ok := boot.SummaryOf(logins); ok {
+		b.Phases["login"] = s
+	}
+	t.Logf("first login: %d/%d boots logged in", b.Boots-b.Failed, b.Boots)
 	return b
 }
 
