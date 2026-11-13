@@ -167,18 +167,31 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 	async := floor
 	async.label = "sshd from init, async probes"
 	async.extra += " driver_async_probe=virtio_rng,virtio_balloon,vmw_vsock_virtio_transport"
-	rows := []variant{floor, async}
-	// With SPIN_KERNEL_B (the lab's kernel_run), both again on that kernel, interleaved; with
-	// SPIN_KERNEL_C (kernel_run_c) too, for a patch measured against the ones before it.
-	for _, k := range []struct{ name, path string }{{"B", kernelB(t)}, {"C", os.Getenv("SPIN_KERNEL_C")}} {
-		if k.path == "" {
-			continue
+	// The rows: that init on every combination of the release's tree and SPIN_MACHINE_OUTPUT_B
+	// (the lab's qemu_run with variant=beside: another QEMU and firmware), and of the release's
+	// kernel, SPIN_KERNEL_B (kernel_run) and SPIN_KERNEL_C (kernel_run_c). One variable a row,
+	// interleaved, so a patch to QEMU and the kernel patch that reads it compare in one run.
+	treeOf := map[string]string{}
+	trees := []struct{ name, dir string }{{"", ""}}
+	if d := os.Getenv("SPIN_MACHINE_OUTPUT_B"); d != "" {
+		trees = append(trees, struct{ name, dir string }{", QEMU B", d})
+	}
+	kernels := []struct{ name, path string }{{"", ""}}
+	for _, k := range []struct{ name, path string }{{", kernel B", kernelB(t)}, {", kernel C", os.Getenv("SPIN_KERNEL_C")}} {
+		if k.path != "" {
+			kernels = append(kernels, k)
 		}
-		for _, v := range []variant{floor, async} {
-			b := v
-			b.label += ", kernel " + k.name
-			b.kernel = k.path
-			rows = append(rows, b)
+	}
+	var rows []variant
+	for _, tr := range trees {
+		for _, k := range kernels {
+			v := async
+			v.label += tr.name + k.name
+			v.kernel = k.path
+			if tr.dir != "" {
+				treeOf[v.label] = tr.dir
+			}
+			rows = append(rows, v)
 		}
 	}
 
@@ -188,7 +201,11 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 	stamps := map[string][]time.Duration{} // "<row>: <step>" -> guest uptime at that step
 	for range reps {
 		for _, v := range rows {
-			r := firstSSH(t, out, v, signer)
+			tree := out
+			if tb, ok := treeOf[v.label]; ok {
+				tree = tb
+			}
+			r := firstSSH(t, tree, v, signer)
 			if got[v.label] == nil {
 				got[v.label] = &samples{}
 			}
