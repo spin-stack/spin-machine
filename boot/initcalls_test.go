@@ -9,12 +9,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/spin-stack/spin-machine/boot"
 )
 
 // Where the kernel's own boot goes, initcall by initcall.
@@ -59,6 +62,9 @@ import (
 //	SPIN_FORMAT_CHECK=<system/event>:<name>
 //	                        fail a boot whose event format still names an enum the eval maps
 //	                        replace, e.g. timer/hrtimer_start:HRTIMER_MODE_
+//	SPIN_EARLY=1            print the kernel's lines before its first initcall, each at its p50
+//	                        stamp over the boots, with the gap to the next: early boot, which
+//	                        function_graph cannot see because it runs before ftrace_init
 //	SPIN_CPU_SHARE=<fn>     after that, SHARE_REPS (default 3) boots per kernel with the
 //	                        scheduler traced: who had the CPU while initcall fn ran
 func TestKernelInitcalls(t *testing.T) {
@@ -140,6 +146,7 @@ WantedBy=multi-user.target
 	}
 
 	runs := map[string][]parsed{}
+	consoles := map[string][]string{}
 	for i := range reps {
 		for _, cv := range cvs {
 			v := base
@@ -168,9 +175,15 @@ WantedBy=multi-user.target
 				}
 			}
 			runs[cv.label] = append(runs[cv.label], parse(t, console))
+			consoles[cv.label] = append(consoles[cv.label], console)
 		}
 	}
 	compare(t, cvs, runs)
+	if os.Getenv("SPIN_EARLY") != "" {
+		for _, cv := range cvs {
+			t.Logf("\n%s, the kernel before its first initcall:\n%s", cv.label, earlyBoot(consoles[cv.label]))
+		}
+	}
 	report(t, runs[cvs[0].label], top, reps)
 	if fns := os.Getenv("SPIN_GRAPH"); fns != "" {
 		graphReport(t, out, base, fns, envInt(t, "GRAPH_REPS", 3), envInt(t, "GRAPH_DEPTH", 3))
@@ -497,4 +510,65 @@ func countUnion(runs []parsed) int {
 		}
 	}
 	return len(seen)
+}
+
+// earlyBoot lines up the dmesg lines every boot printed before its first initcall by their p50
+// stamp, with the gap from each to the next. A line is named by its text with digits blanked,
+// so "Memory: 2012345K" in one boot and "Memory: 2012349K" in the next are one line; a line
+// fewer than half the boots printed is left out.
+func earlyBoot(consoles []string) string {
+	stamp := regexp.MustCompile(`^\[\s*([0-9]+\.[0-9]+)\] (.*)$`)
+	digits := regexp.MustCompile(`[0-9]+`)
+	at := map[string][]time.Duration{}
+	text := map[string]string{}
+	for _, c := range consoles {
+		seen := map[string]bool{}
+		for l := range strings.SplitSeq(c, "\n") {
+			m := stamp.FindStringSubmatch(strings.TrimRight(l, "\r"))
+			if m == nil {
+				continue
+			}
+			if strings.HasPrefix(m[2], "calling ") {
+				break
+			}
+			key := digits.ReplaceAllString(m[2], "#")
+			if len(key) > 90 {
+				key = key[:90]
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			sec, _ := strconv.ParseFloat(m[1], 64)
+			at[key] = append(at[key], time.Duration(sec*float64(time.Second)))
+			text[key] = m[2]
+		}
+	}
+	type line struct {
+		p50  time.Duration
+		text string
+	}
+	var lines []line
+	for k, ds := range at {
+		if 2*len(ds) < len(consoles) {
+			continue
+		}
+		p, _ := boot.Percentile(ds, .5)
+		lines = append(lines, line{p, text[k]})
+	}
+	slices.SortFunc(lines, func(a, b line) int { return cmp.Compare(a.p50, b.p50) })
+	var b strings.Builder
+	fmt.Fprintf(&b, "  %9s %8s  %s\n", "AT (ms)", "GAP", "LINE (the gap is to the next line)")
+	for i, l := range lines {
+		gap := ""
+		if i+1 < len(lines) {
+			gap = fmt.Sprintf("%.2f", float64(lines[i+1].p50-l.p50)/float64(time.Millisecond))
+		}
+		txt := l.text
+		if len(txt) > 110 {
+			txt = txt[:110]
+		}
+		fmt.Fprintf(&b, "  %9.2f %8s  %s\n", float64(l.p50)/float64(time.Millisecond), gap, txt)
+	}
+	return b.String()
 }
