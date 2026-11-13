@@ -21,11 +21,8 @@ older one of the same machine type saved, and `task boot:compat` holds every rel
 One repository, one version per release, and checkpoints that resume across releases until the
 machine itself changes.
 
-**What is deliberately not in a release: software that owns a guest.** This repository
-builds a machine, and a release is not bootable on its own by design — whoever runs guests
-brings the initrd. Tests and performance probes may use caller-supplied diagnostic initrds
-or disposable guest helpers, but those are not release artifacts and must stay isolated from
-the published machine.
+Its goal is a cold boot to the first SSH login in under 100 ms (AGENTS.md). Whatever gets a
+workspace there may be part of a release, an init or a guest agent included.
 
 ## What it publishes
 

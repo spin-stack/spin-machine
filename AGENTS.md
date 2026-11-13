@@ -5,21 +5,8 @@
 A virtual machine: QEMU, a guest kernel, a base image, and the definition of the machine
 they make. Four artefacts and one version.
 
-**A release does not carry software that owns a guest.** No container runtime, agent,
-supervisor, RPC service, or init is part of the published machine. A release is not bootable
-on its own: whoever runs a guest supplies its init.
-
-Diagnostic input is different from release content. A test or experiment may use a caller
-supplied initrd, a temporary guest helper, a disposable overlay, or a separately built
-firmware image when it is isolated from `task build` and `task release`. State clearly what
-is diagnostic, who supplies it, and what it is measuring. `task boot:firmware` is the model:
-it leaves the release tree as it is and boots each firmware with the same diagnostic initrd.
-
-**Keep consumer-specific implementation out of this tree, but record real contracts.** Do
-not copy consumer code, paths, or an ADR as a substitute for an explanation. It is correct to
-name an external component when its protocol, provisioned file, lifecycle, or compatibility
-contract affects this machine; describe the contract here and test the observable behaviour
-where possible.
+Anything that gets a workspace to its first login sooner may live here: an init, a guest
+agent, a different kernel, machine or login path. Name what it is and who uses it.
 
 ## The goal
 
@@ -33,36 +20,24 @@ without making the other worse - or when it is functional (security, correctness
 number - the console prompt, a phase, an initcall, a unit's time - is a tool for finding why one
 of the two moved, never a target of its own. `docs/log.md` shows what optimising the others cost.
 
-## The three rules that are load-bearing
+## What must not break
 
-These are release invariants, not defaults. Everything below them is a strong engineering
-default unless it says otherwise; an experiment may depart from a default when it is isolated
-and makes its scope and result clear.
-
-1. **A checkpoint resumes on any release with its fingerprint, and the fingerprint is the
-   machine's contract.** `machine.Spec.Fingerprint` hashes the versioned machine type
-   (`machine.MachineType`), the shape, the chipset's globals and every device as the command
-   line gives it (`Spec.Contract`), the BIOS's size, and the host CPU under `-cpu host`. Not
-   the QEMU binary, the kernel, the initrd or pvh.bin: QEMU promises a newer release loads what
-   an older one of the same versioned type saved, and a resumed guest runs the kernel in its
-   saved memory. `task boot:compat` holds every change to that promise - a checkpoint the newest
-   release saved must resume on this tree when the fingerprint is the same - and `task
-   boot:roms` holds the fingerprint to every ROM a booted machine maps. Across two fingerprints
-   a resume is undefined rather than an error, so a change to anything the fingerprint hashes -
-   the machine type, a device or one of its properties, the BIOS's size - is a fleet-wide event:
-   every checkpoint taken against the previous machine stops resuming. That is the design, made
-   on purpose and never as a side effect: a QEMU bump keeps the machine type, and moving it is
-   its own change.
-
-2. **The base image is never written to.** Every VM maps it read-only through a qcow2
+1. **The base image is never written to.** Every VM maps it read-only through a qcow2
    backing chain and many share one file. Anything that opens it for writing invalidates
-   every overlay in existence — silently, because the overlays keep working until they read
+   every overlay in existence - silently, because the overlays keep working until they read
    a cluster that moved. New images are written beside the old one and renamed over it.
 
-3. **No identity in the base image.** No hostname, no machine-id with a value, no
-   `/etc/resolv.conf`, no SSH host keys, no random seed. A VM is handed its identity after
-   it is restored; anything baked in is shared by every VM that ever boots from that image.
-   `image/build.sh` asserts each of these on the finished filesystem.
+2. **No identity in the base image.** No hostname, no machine-id with a value, no
+   `/etc/resolv.conf`, no SSH host keys, no random seed: anything baked in is shared by every
+   VM that ever boots from that image. `image/build.sh` asserts each of these on the finished
+   filesystem.
+
+**The fingerprint says which checkpoints a machine resumes, nothing more.**
+`machine.Spec.Fingerprint` hashes what a resumed guest sees (`Spec.Contract`, the machine type,
+the shape, the BIOS's size, the host CPU under `-cpu host`); a resume across two fingerprints is
+undefined, so they are refused. Changing the machine is allowed whenever it serves the goal: the
+fingerprint moves, the release notes say so, and checkpoints from before it boot cold instead.
+`task boot:compat` and `task boot:roms` check that the fingerprint tells the truth.
 
 ## Simplicity
 
@@ -86,34 +61,21 @@ what it makes clear.
 
 ### Experiments
 
-Experiments are welcome when they make a production decision cheaper to evaluate. They must
-not silently become production behaviour.
+Explore freely; promote on evidence.
 
-- Keep experiment outputs, overlays, initrds, firmware, and caches separate from release
-  outputs. Do not modify a shared base image; use a disposable overlay or a new artifact.
-- A probe may change one production default at a time, including a kernel option, unit,
-  QEMU sandbox setting, CPU affinity, or diagnostic initrd. Production defaults remain the
-  safe settings until the result is promoted deliberately.
-- Record the baseline, environment, sample count, and the measured result. A fast exploratory
-  run is enough to decide what to investigate; a promotion needs a reproducible comparison
-  and the functional check that could reveal a false win.
-- If a promoted change alters what a restored guest sees, update the machine identity and
-  prove that checkpoints do not cross the boundary. If it is host-only (for example launcher
-  CPU affinity), document why it does not.
-- Remove or quarantine an experiment once it no longer has an active question. Keep the
-  conclusion and durable evidence, not a permanent switch in the release path.
-- A measurement that decides something is taken on the bench fleet (spin-stack/ci, one instance
-  type) through `.github/workflows/lab.yml`, one run at a time: two lab runs side by side measure
-  each other. A laptop is not a quiet host, so its numbers are leads, not findings, and a number
-  taken on another kind of host compares with nothing. Compare with enough boots to beat the noise -
-  three a row moved a p50 by 5-11% between runs of one release (#81) - and alternate the
-  variants rather than running them in blocks.
-- What the guest's memory and disk were measured to cost, and why each default is what it is,
-  is `docs/memory-and-disk.md`: add a result there when it decides something, with its run.
+- Change as many things at once as the question needs - a floor built from every change
+  together says what is possible before any one of them is tuned.
+- Keep experiment outputs, overlays, initrds, firmware and caches apart from release outputs,
+  and never open the shared base image for writing.
+- Decide on the end-to-end numbers in "The goal", taken interleaved against the release, with
+  enough boots to beat the noise (three a row moved a p50 by 5-11%, #81), on the kind of host
+  the goal is measured on, one run at a time: two runs side by side measure each other. A
+  laptop finds leads.
+- Remove an experiment once its question is answered, and keep the answer in `docs/log.md`.
 - **`docs/log.md` is what was tried, why, and what it measured.** Read its rework cycles and its
-  "Measured and rejected" table before starting an experiment: an idea already there needs a
-  new reason, not a new run. Add an entry when a change decides something, kept or rejected,
-  with its run - in the same pull request.
+  "Measured and rejected" table before starting: an idea already there needs a new reason, not
+  a new run. Add an entry when a change decides something, kept or rejected, with its run.
+  What the guest's memory and disk cost is `docs/memory-and-disk.md`.
 
 ## Go
 
@@ -153,7 +115,8 @@ Comments here are longer than usual, on purpose. The rule is what makes them wor
   justified — so it could only rot, and it did. A claim about the state of the tree
   belongs in a workflow, a badge, or a commit message. Never in prose that nobody
   re-reads.
-- **Name external contracts when relevant.** See above.
+- **Name external contracts when relevant**: a consumer's protocol, provisioned file or lifecycle
+  that this machine has to honour, described here and tested where it can be.
 
 ## Artefacts leave this machine
 
@@ -189,12 +152,8 @@ machine at start-up.
 ## Trying the machine
 
 `spin-machine` (`cmd/spin-machine`, built by `task tools`) is how this machine is run by
-hand. A one-off check goes through it: do not write a Python or shell harness that rebuilds
-its command line, speaks QMP, or makes overlays itself. A harness like that tests itself and
-not the definition, and it is thrown away with what it found. If the CLI cannot do what the
-check needs, and the check is part of the machine's contract (a disk hotplugged, a save,
-a restore), add it to the CLI. If the check should be repeated, it belongs in `boot/`
-as a Task target.
+hand. Use whatever is quickest to explore with; a check that will be repeated, or that decides
+something, ends up in `boot/` as a Task target, so the next person measures the same thing.
 
 - **Rebuild it first.** `_output/bin/spin-machine` is whatever `task tools` last built, so
   a change to `machine/` is invisible until the tool is rebuilt. `spin-machine args` shows
