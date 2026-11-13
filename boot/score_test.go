@@ -83,8 +83,8 @@ func TestScore(t *testing.T) {
 			s.up, s.running = append(s.up, res.up), append(s.running, res.running)
 			s.restoredAccept, s.restored = append(s.restoredAccept, res.restoredAccept), append(s.restored, res.restored)
 			s.coldMB, s.coldHugeMB = append(s.coldMB, res.coldMB), append(s.coldHugeMB, res.coldHugeMB)
-			t.Logf("%s, repetition %d: cold accepted %v, logged in %v; restored accepted %v, logged in %v",
-				r.label, len(s.cold), res.coldAccept.Round(time.Millisecond), res.cold.Round(time.Millisecond),
+			t.Logf("%s, repetition %d: cold prompt %v, accepted %v, logged in %v; restored accepted %v, logged in %v",
+				r.label, len(s.cold), res.coldPrompt.Round(time.Millisecond), res.coldAccept.Round(time.Millisecond), res.cold.Round(time.Millisecond),
 				res.restoredAccept.Round(time.Millisecond), res.restored.Round(time.Millisecond))
 		}
 	}
@@ -116,6 +116,7 @@ type scoreRun struct {
 	cold, save, up, running, restored time.Duration
 	coldAccept, restoredAccept        time.Duration // when sshd first accepted on vsock
 	coldMB, coldHugeMB                float64       // the cold guest's RAM on the host at its login, and of it in huge pages
+	coldPrompt                        time.Duration // the cold guest's console prompt
 }
 
 // scoreOnce boots v with cli over release, logs in, saves it, and restores it.
@@ -182,10 +183,23 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	var r scoreRun
 	t0 := time.Now()
 	first := launch(filepath.Join(dir, "a.qmp"))
+	// The console's prompt, polled from its file: whether a slower cold login is the guest's boot.
+	prompt := make(chan time.Duration, 1)
+	go func() {
+		for time.Since(t0) < 30*time.Second {
+			if b, err := os.ReadFile(filepath.Join(dir, "a.qmp.console")); err == nil && strings.Contains(string(b), "login:") {
+				prompt <- time.Since(t0)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		prompt <- 0
+	}()
 	if !login(t0.Add(60 * time.Second)) {
 		t.Fatal("the cold boot was never logged into")
 	}
 	r.cold, r.coldAccept = time.Since(t0), accepted.Sub(t0)
+	r.coldPrompt = <-prompt
 	if mb, err := strconv.Atoi(v.memory); err == nil {
 		r.coldMB, r.coldHugeMB, _ = guestRAM(first.Process.Pid, mb)
 	}
