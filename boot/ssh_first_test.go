@@ -277,7 +277,9 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 	// Context ids are the host's: two machines with one fail to start, so this one's is drawn
 	// from a range nothing else here uses.
 	cid := uint32(100000 + rand.IntN(1<<20))
-	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), "boot", "--release", out,
+	// The release's spin-machine, over whichever tree this row boots: the lab's tree B carries
+	// a QEMU and firmware and no spin-machine of its own.
+	cmd := exec.Command(filepath.Join(releaseDir(t), "bin", "spin-machine"), "boot", "--release", out,
 		"--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
 		"--vsock-cid", fmt.Sprint(cid),
 		"--console", "file:/dev/stdout", "--append", strings.TrimSpace("init=/sbin/init "+v.extra))
