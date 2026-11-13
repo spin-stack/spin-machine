@@ -36,6 +36,32 @@ grown from the image onto a larger disk would keep 5% of the larger size.
   `build.sh` asserts each of these on the finished filesystem — `/etc/machine-id` present
   and *empty*, everything else absent.
 
+## Logging in: the SSH client has to speak ML-KEM
+
+`sshd` offers one key exchange, `mlkem768x25519-sha256`, and refuses a client that has no
+ML-KEM rather than falling back to a weaker one. The client sees:
+
+```
+Unable to negotiate with … port 22: no matching key exchange method found. Their offer: mlkem768x25519-sha256
+```
+
+A client that connects is one of:
+
+- **OpenSSH 9.9 or later**, which `ssh -V` names. Earlier ones are refused, among them the 9.6
+  Ubuntu 24.04 LTS ships (the bench fleet's runners have it, 2026-11-13): an operating system
+  whose OpenSSH is older needs a newer one installed.
+- **`golang.org/x/crypto/ssh` v0.38.0 or later, built with Go 1.24 or later.** It offers
+  ML-KEM first by default, so a client that sets no `KeyExchanges` already connects.
+- **Not** the `ssh2` npm package: no release up to 1.17.0 has ML-KEM.
+
+Why one exchange: ML-KEM is post-quantum, and on the bench fleet a login with it cost what one
+with curve25519 did (40 and 39 ms; `task boot:ssh-first`, lab run 43479854381, 2026-11-13).
+sntrup761x25519, the other post-quantum exchange and the one OpenSSH 8.5-9.8 picks, took
+104 ms - its key generation alone was ~39 ms of the client's. The classical exchanges are
+gone with it. The drop-in is `/etc/ssh/sshd_config.d/10-spin-kex.conf`, written by
+`configure-system.sh` and asserted by `build.sh`; a drop-in that sets `KexAlgorithms` and is
+read before it wins, because sshd keeps the first value it reads.
+
 ## Looking inside
 
 ```
