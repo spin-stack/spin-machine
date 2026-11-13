@@ -1,0 +1,132 @@
+From: Manuel de Brito Fontes <aledbf@gmail.com>
+Date: Fri, 13 Nov 2026 18:30:00 -0300
+Subject: [PATCH] hw/i386/pc: Publish the root bus's configuration space over fw_cfg
+
+A guest enumerating bus 0 reads every device's header, BARs and
+capability list, a VM exit a read. Offer all of it as the fw_cfg file
+etc/spin/pci-config, filled when the guest selects it - after the
+firmware assigned the BARs - so a guest can read it with one DMA
+transfer (spin-machine's kernel/patches/0007).
+
+Taken with pci_default_read_config(), the config array as the device
+holds it: no device's config_read runs, so the snapshot has no side
+effect. The only one in this machine is virtio-pci's PCI_CFG window,
+which the guest side stops trusting once it is written.
+
+Local patch for spin-machine. Not upstream.
+
+Assisted-by: LLM
+---
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -30,6 +30,7 @@
+ #include "hw/char/parallel.h"
+ #include "hw/hyperv/hv-balloon.h"
+ #include "hw/i386/fw_cfg.h"
++#include "hw/pci/pci_device.h"
+ #include "hw/i386/vmport.h"
+ #include "system/cpus.h"
+ #include "hw/ide/ide-bus.h"
+@@ -519,6 +520,92 @@
+     }
+ }
+ 
++/*
++ * etc/spin/pci-config: the configuration space of every device on the root
++ * bus, read when the guest selects the file - after the firmware has
++ * assigned the BARs - so a guest can enumerate bus 0 from one fw_cfg DMA
++ * transfer instead of a VM exit for every register it reads.
++ *
++ *   "SPCF", le32 version (1), le32 count, then count times:
++ *   u8 bus (0), u8 devfn, le16 size (0: the device is gone), size bytes
++ *
++ * Read with pci_default_read_config(): the config array as the device holds
++ * it, without a device's own config_read, so taking the snapshot has no side
++ * effect (virtio-pci's reads through its PCI_CFG window access the device).
++ * A guest that writes past a device's standard header stops trusting the
++ * snapshot for that device, which covers that window.
++ */
++typedef struct SpinPCIConfig {
++    PCIBus *bus;
++    uint8_t *data;
++    size_t len;
++} SpinPCIConfig;
++
++static void spin_pci_config_fill(void *opaque)
++{
++    SpinPCIConfig *s = opaque;
++    uint8_t *p = s->data + 12;
++
++    while (p < s->data + s->len) {
++        uint8_t devfn = p[1];
++        uint16_t size = lduw_le_p(p + 2);
++        PCIDevice *dev = pci_find_device(s->bus, 0, devfn);
++        uint32_t i;
++
++        for (i = 0; i < size; i += 4) {
++            uint32_t v = ~0u;
++
++            if (dev && dev->enabled && i < pci_config_size(dev)) {
++                v = pci_default_read_config(dev, i, 4);
++            }
++            stl_le_p(p + 4 + i, v);
++        }
++        p += 4 + size;
++    }
++}
++
++static void spin_pci_config_setup(FWCfgState *fw_cfg, PCIBus *bus)
++{
++    SpinPCIConfig *s;
++    size_t len = 12;
++    uint32_t count = 0;
++    uint8_t *p;
++    int devfn;
++
++    if (!fw_cfg || !bus) {
++        return;
++    }
++    for (devfn = 0; devfn < 256; devfn++) {
++        PCIDevice *dev = pci_find_device(bus, 0, devfn);
++
++        if (dev) {
++            len += 4 + pci_config_size(dev);
++            count++;
++        }
++    }
++    s = g_new0(SpinPCIConfig, 1);
++    s->bus = bus;
++    s->len = len;
++    s->data = g_malloc0(len);
++    memcpy(s->data, "SPCF", 4);
++    stl_le_p(s->data + 4, 1);
++    stl_le_p(s->data + 8, count);
++    p = s->data + 12;
++    for (devfn = 0; devfn < 256; devfn++) {
++        PCIDevice *dev = pci_find_device(bus, 0, devfn);
++
++        if (dev) {
++            p[0] = 0;
++            p[1] = devfn;
++            stw_le_p(p + 2, pci_config_size(dev));
++            p += 4 + pci_config_size(dev);
++        }
++    }
++    fw_cfg_add_file_callback(fw_cfg, "etc/spin/pci-config",
++                             spin_pci_config_fill, NULL, s,
++                             s->data, s->len, true);
++}
++
+ static
+ void pc_machine_done(Notifier *notifier, void *data)
+ {
+@@ -540,6 +627,7 @@
+                                        &error_abort);
+ 
+     acpi_setup();
++    spin_pci_config_setup(x86ms->fw_cfg, pcms->pcibus);
+     if (x86ms->fw_cfg) {
+         fw_cfg_build_smbios(pcms, x86ms->fw_cfg, pcms->smbios_entry_point_type);
+         fw_cfg_add_e820(x86ms->fw_cfg);
+-- 
+2.51.0
