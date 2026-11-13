@@ -211,8 +211,9 @@ tasks:
     desc: >-
       When a workspace can first be logged into from the host over SSH, through the machine's
       vsock: sshd accepting, the first login done, a second login's cost, and the console
-      prompt beside them. Needs KVM, /dev/vhost-vsock (task vsock), a built release, sudo
-      and ssh. REPS= boots.
+      prompt beside them, logged in with golang.org/x/crypto/ssh over ML-KEM, the one key
+      exchange the image's sshd accepts. Needs KVM, /dev/vhost-vsock (task vsock), a built
+      release and sudo. REPS= boots.
     deps: [':tools']
     cmds:
       - SPIN_SSH_FIRST=1 go test ./boot/ -run '^TestFirstSSH$' -count=1 -v -timeout 30m

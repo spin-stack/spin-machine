@@ -5,8 +5,10 @@ package boot_test
 import (
 	"bytes"
 	"cmp"
+	"crypto/ed25519"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	xssh "golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 
 	"github.com/spin-stack/spin-machine/boot"
@@ -28,7 +31,9 @@ import (
 // The machine gets a vsock device (--vsock-cid), and the image's systemd-ssh-generator binds
 // sshd to AF_VSOCK port 22 when it finds one. From the moment before QEMU is exec'd the host
 // tries to connect every few milliseconds; the first connection accepted is `listen`, and then
-// one `ssh spin@ true` through boot/vsockproxy is `login`. The console's prompt is timed in the
+// `true` run as spin over SSH is `login`. The client is golang.org/x/crypto/ssh offering only
+// mlkem768x25519-sha256, the one key exchange the image's sshd accepts: the runners' OpenSSH
+// (9.6 on 2026-11-13) has no ML-KEM and is refused. The console's prompt is timed in the
 // same boot, with the getty an echo as boot:bench's baseline has it, so the two read side by
 // side.
 //
@@ -51,14 +56,22 @@ func TestFirstSSH(t *testing.T) {
 	}
 	reps := envInt(t, "REPS", 10)
 
-	dir := t.TempDir()
-	proxy := filepath.Join(dir, "vsockproxy")
-	build := exec.Command("go", "build", "-trimpath", "-o", proxy, "./vsockproxy")
-	if b, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building vsockproxy: %v\n%s", err, b)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	key := filepath.Join(dir, "key")
-	mustRun(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key)
+	signer, err := xssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := xssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(key+".pub", xssh.MarshalAuthorizedKey(sshPub), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Every row has the key, the echo getty, and sshd@.service ordered after the image's host
 	// key generation. The image carries that drop-in itself since 2026-11-12; it is written
@@ -91,16 +104,24 @@ install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ss
 test -e "$MNT/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service"
 install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/spin"
 `
+	// Lab run 43463472762 (2026-11-13), 20 boots of each, p50 ms from sshd's accept to the
+	// first login: as built 177; the host keys generated from the boot's first dispatch rather
+	// than by the first connection's sshd@ 155; that and the login's files read into the page
+	// cache early 149, with sshd accepting 18 ms later. On a laptop, the vsock socket and sshd@
+	// without default dependencies accepted no sooner per login and dropped 7 of 22 first
+	// connections. Then lab run 43479854381, 20 of each, first login / a second: the runner's
+	// OpenSSH 9.6, which took sntrup761x25519, 489/104; x/crypto/ssh with mlkem768x25519
+	// 461/40, and with curve25519 461/39.
 	rows := []variant{
 		row("as this branch", asThisBranch),
 	}
 
 	type samples struct{ listen, login, again, prompt []time.Duration }
 	got := map[string]*samples{}
-	failed := map[string]int{}
+	failed, classical := map[string]int{}, map[string]int{}
 	for range reps {
 		for _, v := range rows {
-			r := firstSSH(t, out, v, proxy, key)
+			r := firstSSH(t, out, v, signer)
 			if got[v.label] == nil {
 				got[v.label] = &samples{}
 			}
@@ -108,6 +129,9 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 				failed[v.label]++
 				t.Logf("%s: a boot with no login: listen %v, login %v; %s", v.label, r.listen, r.login, r.why)
 				continue
+			}
+			if r.classical {
+				classical[v.label]++
 			}
 			g := got[v.label]
 			g.listen, g.login, g.again, g.prompt = append(g.listen, r.listen), append(g.login, r.login), append(g.again, r.again), append(g.prompt, r.prompt)
@@ -122,15 +146,15 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nms from the moment before QEMU is exec'd, p50/p95 over %d boots of each, interleaved, %s vCPUs\n\n", reps, rows[0].cpus)
-	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %9s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN")
+	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %9s %14s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "CURVE25519 IN")
 	for _, v := range rows {
 		g := got[v.label]
 		if g == nil {
 			g = &samples{}
 		}
-		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d\n", v.label,
+		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %14d\n", v.label,
 			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.again, .5), ms(g.again, .95),
-			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label])
+			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], classical[v.label])
 	}
 	t.Log(b.String())
 }
@@ -138,10 +162,11 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 type firstSSHRun struct {
 	listen, login, prompt time.Duration
 	again                 time.Duration // a second login, right after the first: what any login costs
+	classical             bool          // a login offering only curve25519 got in
 	why                   string
 }
 
-func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRun {
+func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHRun {
 	t.Helper()
 	overlay := filepath.Join(t.TempDir(), "overlay.qcow2")
 	mustRun(t, filepath.Join(out, "bin", "qemu-img"), "create", "-f", "qcow2",
@@ -194,23 +219,21 @@ func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRu
 		r.why = "sshd never accepted on vsock; QEMU: " + strings.TrimSpace(stderr.String())
 		return r
 	}
-	ssh := []string{"-F", "/dev/null", "-i", key, "-o", "BatchMode=yes",
-		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=error",
-		"-o", "ConnectTimeout=10", "-o", fmt.Sprintf("ProxyCommand=%s %d 22", proxy, cid), "spin@vsock", "true"}
 	for time.Now().Before(deadline) {
-		b, err := exec.Command("ssh", ssh...).CombinedOutput()
-		if err == nil {
-			r.login = time.Since(t0)
-			break
+		if _, err := sshLogin(cid, signer, xssh.KeyExchangeMLKEM768X25519); err != nil {
+			r.why = err.Error()
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
-		r.why = fmt.Sprintf("ssh: %v: %s", err, strings.TrimSpace(string(b)))
-		time.Sleep(10 * time.Millisecond)
-	}
-	if r.login != 0 {
-		t1 := time.Now()
-		if exec.Command("ssh", ssh...).Run() == nil {
-			r.again = time.Since(t1)
+		r.login = time.Since(t0)
+		if d, err := sshLogin(cid, signer, xssh.KeyExchangeMLKEM768X25519); err == nil {
+			r.again = d
 		}
+		// Whether sshd turns away a client with no ML-KEM, as the image's drop-in has it do. A
+		// release from before it lets one in, so this is counted rather than failed.
+		_, err := sshLogin(cid, signer, xssh.KeyExchangeCurve25519)
+		r.classical = err == nil
+		break
 	}
 	// The prompt is usually there by now; it is waited for so the row is not empty.
 	for time.Now().Before(deadline) {
@@ -240,3 +263,51 @@ func vsockAccepts(cid, port uint32) bool {
 	_ = unix.SetsockoptTimeval(fd, unix.AF_VSOCK, unix.SO_VM_SOCKETS_CONNECT_TIMEOUT, &tv)
 	return unix.Connect(fd, &unix.SockaddrVM{CID: cid, Port: port}) == nil
 }
+
+// sshLogin runs `true` as spin over SSH on cid's port 22, offering only the key exchange kex,
+// and says how long it took from the connect.
+func sshLogin(cid uint32, signer xssh.Signer, kex string) (time.Duration, error) {
+	t0 := time.Now()
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return 0, fmt.Errorf("opening a vsock socket: %w", err)
+	}
+	if err := unix.Connect(fd, &unix.SockaddrVM{CID: cid, Port: 22}); err != nil {
+		_ = unix.Close(fd)
+		return 0, fmt.Errorf("connecting to vsock %d:22: %w", cid, err)
+	}
+	conn := vsockConn{os.NewFile(uintptr(fd), "vsock")}
+	defer conn.Close()
+	c, chans, reqs, err := xssh.NewClientConn(conn, "vsock", &xssh.ClientConfig{
+		User:            "spin",
+		Auth:            []xssh.AuthMethod{xssh.PublicKeys(signer)},
+		HostKeyCallback: xssh.InsecureIgnoreHostKey(), // a fresh VM's keys, made in its boot
+		Config:          xssh.Config{KeyExchanges: []string{kex}},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("ssh to vsock %d:22: %w", cid, err)
+	}
+	client := xssh.NewClient(c, chans, reqs)
+	defer client.Close()
+	s, err := client.NewSession()
+	if err != nil {
+		return 0, fmt.Errorf("opening a session on vsock %d:22: %w", cid, err)
+	}
+	defer s.Close()
+	if err := s.Run("true"); err != nil {
+		return 0, fmt.Errorf("running true on vsock %d:22: %w", cid, err)
+	}
+	return time.Since(t0), nil
+}
+
+// vsockConn is a connected vsock socket as the net.Conn x/crypto/ssh takes: net.FileConn
+// knows no AF_VSOCK address, and nothing here asks for one.
+type vsockConn struct{ *os.File }
+
+type vsockAddr struct{}
+
+func (vsockAddr) Network() string { return "vsock" }
+func (vsockAddr) String() string  { return "vsock" }
+
+func (vsockConn) LocalAddr() net.Addr  { return vsockAddr{} }
+func (vsockConn) RemoteAddr() net.Addr { return vsockAddr{} }
