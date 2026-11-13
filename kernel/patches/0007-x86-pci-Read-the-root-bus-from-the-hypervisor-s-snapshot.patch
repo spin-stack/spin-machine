@@ -1,0 +1,329 @@
+From: Manuel de Brito Fontes <aledbf@gmail.com>
+Date: Fri, 13 Nov 2026 18:30:00 -0300
+Subject: [PATCH 7/7] x86/pci: Read the root bus from the hypervisor's snapshot during boot
+
+Enumerating bus 0 reads every device's header, BARs and capability list,
+and under a hypervisor every read is a VM exit: acpi_pci_root_create was
+11.2 of acpi_init's 15 ms under function_graph, nested under KVM on an
+AWS c8i.4xlarge, the largest block of the kernel's boot after the virtio
+probes.
+
+QEMU, patched to (spin-machine's qemu/patches), publishes the
+configuration space of every device on bus 0 as the fw_cfg file
+etc/spin/pci-config, taken when the file is selected - after the
+firmware assigned the BARs. Read it with one fw_cfg DMA transfer and,
+until late_initcall_sync, answer raw_pci_read() from it for a dword
+nothing has written since; a write past the standard header stops it
+answering for that device, and command/status always go to the device.
+Without the file nothing changes.
+
+Local patch for this machine. Not upstream.
+
+Assisted-by: LLM
+---
+--- a/arch/x86/include/asm/pci_x86.h
++++ b/arch/x86/include/asm/pci_x86.h
+@@ -123,6 +123,11 @@
+ };
+ 
+ extern const struct pci_raw_ops *raw_pci_ops;
++
++bool pci_snapshot_read(unsigned int domain, unsigned int bus, unsigned int devfn,
++		       int reg, int len, u32 *val);
++void pci_snapshot_write(unsigned int domain, unsigned int bus, unsigned int devfn,
++			int reg, int len);
+ extern const struct pci_raw_ops *raw_pci_ext_ops;
+ 
+ extern const struct pci_raw_ops pci_mmcfg;
+--- a/arch/x86/pci/common.c
++++ b/arch/x86/pci/common.c
+@@ -40,6 +40,8 @@
+ int raw_pci_read(unsigned int domain, unsigned int bus, unsigned int devfn,
+ 						int reg, int len, u32 *val)
+ {
++	if (pci_snapshot_read(domain, bus, devfn, reg, len, val))
++		return 0;
+ 	if (domain == 0 && reg < 256 && raw_pci_ops)
+ 		return raw_pci_ops->read(domain, bus, devfn, reg, len, val);
+ 	if (raw_pci_ext_ops)
+@@ -50,6 +52,7 @@
+ int raw_pci_write(unsigned int domain, unsigned int bus, unsigned int devfn,
+ 						int reg, int len, u32 val)
+ {
++	pci_snapshot_write(domain, bus, devfn, reg, len);
+ 	if (domain == 0 && reg < 256 && raw_pci_ops)
+ 		return raw_pci_ops->write(domain, bus, devfn, reg, len, val);
+ 	if (raw_pci_ext_ops)
+--- a/arch/x86/pci/Makefile
++++ b/arch/x86/pci/Makefile
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
+-obj-y				:= i386.o init.o
++obj-y				:= i386.o init.o snapshot.o
+ 
+ obj-$(CONFIG_PCI_BIOS)		+= pcbios.o
+ obj-$(CONFIG_PCI_MMCONFIG)	+= mmconfig_$(BITS).o direct.o mmconfig-shared.o
+--- a/arch/x86/pci/snapshot.c
++++ b/arch/x86/pci/snapshot.c
+@@ -0,0 +1,259 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * The root bus's configuration space from a snapshot the hypervisor publishes,
++ * for the boot only.
++ *
++ * Enumerating a bus reads every device's header, BARs and capability list, and
++ * under a hypervisor each of those reads is a VM exit. QEMU, patched to, offers
++ * the configuration space of every device on bus 0 as the fw_cfg file
++ * etc/spin/pci-config, taken when the file is selected - after the firmware
++ * has assigned the BARs. One DMA transfer brings it in, and until
++ * late_initcall_sync a read is answered from it when nothing has written that
++ * dword since:
++ *
++ *  - a write to a dword of the standard header marks that dword, so BAR sizing
++ *    reads back what the device says;
++ *  - a write past the standard header (MSI, MSI-X, a vendor capability such as
++ *    virtio's PCI_CFG window) stops the snapshot answering for that device;
++ *  - command and status are always read from the device.
++ *
++ * After late_initcall_sync every access goes to the device as before, so a
++ * device that is hotplugged, reset or reconfigured later is never answered from
++ * the snapshot. Without the file nothing here does anything.
++ */
++
++#include <linux/bitops.h>
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/pci_regs.h>
++#include <linux/printk.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/unaligned.h>
++#include <asm/cpufeature.h>
++#include <asm/pci_x86.h>
++
++#define FW_CFG_PORT_SEL		0x510
++#define FW_CFG_PORT_DATA	0x511
++#define FW_CFG_PORT_DMA		0x514
++#define FW_CFG_SIGNATURE	0x00
++#define FW_CFG_ID		0x01
++#define FW_CFG_FILE_DIR		0x19
++#define FW_CFG_VERSION_DMA	0x02
++#define FW_CFG_DMA_CTL_ERROR	0x01
++#define FW_CFG_DMA_CTL_READ	0x02
++#define FW_CFG_DMA_CTL_SELECT	0x08
++
++#define SNAPSHOT_FILE		"etc/spin/pci-config"
++
++struct fw_cfg_dma_access {
++	__be32 control;
++	__be32 length;
++	__be64 address;
++};
++
++struct fw_cfg_file {
++	__be32 size;
++	__be16 select;
++	__u16 reserved;
++	char name[56];
++};
++
++struct snapshot_dev {
++	const u8 *data;
++	u16 size;
++	bool bypass;
++	DECLARE_BITMAP(dirty, 4096 / 4);
++};
++
++static struct snapshot_dev *snapshot_devs[256];
++static bool snapshot_active;
++
++/* One fw_cfg DMA read: QEMU does it while handling the write that starts it. */
++static int __init fw_cfg_dma_read(u16 key, bool select, void *buf, u32 len)
++{
++	struct fw_cfg_dma_access *d;
++	u32 control;
++	u64 pa;
++
++	d = kzalloc(sizeof(*d), GFP_KERNEL);
++	if (!d)
++		return -ENOMEM;
++	control = FW_CFG_DMA_CTL_READ;
++	if (select)
++		control |= FW_CFG_DMA_CTL_SELECT | ((u32)key << 16);
++	d->control = cpu_to_be32(control);
++	d->length = cpu_to_be32(len);
++	d->address = cpu_to_be64(virt_to_phys(buf));
++	pa = virt_to_phys(d);
++	wmb();
++	outl(cpu_to_be32(upper_32_bits(pa)), FW_CFG_PORT_DMA);
++	outl(cpu_to_be32(lower_32_bits(pa)), FW_CFG_PORT_DMA + 4);
++	while ((control = be32_to_cpu(READ_ONCE(d->control))) & ~FW_CFG_DMA_CTL_ERROR)
++		cpu_relax();
++	kfree(d);
++	return control & FW_CFG_DMA_CTL_ERROR ? -EIO : 0;
++}
++
++static bool __init fw_cfg_has_dma(void)
++{
++	u8 b[4];
++	int i;
++
++	outw(FW_CFG_SIGNATURE, FW_CFG_PORT_SEL);
++	for (i = 0; i < 4; i++)
++		b[i] = inb(FW_CFG_PORT_DATA);
++	if (memcmp(b, "QEMU", 4))
++		return false;
++	outw(FW_CFG_ID, FW_CFG_PORT_SEL);
++	for (i = 0; i < 4; i++)
++		b[i] = inb(FW_CFG_PORT_DATA);
++	return get_unaligned_le32(b) & FW_CFG_VERSION_DMA;
++}
++
++/* The snapshot's selector and size, from fw_cfg's file directory. */
++static int __init snapshot_find(u16 *key, u32 *size)
++{
++	struct fw_cfg_file *files;
++	__be32 *count;
++	u32 n, i;
++	int ret = -ENOENT;
++
++	count = kmalloc(sizeof(*count), GFP_KERNEL);
++	if (!count)
++		return -ENOMEM;
++	if (fw_cfg_dma_read(FW_CFG_FILE_DIR, true, count, sizeof(*count))) {
++		kfree(count);
++		return -EIO;
++	}
++	n = be32_to_cpu(*count);
++	kfree(count);
++	if (!n || n > 4096)
++		return -ENOENT;
++	files = kmalloc_array(n, sizeof(*files), GFP_KERNEL);
++	if (!files)
++		return -ENOMEM;
++	/* The directory goes on where the count ended. */
++	if (fw_cfg_dma_read(0, false, files, n * sizeof(*files))) {
++		kfree(files);
++		return -EIO;
++	}
++	for (i = 0; i < n; i++) {
++		if (!strncmp(files[i].name, SNAPSHOT_FILE, sizeof(files[i].name))) {
++			*key = be16_to_cpu(files[i].select);
++			*size = be32_to_cpu(files[i].size);
++			ret = 0;
++			break;
++		}
++	}
++	kfree(files);
++	return ret;
++}
++
++static int __init pci_snapshot_init(void)
++{
++	u32 size, count, i, off;
++	u8 *buf;
++	u16 key;
++
++	if (!boot_cpu_has(X86_FEATURE_HYPERVISOR) || !fw_cfg_has_dma())
++		return 0;
++	if (snapshot_find(&key, &size) || size < 12)
++		return 0;
++	buf = kmalloc(size, GFP_KERNEL);
++	if (!buf)
++		return 0;
++	if (fw_cfg_dma_read(key, true, buf, size) || memcmp(buf, "SPCF", 4) ||
++	    get_unaligned_le32(buf + 4) != 1)
++		goto fail;
++	count = get_unaligned_le32(buf + 8);
++	off = 12;
++	for (i = 0; i < count; i++) {
++		struct snapshot_dev *d;
++		u8 bus, devfn;
++		u16 len;
++
++		if (off + 4 > size)
++			goto fail;
++		bus = buf[off];
++		devfn = buf[off + 1];
++		len = get_unaligned_le16(buf + off + 2);
++		if (off + 4 + len > size || len > 4096 || len % 4)
++			goto fail;
++		if (bus == 0 && len && !snapshot_devs[devfn]) {
++			d = kzalloc(sizeof(*d), GFP_KERNEL);
++			if (!d)
++				goto fail;
++			d->data = buf + off + 4;
++			d->size = len;
++			snapshot_devs[devfn] = d;
++		}
++		off += 4 + len;
++	}
++	/* The snapshot stays: a read may still be under way on another CPU. */
++	WRITE_ONCE(snapshot_active, true);
++	pr_info("PCI: configuration space of %u devices on bus 0 from " SNAPSHOT_FILE "\n", count);
++	return 0;
++fail:
++	for (i = 0; i < ARRAY_SIZE(snapshot_devs); i++) {
++		kfree(snapshot_devs[i]);
++		snapshot_devs[i] = NULL;
++	}
++	kfree(buf);
++	pr_warn("PCI: " SNAPSHOT_FILE " is not a snapshot this kernel reads; ignored\n");
++	return 0;
++}
++arch_initcall_sync(pci_snapshot_init);
++
++static int __init pci_snapshot_off(void)
++{
++	WRITE_ONCE(snapshot_active, false);
++	return 0;
++}
++late_initcall_sync(pci_snapshot_off);
++
++bool pci_snapshot_read(unsigned int domain, unsigned int bus, unsigned int devfn,
++		       int reg, int len, u32 *val)
++{
++	struct snapshot_dev *d;
++
++	if (!READ_ONCE(snapshot_active) || domain || bus || devfn > 255)
++		return false;
++	d = snapshot_devs[devfn];
++	if (!d || READ_ONCE(d->bypass) || reg < 0 || reg + len > d->size)
++		return false;
++	if ((reg & 3) + len > 4 || reg >> 2 == PCI_COMMAND >> 2 ||
++	    test_bit(reg >> 2, d->dirty))
++		return false;
++	switch (len) {
++	case 1:
++		*val = d->data[reg];
++		return true;
++	case 2:
++		*val = get_unaligned_le16(d->data + reg);
++		return true;
++	case 4:
++		*val = get_unaligned_le32(d->data + reg);
++		return true;
++	}
++	return false;
++}
++
++void pci_snapshot_write(unsigned int domain, unsigned int bus, unsigned int devfn,
++			int reg, int len)
++{
++	struct snapshot_dev *d;
++
++	if (!READ_ONCE(snapshot_active) || domain || bus || devfn > 255)
++		return;
++	d = snapshot_devs[devfn];
++	if (!d)
++		return;
++	if (reg < 0 || reg + len > PCI_STD_HEADER_SIZEOF) {
++		WRITE_ONCE(d->bypass, true);
++		return;
++	}
++	set_bit(reg >> 2, d->dirty);
++	if ((reg & 3) + len > 4)
++		set_bit((reg >> 2) + 1, d->dirty);
++}
+-- 
+2.51.0

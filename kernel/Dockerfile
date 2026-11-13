@@ -290,9 +290,10 @@ RUN <<EOT
     # patches/0003 takes another 9.0 ms from event tracing, which BPF_EVENTS needs: the eval map
     # rewrite of every event format, now done on first use. All three: 109.9 -> 78.5 ms; with
     # patches/0004 (PCI configuration through ECAM, one trap an access), 73.7.
-    # patches/0005 has each device's capability list walked once rather than per search: the
-    # kernel 95.1 -> 88.9 ms (lab run 43327612594, 2026-11-12). Dropped and brought back on
-    # 2026-11-13: against a goal of 100 ms to the first SSH login, 6 ms is 6% of it.
+    # patches/0007 answers the root bus's configuration reads during boot from a snapshot the
+    # patched QEMU publishes over fw_cfg (qemu/patches), instead of a VM exit a read. It
+    # replaces a patch that remembered each device's capability list (0005, 2026-11-12/13),
+    # which the snapshot covers.
     # patches/0006 parses vmlinux BTF in the background from a core_initcall instead of inside
     # inet_init on the boot CPU, where it was 11.2 of inet_init's 11.8 ms traced (lab run
     # 43498943572).
