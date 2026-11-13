@@ -69,8 +69,14 @@ func TestFirstSSH(t *testing.T) {
 test -e "$MNT/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service"
 install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/spin"
 `
+	// Experiment, 2026-11-13: boot:score, which starts its machines with a QMP socket, read sshd
+	// accepting at ~500 ms where this read ~310 on the same release. This row is the one below with
+	// --qmp. Drop it once it has answered.
+	withQMP := row("with --qmp", asThisBranch)
+	withQMP.flags = []string{"--qmp", filepath.Join(t.TempDir(), "q.sock")}
 	rows := []variant{
 		row("as this branch", asThisBranch),
+		withQMP,
 	}
 
 	type samples struct{ listen, login, again, prompt []time.Duration }
@@ -133,6 +139,7 @@ func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRu
 		"--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
 		"--vsock-cid", fmt.Sprint(cid),
 		"--console", "file:/dev/stdout", "--append", "init=/sbin/init")
+	cmd.Args = append(cmd.Args, v.flags...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
