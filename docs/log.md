@@ -327,6 +327,16 @@ Measured and not shipped:
 
 #250 also removes `boot:bench`, `boot:trace`, `boot:userspace`, `boot:systemd` and `boot:ssh-load`, keeping "a gate …, the release's report, the metric a workspace waits for (ssh-first), and one tool per layer".
 
+**11-13 · goal · #251, #252, #254.** The goal is written down: a cold boot to the first SSH login in under 100 ms (AGENTS.md), with restore as the second number. The rules that held exploration back are removed (no init in a release, the fingerprint as an event to avoid, one default per experiment, the bench fleet alone deciding); hotplug and dynamic memory become an invariant that is never traded for boot time.
+
+**11-13 · boot probes · branch `floor-kernel` (experiment).** The floor without systemd: PID 1 a script that mounts what sshd needs, makes an Ed25519 key and has socat hand vsock connections to `sshd -i`. First login 467 → 220 ms (lab 43492686353), 506 → 240 (lab 43493135230); guest uptime puts init at ~90 ms of kernel and the keys 10-20 ms later. What is left at the floor: QEMU and firmware ~44 ms (boot:firmware-stages, lab 43494513791: QEMU's own start 35.9, qboot ~8.5, of QEMU's start 7.9 copying vmlinux), kernel ~80-90, init ~20, the login ~44. `/proc/uptime` starts partway into the kernel, so it hides ~35 ms that an earlier reading charged to QEMU.
+
+**11-13 · CI · spin-stack/ci#14, #15, spin-machine#253.** A `bench-metal` fleet (c8i.metal-48xl, then r7i.metal-24xl behind it) and lab.yml's `host` input. It has not run: metal spot scored 1-3 of 10 for placement and failed `UnfulfillableCapacity` in every zone; on-demand failed `VcpuLimitExceeded` at a quota of 96 vCPU. An increase to 288 was requested the same day (case open).
+
+**11-13 · kernel · #255 (this change).** Where the kernel's ~100 ms goes on the bench fleet (boot:initcalls lab 43495583323): initcalls 52 (acpi_init 12, of which `acpi_pci_root_create` - bus 0's enumeration - 11.2 traced on a kernel without forced lockdown, lab 43499868986; inet_init 7.9, which is vmlinux BTF's first parse; the virtio probes ~17), before the first initcall ~15-20 (SPIN_EARLY, lab 43507472288; ~4 of it the probe's own 18 MB log buffer), SMP ~4, the root mount ~6. Kept: patch 0005 back, 0006 (BTF parsed in the background from a core_initcall), `CONFIG_DEFERRED_STRUCT_PAGE_INIT=y`: kernel 96.3 → 87.1 ms (lab 43505126131), first login 466 → 456 as built and 223 → 214 at the floor (lab 43501992969). `driver_async_probe` for rng, balloon and vsock on the command line: 214 → 209 at the floor (lab 43506390106).
+
+**11-13 · kernel/qemu · branches `kernel-snapshot`, `qemu-snapshot` (rejected).** QEMU publishes bus 0's configuration space over fw_cfg after the firmware (etc/spin/pci-config) and the kernel answers boot-time configuration reads from it until each dword is written. It works (`PCI: configuration space of 5 devices on bus 0`) and is worth -14 ms against the same kernel without it (lab 43514550646), but only 2-3 ms against 0005, which already removes most repeated reads: 209/217 against 211/222 (lab 43514884598). Not worth a QEMU patch and a 250-line kernel patch.
+
 ---
 
 ## 3. Rework cycles
@@ -500,6 +510,8 @@ Also the reusable builder, added and reverted on 10-13.
 | Vsock socket + sshd@ without default deps | No sooner; dropped 7 of 22 first connections (laptop) | `boot/ssh_first_test.go:124-128` | 11-13 |
 | mapped-ram checkpoints (multifd ×4) | Restore login 385/400 vs 386/399 | #246, lab 43483852339 | 11-13 |
 | sntrup761 (OpenSSH default) | 104 vs 40 ms per login | #245, lab 43479854381 | 11-13 |
+| Configuration-space snapshot over fw_cfg (QEMU + kernel) | 209 vs 211 with 0005 | lab 43514884598 | 11-13 |
+| Lower the vCPU ceiling, drop the balloon or ACPI for boot time | Not tried: hotplug and dynamic memory are an invariant | AGENTS.md | 11-13 |
 
 ---
 
