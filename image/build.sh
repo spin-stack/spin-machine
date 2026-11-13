@@ -320,29 +320,39 @@ for u in tmp.mount systemd-tmpfiles-setup.service; do
     fi
 done
 
-# logind is deferred rather than masked, and the two halves of that only work together.
-# The drop-in makes pam_systemd's guard — access("/run/systemd/seats/") — true before
-# logind has run, so the first login activates it over Varlink instead of being handed a
-# session with no XDG_RUNTIME_DIR and no user manager. The overridden want is what keeps
-# the 24 ms. Either half alone is a silent failure: without the drop-in every login comes
-# up session-less and nothing logs an error, and a re-enabled want costs the boot time back
-# while everything still works, so neither shows up anywhere but here.
-in_image /etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf || {
-    echo "ERROR: the image has no logind seats drop-in; every login would lose its session" >&2
-    exit 1; }
-# The want is overridden, not deleted: the package ships it in /usr, so the /etc path must
-# hold a symlink to /dev/null. Asserting its *absence* is the version of this check that
-# passed while the image still started logind at boot, because the /etc path was never
-# there to remove (2026-09-12).
-if ! stat_in_image /etc/systemd/system/multi-user.target.wants/systemd-logind.service |
+# logind starts in the boot, because spin lingers and logind is what starts a lingering
+# user's manager: the first SSH login comes 60 ms sooner for both together (the numbers are
+# in optimize-systemd.sh). Each half alone is silent - the want overridden leaves the linger
+# file doing nothing until the first login starts logind, and the file gone leaves logind in
+# the boot buying nothing - so both are asserted here. The want is the package's, in /usr; an
+# override would be a /dev/null symlink at the /etc path, which is how it was done before
+# (2026-09-12) and what a stale configure step would bring back.
+if stat_in_image /etc/systemd/system/multi-user.target.wants/systemd-logind.service |
         grep -q '/dev/null'; then
-    echo "ERROR: the want for systemd-logind is not overridden; the package ships one in" \
-         "/usr and logind is back in the boot transaction" >&2
+    echo "ERROR: the want for systemd-logind is overridden; spin's manager would start in" \
+         "the first login instead of the boot" >&2
     exit 1
 fi
+in_image /usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service || {
+    echo "ERROR: the package no longer wants systemd-logind from multi-user.target" >&2
+    exit 1; }
+in_image /var/lib/systemd/linger/spin || {
+    echo "ERROR: spin does not linger; its manager starts inside the first login" >&2
+    exit 1; }
+# The drop-in still matters with logind in the boot: a login can arrive before logind has
+# run, and without it pam_systemd hands that login no session and says nothing.
+in_image /etc/systemd/system/systemd-logind-varlink.socket.d/10-seats.conf || {
+    echo "ERROR: the image has no logind seats drop-in; an early login would lose its session" >&2
+    exit 1; }
+# The per-connection sshd that systemd-ssh-generator's vsock and AF_UNIX sockets start must
+# wait for the host keys: without the drop-in, nothing can log in over vsock at all.
+"$bin/debugfs" -R "cat /etc/systemd/system/sshd@.service.d/keygen.conf" /work/base.raw 2>/dev/null |
+        grep -qx 'After=spin-machine-sshd-keygen.service' || {
+    echo "ERROR: sshd@.service does not wait for spin-machine-sshd-keygen.service" >&2
+    exit 1; }
 if stat_in_image /etc/systemd/system/systemd-logind.service | grep -q '/dev/null'; then
-    echo "ERROR: systemd-logind.service is masked - deferring it means it still starts" \
-         "on demand, and masked means it never starts at all" >&2
+    echo "ERROR: systemd-logind.service is masked - it never starts, no login gets a" \
+         "session, and spin's manager never starts either" >&2
     exit 1
 fi
 
@@ -365,17 +375,18 @@ in_image /etc/systemd/system/timers.target.wants/fstrim.timer || {
     echo "ERROR: fstrim.timer is not enabled" >&2
     exit 1; }
 
-# The login banner is this image's own, and pam_motd is enabled for ssh to print it — so
-# whatever is in /etc/update-motd.d now runs on every login. That is the reason to assert
-# both halves rather than only the one that was added: the distribution's scripts reach the
-# network (50-motd-news), print an advertisement, and were deleted, and a package upgrade
-# that restores one restores it into a path that is now read.
-in_image /etc/update-motd.d/00-spin-boot || {
-    echo "ERROR: the image has no /etc/update-motd.d/00-spin-boot to print the boot time" >&2
-    exit 1; }
-for f in /etc/update-motd.d/10-help-text /etc/update-motd.d/50-motd-news; do
-    if in_image "$f"; then
-        echo "ERROR: $f is back, and pam_motd now runs it at every login" >&2
+# No login runs a MOTD: pam_motd is off in every stack the distribution enables it in, so
+# whatever a package upgrade restores into /etc/update-motd.d - 50-motd-news reaches the
+# network - is never run. Read from the finished filesystem, and the file is checked to be a
+# PAM stack before its lines are: debugfs prints nothing for a file that is not there, and
+# nothing has no pam_motd line in it.
+for f in /etc/pam.d/sshd /etc/pam.d/login; do
+    stack=$("$bin/debugfs" -R "cat $f" /work/base.raw 2>/dev/null)
+    printf '%s\n' "$stack" | grep -q 'pam_unix\|common-session' || {
+        echo "ERROR: $f is missing or is not a PAM stack" >&2
+        exit 1; }
+    if printf '%s\n' "$stack" | grep -q '^[[:space:]]*session.*pam_motd\.so'; then
+        echo "ERROR: pam_motd is enabled in $f, and runs /etc/update-motd.d at every login" >&2
         exit 1
     fi
 done

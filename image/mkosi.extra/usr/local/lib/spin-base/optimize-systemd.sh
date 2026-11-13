@@ -214,19 +214,15 @@ rm -f /etc/systemd/system/multi-user.target.wants/ssh.service 2>/dev/null || tru
 mkdir -p /etc/systemd/system/sockets.target.wants
 ln -sf /lib/systemd/system/ssh.socket /etc/systemd/system/sockets.target.wants/ssh.socket
 
-# logind out of the boot transaction, worth 24 ms. Not masked: masked means never started,
-# and a login needs it. It stays enabled in every other sense and is started by the first
-# thing that asks for a session over its Varlink socket — see the 10-seats.conf drop-in
-# shipped beside it, which is what makes pam_systemd get as far as asking.
-#
-# A symlink to /dev/null and not `rm`, because the want is not in /etc to begin with: the
-# package ships it at /usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service.
-# An `rm` of the /etc path is what this said first, and it removed nothing at all — the
-# build passed, the image shipped, and logind started at boot exactly as before (2026-09-12).
-# The /dev/null symlink in /etc overrides the want in /usr and nothing else: the unit itself
-# is untouched, which is why it can still be activated on demand.
-mkdir -p /etc/systemd/system/multi-user.target.wants
-ln -sf /dev/null /etc/systemd/system/multi-user.target.wants/systemd-logind.service
+# logind stays in the boot transaction, as the package wants it
+# (/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service), because spin
+# lingers - configure-system.sh - and it is logind that starts a lingering user's manager.
+# Taking it out of the boot was worth 24 ms to a console prompt (2026-09-12) and moved logind,
+# dbus-broker and user@1000.service into the first login instead, which is what a workspace
+# waits for: with logind in the boot and spin lingering, the first SSH login over vsock came
+# 60 ms sooner, 510/525 against 570/626 ms p50/p95, and sshd accepted no later (321 against
+# 324), 10 boots of each interleaved on the bench fleet (task boot:ssh-first, lab run
+# 43308825692, 2026-11-12). image/build.sh asserts the want is not overridden.
 
 log "Setting default target to multi-user..."
 ln -sf /lib/systemd/system/multi-user.target /etc/systemd/system/default.target
