@@ -32,6 +32,12 @@ of the two moved, never a target of its own. `docs/log.md` shows what optimising
    VM that ever boots from that image. `image/build.sh` asserts each of these on the finished
    filesystem.
 
+3. **CPUs, memory and devices stay dynamic.** CPU hotplug up to the machine's ceiling, memory
+   through virtio-mem and the balloon's free page reporting, and disks attached and detached
+   while the machine runs: a workspace grows, shrinks and gives memory back without a restart.
+   Nothing trades any of it for boot time - not a lower ceiling, not a missing device, not a
+   machine without ACPI. Make what they cost cheaper instead.
+
 **The fingerprint says which checkpoints a machine resumes, nothing more.**
 `machine.Spec.Fingerprint` hashes what a resumed guest sees (`Spec.Contract`, the machine type,
 the shape, the BIOS's size, the host CPU under `-cpu host`); a resume across two fingerprints is
