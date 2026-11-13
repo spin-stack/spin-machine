@@ -161,10 +161,16 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 	floor.setup += `chmod 0755 "$MNT/sbin/spin-fastinit"
 `
 	floor.extra = "init=/sbin/spin-fastinit"
-	rows := []variant{asBuilt, floor}
+	// EXPERIMENT: the virtio devices nothing before init needs probed asynchronously, on the
+	// second vCPU beside the initcalls; the root mount still waits for them
+	// (wait_for_device_probe), so this moves them off the boot CPU rather than out of the boot.
+	async := floor
+	async.label = "sshd from init, async probes"
+	async.extra += " driver_async_probe=virtio_rng,virtio_balloon,vmw_vsock_virtio_transport"
+	rows := []variant{floor, async}
 	// With SPIN_KERNEL_B (the lab's kernel_run), both again on that kernel, interleaved.
 	if k := kernelB(t); k != "" {
-		for _, v := range []variant{asBuilt, floor} {
+		for _, v := range []variant{floor, async} {
 			b := v
 			b.label += ", kernel B"
 			b.kernel = k
