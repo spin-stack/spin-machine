@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -195,9 +196,8 @@ func (s *scoreRun) login(t *testing.T, t0 time.Time, what string) (accepted, log
 }
 
 // cold boots a fresh overlay of the row's release, logs in, saves it - which ends it - and
-// evicts the state from the host's page cache, which the save has just filled: a checkpoint kept
-// for later is read from the disk, and twenty of them cached would be twenty fewer GiB for the
-// cold boots that follow.
+// evicts the state from the host's page cache, which the save has just filled: twenty states of
+// ~150 MiB each, cached, would be 3 GiB less for the cold boots that follow.
 func (s *scoreRun) cold(t *testing.T) {
 	t.Helper()
 	mustRun(t, filepath.Join(s.release, "bin", "qemu-img"), "create", "-f", "qcow2",
@@ -221,10 +221,12 @@ func (s *scoreRun) cold(t *testing.T) {
 	evict(t, s.state())
 }
 
-// restore resumes the state cold saved, logs in, and kills the machine: restored guests left
+// restore resumes the state cold saved, read from the disk as a checkpoint kept for later is,
+// logs in, and kills the machine: restored guests left
 // running would be what the restores after them measured.
 func (s *scoreRun) restore(t *testing.T) {
 	t.Helper()
+	evict(t, s.state())
 	qmp := filepath.Join(s.dir, "restored.qmp")
 	t0 := time.Now()
 	_, stop := s.launch(t, qmp, "--incoming", "defer")
@@ -245,7 +247,9 @@ func (s *scoreRun) restore(t *testing.T) {
 	stop()
 }
 
-// evict drops path from the host's page cache.
+// evict drops path from the host's page cache, and asks the cache whether it did: a restore of a
+// state still in memory measures the cache and not the disk, and fadvise says nothing about what
+// it dropped.
 func evict(t *testing.T, path string) {
 	t.Helper()
 	f, err := os.Open(path)
@@ -253,11 +257,34 @@ func evict(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	if err := unix.Fsync(int(f.Fd())); err != nil {
+	fd := int(f.Fd())
+	if err := unix.Fsync(fd); err != nil {
 		t.Fatalf("syncing %s: %v", path, err)
 	}
-	if err := unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED); err != nil {
+	if err := unix.Fadvise(fd, 0, 0, unix.FADV_DONTNEED); err != nil {
 		t.Fatalf("evicting %s from the page cache: %v", path, err)
+	}
+	st, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := unix.Mmap(fd, 0, int(st.Size()), unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		t.Fatalf("mapping %s: %v", path, err)
+	}
+	defer func() { _ = unix.Munmap(m) }()
+	page := os.Getpagesize()
+	vec := make([]byte, (len(m)+page-1)/page)
+	// x/sys has no wrapper for mincore(2).
+	if _, _, errno := unix.Syscall(unix.SYS_MINCORE, uintptr(unsafe.Pointer(&m[0])), uintptr(len(m)), uintptr(unsafe.Pointer(&vec[0]))); errno != 0 {
+		t.Fatalf("asking which pages of %s are cached: %v", path, errno)
+	}
+	cached := 0
+	for _, v := range vec {
+		cached += int(v & 1)
+	}
+	if cached > 0 {
+		t.Fatalf("%s: %d KiB still in the page cache after evicting it", path, cached*page/1024)
 	}
 }
 
