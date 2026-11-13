@@ -98,6 +98,10 @@ not silently become production behaviour.
   variants rather than running them in blocks.
 - What the guest's memory and disk were measured to cost, and why each default is what it is,
   is `docs/memory-and-disk.md`: add a result there when it decides something, with its run.
+- **`docs/log.md` is what was tried, why, and what it measured.** Read its rework cycles and its
+  "Measured and rejected" table before starting an experiment: an idea already there needs a
+  new reason, not a new run. Add an entry when a change decides something, kept or rejected,
+  with its run - in the same pull request.
 
 ## Go
 
