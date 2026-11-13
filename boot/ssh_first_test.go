@@ -162,6 +162,15 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 `
 	floor.extra = "init=/sbin/spin-fastinit"
 	rows := []variant{asBuilt, floor}
+	// With SPIN_KERNEL_B (the lab's kernel_run), both again on that kernel, interleaved.
+	if k := kernelB(t); k != "" {
+		for _, v := range []variant{asBuilt, floor} {
+			b := v
+			b.label += ", kernel B"
+			b.kernel = k
+			rows = append(rows, b)
+		}
+	}
 
 	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}
@@ -200,13 +209,13 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nms from the moment before QEMU is exec'd, p50/p95 over %d boots of each, interleaved, %s vCPUs\n\n", reps, rows[0].cpus)
-	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %15s %9s %14s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "ACCEPT TO LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "CURVE25519 IN")
+	fmt.Fprintf(&b, "  %-34s %15s %15s %15s %15s %15s %9s %14s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "ACCEPT TO LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "CURVE25519 IN")
 	for _, v := range rows {
 		g := got[v.label]
 		if g == nil {
 			g = &samples{}
 		}
-		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %14d\n", v.label,
+		fmt.Fprintf(&b, "  %-34s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %14d\n", v.label,
 			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.accepted, .5), ms(g.accepted, .95),
 			ms(g.again, .5), ms(g.again, .95),
 			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], classical[v.label])
