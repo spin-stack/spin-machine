@@ -3,13 +3,16 @@
 package boot_test
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -73,7 +76,7 @@ install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ss
 		files["/etc/systemd/system/sshd@.service.d/keygen.conf"] = "[Unit]\nWants=spin-machine-sshd-keygen.service\nAfter=spin-machine-sshd-keygen.service\n"
 		// The key in spin's own directory, owned by spin: sshd's StrictModes refuses one it
 		// cannot trust, and a refused key reads as a login that never comes.
-		return variant{label: label, cpus: cmp.Or(os.Getenv("CPUS"), "2"), memory: "2048", files: files, setup: keySetup + setup}
+		return variant{label: label, cpus: cmp.Or(os.Getenv("CPUS"), "2"), memory: "2048", files: files, links: map[string]string{}, setup: keySetup + setup}
 	}
 	// Rows measured against "as built" and dropped once they had answered, on the bench fleet,
 	// 10 boots of each interleaved, lab run 43308825692 (2026-11-12), p50/p95 ms of the first
@@ -91,11 +94,40 @@ install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ss
 test -e "$MNT/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service"
 install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/spin"
 `
+	// EXPERIMENT: the host keys generated from the boot's first dispatch, beside udev and
+	// journald, rather than by the first connection's sshd@ - which waits for them before it
+	// sends its banner, the login's largest phase (SPIN_SSH_TRACE=1).
+	nodeps := "[Unit]\nDefaultDependencies=no\nConflicts=shutdown.target\nBefore=shutdown.target\n"
+	keysEarly := row("keys early", asThisBranch)
+	keysEarly.files["/etc/systemd/system/spin-machine-sshd-keygen.service.d/early.conf"] = nodeps
+	keysEarly.links["/etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service"] = "/usr/lib/systemd/system/spin-machine-sshd-keygen.service"
+	// Measured against keys early, 15 boots of each on a laptop (2026-11-13): the vsock socket
+	// and sshd@ without default dependencies as well accepted no sooner per login, dropped 7 of
+	// 22 first connections, and waited 58 ms for logind in the session.
+	//
+	// EXPERIMENT: keys early, and the files the first login reads - sshd's three binaries,
+	// their libraries, PAM's modules - read into the page cache from the boot's first dispatch,
+	// beside udev and journald, rather than by the first connection.
+	prefetch := row("keys+prefetch", asThisBranch)
+	for k, v := range keysEarly.files {
+		prefetch.files[k] = v
+	}
+	for k, v := range keysEarly.links {
+		prefetch.links[k] = v
+	}
+	prefetch.files["/usr/local/sbin/spin-prefetch"] = `#!/bin/sh
+b="/usr/sbin/sshd /usr/lib/openssh/sshd-session /usr/lib/openssh/sshd-auth /bin/bash /bin/true"
+cat $b $(ldd $b | awk '/=>/ {print $3}' | sort -u) /usr/lib/x86_64-linux-gnu/security/pam_*.so /etc/ssh/sshd_config /etc/pam.d/* >/dev/null
+`
+	prefetch.files["/etc/systemd/system/spin-prefetch.service"] = nodeps + "[Service]\nType=oneshot\nExecStart=/bin/sh /usr/local/sbin/spin-prefetch\n"
+	prefetch.links["/etc/systemd/system/sysinit.target.wants/spin-prefetch.service"] = "/etc/systemd/system/spin-prefetch.service"
 	rows := []variant{
 		row("as this branch", asThisBranch),
+		keysEarly,
+		prefetch,
 	}
 
-	type samples struct{ listen, login, again, prompt []time.Duration }
+	type samples struct{ listen, login, again, prompt, banner, session []time.Duration }
 	got := map[string]*samples{}
 	failed := map[string]int{}
 	for range reps {
@@ -111,6 +143,9 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 			}
 			g := got[v.label]
 			g.listen, g.login, g.again, g.prompt = append(g.listen, r.listen), append(g.login, r.login), append(g.again, r.again), append(g.prompt, r.prompt)
+			if r.banner != 0 {
+				g.banner, g.session = append(g.banner, r.banner), append(g.session, r.session)
+			}
 		}
 	}
 	ms := func(ds []time.Duration, q float64) string {
@@ -122,15 +157,15 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nms from the moment before QEMU is exec'd, p50/p95 over %d boots of each, interleaved, %s vCPUs\n\n", reps, rows[0].cpus)
-	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %9s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN")
+	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %9s %15s %15s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "BANNER", "AUTH TO EXIT")
 	for _, v := range rows {
 		g := got[v.label]
 		if g == nil {
 			g = &samples{}
 		}
-		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d\n", v.label,
+		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %7s/%-7s %7s/%-7s\n", v.label,
 			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.again, .5), ms(g.again, .95),
-			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label])
+			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], ms(g.banner, .5), ms(g.banner, .95), ms(g.session, .5), ms(g.session, .95))
 	}
 	t.Log(b.String())
 }
@@ -138,7 +173,10 @@ install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/s
 type firstSSHRun struct {
 	listen, login, prompt time.Duration
 	again                 time.Duration // a second login, right after the first: what any login costs
-	why                   string
+	// With SPIN_SSH_TRACE: in the first login, from the client's start to the server's banner, and
+	// from authenticated to the command's exit.
+	banner, session time.Duration
+	why             string
 }
 
 func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRun {
@@ -197,8 +235,52 @@ func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRu
 	ssh := []string{"-F", "/dev/null", "-i", key, "-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=error",
 		"-o", "ConnectTimeout=10", "-o", fmt.Sprintf("ProxyCommand=%s %d 22", proxy, cid), "spin@vsock", "true"}
-	for time.Now().Before(deadline) {
-		b, err := exec.Command("ssh", ssh...).CombinedOutput()
+	// DIAGNOSTIC: SPIN_SSH_TRACE=1 logs each attempt of the first login with the client's -vvv,
+	// every line stamped on the host in ms from the attempt's start.
+	trace := os.Getenv("SPIN_SSH_TRACE") != ""
+	for attempt := 1; time.Now().Before(deadline); attempt++ {
+		args := ssh
+		if trace {
+			args = slices.Clone(ssh)
+			args[slices.Index(args, "LogLevel=error")] = "LogLevel=DEBUG3"
+		}
+		c := exec.Command("ssh", args...)
+		var lines strings.Builder
+		var err error
+		var b []byte
+		a0 := time.Now()
+		if trace {
+			pr, pw := io.Pipe()
+			c.Stderr, c.Stdout = pw, pw
+			done := make(chan struct{})
+			go func() {
+				sc := bufio.NewScanner(pr)
+				for sc.Scan() {
+					fmt.Fprintf(&lines, "%7.1f %s\n", float64(time.Since(a0).Microseconds())/1000, sc.Text())
+				}
+				close(done)
+			}()
+			err = c.Run()
+			_ = pw.Close()
+			<-done
+			t.Logf("%s, attempt %d at %v after the accept, %v:\n%s", v.label, attempt, a0.Sub(t0)-r.listen, err, lines.String())
+			if err == nil {
+				at := func(marker string) time.Duration {
+					for l := range strings.SplitSeq(lines.String(), "\n") {
+						if strings.Contains(l, marker) {
+							var f float64
+							_, _ = fmt.Sscan(l, &f)
+							return time.Duration(f * float64(time.Millisecond))
+						}
+					}
+					return 0
+				}
+				r.banner = at("Remote protocol version")
+				r.session = at("Exit status") - at("Authenticated to")
+			}
+		} else {
+			b, err = c.CombinedOutput()
+		}
 		if err == nil {
 			r.login = time.Since(t0)
 			break
