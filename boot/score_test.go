@@ -83,6 +83,9 @@ func TestScore(t *testing.T) {
 			s.up, s.running = append(s.up, res.up), append(s.running, res.running)
 			s.restoredAccept, s.restored = append(s.restoredAccept, res.restoredAccept), append(s.restored, res.restored)
 			s.coldMB, s.coldHugeMB = append(s.coldMB, res.coldMB), append(s.coldHugeMB, res.coldHugeMB)
+			t.Logf("%s, repetition %d: cold accepted %v, logged in %v; restored accepted %v, logged in %v",
+				r.label, len(s.cold), res.coldAccept.Round(time.Millisecond), res.cold.Round(time.Millisecond),
+				res.restoredAccept.Round(time.Millisecond), res.restored.Round(time.Millisecond))
 		}
 	}
 
