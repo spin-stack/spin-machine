@@ -316,7 +316,7 @@ Measured and not shipped:
 
 *Status:* rejected; #242 and #246 closed.
 
-**11-13 · image · `d895543` (#245), `5e0cc2f`.** sshd offers only `mlkem768x25519-sha256`. ML-KEM costs the same as curve25519: first login 461 for both; a second login 40 vs 39; OpenSSH 9.6 with sntrup761 took 489 first and 104 for a second (lab 43479854381, also 43463472762). `boot:ssh-first` logs in with x/crypto/ssh, and vsockproxy is removed. *Status:* merged 18:30Z. #245's own body said "Do not merge before the clients move": open-remote-ssh#8 merged at 18:57Z, and spin-stack/spin#1206 (the spin CLI refusing OpenSSH < 9.9) is **still open**. Not yet released.
+**11-13 · image · `d895543` (#245), `5e0cc2f`.** sshd offers only `mlkem768x25519-sha256`. ML-KEM costs the same as curve25519: first login 461 for both; a second login 40 vs 39; OpenSSH 9.6 with sntrup761 took 489 first and 104 for a second (lab 43479854381, also 43463472762). `boot:ssh-first` logs in with x/crypto/ssh, and vsockproxy is removed. *Status:* merged 18:30Z. #245's own body said "Do not merge before the clients move": open-remote-ssh#8 merged at 18:57Z, and spin-stack/spin#1206 (the spin CLI refusing OpenSSH < 9.9) merged after its CI and KVM lanes passed. Not yet released.
 
 **11-13 · image · `3e8075f` (#247 → #248).** SSH host keys are made from the boot's first dispatch (wanted by sysinit.target, `DefaultDependencies=no`). First login 489/506 → 468/494; accept to login 177 → 154 (lab 43483372488). Rejected in the same run: masking two generators (489), and masking 11 always-failing units (484). Not released.
 
@@ -553,7 +553,7 @@ Also the reusable builder, added and reverted on 10-13.
 
 ## 6. Open questions
 
-- **#245 merged ahead of its clients.** spin-stack/spin#1206 (the spin CLI refuses OpenSSH < 9.9 and forces ML-KEM) is still open. The next release will refuse every client without ML-KEM, including `spin ssh` with an OpenSSH 9.6 to 9.8. #245's body: "Do not merge before the clients move."
+- **Release #245 only with its clients.** spin-stack/spin#1206 and open-remote-ssh#8 are merged; users need OpenSSH 9.9 or newer, or a spin and open-remote-ssh built from them, before a release carrying #245 reaches them.
 - **Restore as the north.** #242 calls restore "the path a workspace takes". On the fleet a restore reaches login at 386/399 vs a cold boot at 487/516 (#246). Not measured:
   - concurrent restores on one host;
   - RAM above 2 GiB;
