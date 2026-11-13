@@ -168,12 +168,16 @@ exec socat VSOCK-LISTEN:22,fork,reuseaddr EXEC:"/usr/sbin/sshd -i -h /run/ssh_ho
 	async.label = "sshd from init, async probes"
 	async.extra += " driver_async_probe=virtio_rng,virtio_balloon,vmw_vsock_virtio_transport"
 	rows := []variant{floor, async}
-	// With SPIN_KERNEL_B (the lab's kernel_run), both again on that kernel, interleaved.
-	if k := kernelB(t); k != "" {
+	// With SPIN_KERNEL_B (the lab's kernel_run), both again on that kernel, interleaved; with
+	// SPIN_KERNEL_C (kernel_run_c) too, for a patch measured against the ones before it.
+	for _, k := range []struct{ name, path string }{{"B", kernelB(t)}, {"C", os.Getenv("SPIN_KERNEL_C")}} {
+		if k.path == "" {
+			continue
+		}
 		for _, v := range []variant{floor, async} {
 			b := v
-			b.label += ", kernel B"
-			b.kernel = k
+			b.label += ", kernel " + k.name
+			b.kernel = k.path
 			rows = append(rows, b)
 		}
 	}
