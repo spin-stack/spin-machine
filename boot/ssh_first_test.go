@@ -231,6 +231,34 @@ sed -e '/^Wants=sysinit.target$/d' -e '/^After=sysinit.target$/d' "$MNT/usr/lib/
 sed -i 's/^\(session.*pam_systemd\.so\)\(.*\)$/\1\2 class=user-early-light/' "$MNT/etc/pam.d/common-session"
 grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 `
+	// EXPERIMENT: the lane first for the CPU too. Its units are ordered early but run beside
+	// the ~60 others the boot starts on 2 vCPUs, and its handshake took 105 ms on the bench
+	// fleet against the floor's 36 (lab run 43518044150). Weights on the services and on the
+	// slices they sit in, since a cgroup v2 weight divides the CPU among siblings.
+	prio := early
+	prio.label = "lane, priority"
+	prio.files = maps.Clone(early.files)
+	weight := "[Service]\nCPUWeight=10000\nIOWeight=10000\nNice=-10\n"
+	for _, u := range []string{"sshd@.service", "systemd-logind.service", "dbus-broker.service", "user-runtime-dir@.service", "user@.service"} {
+		prio.files["/etc/systemd/system/"+u+".d/priority.conf"] = weight
+	}
+	for _, sl := range []string{"system-sshd.slice", "user.slice"} {
+		prio.files["/etc/systemd/system/"+sl+".d/priority.conf"] = "[Slice]\nCPUWeight=10000\nIOWeight=10000\n"
+	}
+	// EXPERIMENT: udev's coldplug only for what the boot uses. systemd-udev-trigger replays an
+	// add for every device the kernel found - 266 on 2026-09-26, 64 of them ttyN - on the CPU
+	// the lane runs on. Block, net, virtio and vsock, and ttyS0 for the serial getty; a device
+	// hotplugged later is udev's as ever.
+	coldplug := early
+	coldplug.label = "lane, coldplug filtered"
+	coldplug.files = maps.Clone(early.files)
+	coldplug.files["/etc/systemd/system/systemd-udev-trigger.service.d/filter.conf"] = "[Service]\nExecStart=\n" +
+		"ExecStart=-udevadm trigger --type=devices --action=add --subsystem-match=block --subsystem-match=net --subsystem-match=virtio --subsystem-match=vsock\n" +
+		"ExecStart=-udevadm trigger --type=devices --action=add --subsystem-match=tty --sysname-match=ttyS0\n"
+	both := prio
+	both.label = "lane, priority, coldplug filtered"
+	both.files = maps.Clone(prio.files)
+	both.files["/etc/systemd/system/systemd-udev-trigger.service.d/filter.conf"] = coldplug.files["/etc/systemd/system/systemd-udev-trigger.service.d/filter.conf"]
 	// DIAGNOSTIC bound: the lane without pam_systemd, so a login waits on no logind session
 	// and no user manager. Not a candidate: a login without a session has no
 	// XDG_RUNTIME_DIR. It says how much of the lane's session is that wait.
@@ -242,7 +270,7 @@ sed -i '/pam_systemd/d' "$MNT/etc/pam.d/common-session"
 	var rows []variant
 	for _, tr := range trees {
 		for _, k := range kernels {
-			for _, base := range []variant{asBuilt, fast, early, nopam, async} {
+			for _, base := range []variant{asBuilt, early, prio, coldplug, both, async} {
 				v := base
 				v.label += tr.name + k.name
 				v.kernel = k.path
@@ -414,6 +442,12 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 		if _, d, err := sshLogin(cid, signer, xssh.KeyExchangeMLKEM768X25519); err == nil {
 			r.again = d
 		}
+		// DIAGNOSTIC: SPIN_SESSION_CHECK=1 says what the first login's session is: its runtime
+		// directory, the class logind gave it, and whether the user's manager answers.
+		if os.Getenv("SPIN_SESSION_CHECK") != "" {
+			out, err := sshOutput(cid, signer, `d=$XDG_RUNTIME_DIR; test -d "$d" && echo "runtime $d"; loginctl show-session "$XDG_SESSION_ID" -p Class -p Type -p State | tr '\n' ' '; echo; systemctl --user is-system-running 2>&1 | head -1`)
+			t.Logf("%s: session: %v\n%s", v.label, err, out)
+		}
 		// Whether sshd turns away a client with no ML-KEM, as the image's drop-in has it do. A
 		// release from before it lets one in, so this is counted rather than failed.
 		_, _, err = sshLogin(cid, signer, xssh.KeyExchangeCurve25519)
@@ -518,3 +552,35 @@ func (vsockAddr) String() string  { return "vsock" }
 
 func (vsockConn) LocalAddr() net.Addr  { return vsockAddr{} }
 func (vsockConn) RemoteAddr() net.Addr { return vsockAddr{} }
+
+// sshOutput runs cmd as spin over SSH on cid's port 22 and returns what it printed.
+func sshOutput(cid uint32, signer xssh.Signer, cmd string) (string, error) {
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return "", err
+	}
+	if err := unix.Connect(fd, &unix.SockaddrVM{CID: cid, Port: 22}); err != nil {
+		_ = unix.Close(fd)
+		return "", err
+	}
+	conn := vsockConn{os.NewFile(uintptr(fd), "vsock")}
+	defer conn.Close()
+	c, chans, reqs, err := xssh.NewClientConn(conn, "vsock", &xssh.ClientConfig{
+		User:            "spin",
+		Auth:            []xssh.AuthMethod{xssh.PublicKeys(signer)},
+		HostKeyCallback: xssh.InsecureIgnoreHostKey(),
+		Config:          xssh.Config{KeyExchanges: []string{xssh.KeyExchangeMLKEM768X25519}},
+	})
+	if err != nil {
+		return "", err
+	}
+	client := xssh.NewClient(c, chans, reqs)
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer sess.Close()
+	b, err := sess.CombinedOutput(cmd)
+	return string(b), err
+}
