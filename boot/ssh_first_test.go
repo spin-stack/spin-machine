@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	xssh "golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 
 	"github.com/spin-stack/spin-machine/boot"
@@ -94,45 +96,47 @@ install -m 600 -o "${ids%:*}" -g "${ids#*:}" ` + key + `.pub "$MNT/home/spin/.ss
 test -e "$MNT/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service"
 install -d "$MNT/var/lib/systemd/linger" && touch "$MNT/var/lib/systemd/linger/spin"
 `
-	// EXPERIMENT: the host keys generated from the boot's first dispatch, beside udev and
-	// journald, rather than by the first connection's sshd@ - which waits for them before it
-	// sends its banner, the login's largest phase (SPIN_SSH_TRACE=1).
-	nodeps := "[Unit]\nDefaultDependencies=no\nConflicts=shutdown.target\nBefore=shutdown.target\n"
-	keysEarly := row("keys early", asThisBranch)
-	keysEarly.files["/etc/systemd/system/spin-machine-sshd-keygen.service.d/early.conf"] = nodeps
-	keysEarly.links["/etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service"] = "/usr/lib/systemd/system/spin-machine-sshd-keygen.service"
-	// Measured against keys early, 15 boots of each on a laptop (2026-11-13): the vsock socket
-	// and sshd@ without default dependencies as well accepted no sooner per login, dropped 7 of
-	// 22 first connections, and waited 58 ms for logind in the session.
+	// Lab run 43463472762 (2026-11-13), 20 boots of each, p50 ms, accept to first login: as
+	// built 177; the host keys generated from the boot's first dispatch rather than by the
+	// first connection's sshd@ 155 (the banner 82 -> 57); that and the login's files read into
+	// the page cache early 149, but sshd accepting 18 ms later. On a laptop the vsock socket and
+	// sshd@ without default dependencies accepted no sooner per login and dropped 7 of 22 first
+	// connections. In every login there, 69 ms was the key exchange: the runner's OpenSSH 9.6
+	// takes sntrup761x25519, whose key generation alone was ~39 ms of the client's.
 	//
-	// EXPERIMENT: keys early, and the files the first login reads - sshd's three binaries,
-	// their libraries, PAM's modules - read into the page cache from the boot's first dispatch,
-	// beside udev and journald, rather than by the first connection.
-	prefetch := row("keys+prefetch", asThisBranch)
-	for k, v := range keysEarly.files {
-		prefetch.files[k] = v
+	// The rows below are the client's axis: which key exchange the login negotiates, with the
+	// image as built. The image's sshd offers mlkem768x25519-sha256 first; the runner's ssh has
+	// no ML-KEM, so the rows that negotiate it are x/crypto/ssh's client - what a Go consumer
+	// dials with - over the same vsock port.
+	nosntrup := row("openssh, no sntrup", asThisBranch)
+	// EXPERIMENT: sshd without sntrup761, so a client without ML-KEM falls to curve25519.
+	nosntrup.files["/etc/ssh/sshd_config.d/kex.conf"] = "KexAlgorithms -sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com\n"
+	type sshRow struct {
+		v      variant
+		client string // "openssh", or the one key exchange x/crypto/ssh's client offers
 	}
-	for k, v := range keysEarly.links {
-		prefetch.links[k] = v
+	rows := []sshRow{
+		{row("openssh", asThisBranch), "openssh"},
+		{row("go, mlkem768x25519", asThisBranch), xssh.KeyExchangeMLKEM768X25519},
+		{row("go, curve25519", asThisBranch), xssh.KeyExchangeCurve25519},
+		{nosntrup, "openssh"},
 	}
-	prefetch.files["/usr/local/sbin/spin-prefetch"] = `#!/bin/sh
-b="/usr/sbin/sshd /usr/lib/openssh/sshd-session /usr/lib/openssh/sshd-auth /bin/bash /bin/true"
-cat $b $(ldd $b | awk '/=>/ {print $3}' | sort -u) /usr/lib/x86_64-linux-gnu/security/pam_*.so /etc/ssh/sshd_config /etc/pam.d/* >/dev/null
-`
-	prefetch.files["/etc/systemd/system/spin-prefetch.service"] = nodeps + "[Service]\nType=oneshot\nExecStart=/bin/sh /usr/local/sbin/spin-prefetch\n"
-	prefetch.links["/etc/systemd/system/sysinit.target.wants/spin-prefetch.service"] = "/etc/systemd/system/spin-prefetch.service"
-	rows := []variant{
-		row("as this branch", asThisBranch),
-		keysEarly,
-		prefetch,
+	pem, err := os.ReadFile(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := xssh.ParsePrivateKey(pem)
+	if err != nil {
+		t.Fatalf("reading %s: %v", key, err)
 	}
 
 	type samples struct{ listen, login, again, prompt, banner, session []time.Duration }
 	got := map[string]*samples{}
 	failed := map[string]int{}
 	for range reps {
-		for _, v := range rows {
-			r := firstSSH(t, out, v, proxy, key)
+		for _, sr := range rows {
+			v := sr.v
+			r := firstSSH(t, out, v, proxy, key, signer, sr.client)
 			if got[v.label] == nil {
 				got[v.label] = &samples{}
 			}
@@ -156,14 +160,15 @@ cat $b $(ldd $b | awk '/=>/ {print $3}' | sort -u) /usr/lib/x86_64-linux-gnu/sec
 		return fmt.Sprintf("%.0f", float64(d)/float64(time.Millisecond))
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "\nms from the moment before QEMU is exec'd, p50/p95 over %d boots of each, interleaved, %s vCPUs\n\n", reps, rows[0].cpus)
-	fmt.Fprintf(&b, "  %-16s %15s %15s %15s %15s %9s %15s %15s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "BANNER", "AUTH TO EXIT")
-	for _, v := range rows {
+	fmt.Fprintf(&b, "\nms from the moment before QEMU is exec'd, p50/p95 over %d boots of each, interleaved, %s vCPUs\n\n", reps, rows[0].v.cpus)
+	fmt.Fprintf(&b, "  %-20s %15s %15s %15s %15s %9s %15s %15s\n", "", "SSHD ACCEPTS", "FIRST LOGIN", "A SECOND TOOK", "CONSOLE PROMPT", "NO LOGIN", "HANDSHAKE", "AUTH TO EXIT")
+	for _, sr := range rows {
+		v := sr.v
 		g := got[v.label]
 		if g == nil {
 			g = &samples{}
 		}
-		fmt.Fprintf(&b, "  %-16s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %7s/%-7s %7s/%-7s\n", v.label,
+		fmt.Fprintf(&b, "  %-20s %7s/%-7s %7s/%-7s %7s/%-7s %7s/%-7s %9d %7s/%-7s %7s/%-7s\n", v.label,
 			ms(g.listen, .5), ms(g.listen, .95), ms(g.login, .5), ms(g.login, .95), ms(g.again, .5), ms(g.again, .95),
 			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], ms(g.banner, .5), ms(g.banner, .95), ms(g.session, .5), ms(g.session, .95))
 	}
@@ -173,13 +178,14 @@ cat $b $(ldd $b | awk '/=>/ {print $3}' | sort -u) /usr/lib/x86_64-linux-gnu/sec
 type firstSSHRun struct {
 	listen, login, prompt time.Duration
 	again                 time.Duration // a second login, right after the first: what any login costs
-	// With SPIN_SSH_TRACE: in the first login, from the client's start to the server's banner, and
-	// from authenticated to the command's exit.
+	// In the first login, from the client's start to authenticated (the banner, the key
+	// exchange, the user's key) and from authenticated to the command's exit. OpenSSH's are
+	// read from its -vvv, so only with SPIN_SSH_TRACE.
 	banner, session time.Duration
 	why             string
 }
 
-func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRun {
+func firstSSH(t *testing.T, out string, v variant, proxy, key string, signer xssh.Signer, client string) firstSSHRun {
 	t.Helper()
 	overlay := filepath.Join(t.TempDir(), "overlay.qcow2")
 	mustRun(t, filepath.Join(out, "bin", "qemu-img"), "create", "-f", "qcow2",
@@ -238,7 +244,23 @@ func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRu
 	// DIAGNOSTIC: SPIN_SSH_TRACE=1 logs each attempt of the first login with the client's -vvv,
 	// every line stamped on the host in ms from the attempt's start.
 	trace := os.Getenv("SPIN_SSH_TRACE") != ""
-	for attempt := 1; time.Now().Before(deadline); attempt++ {
+	if client != "openssh" {
+		for time.Now().Before(deadline) {
+			hs, all, err := goLogin(cid, signer, client)
+			if err == nil {
+				r.login, r.banner, r.session = time.Since(t0), hs, all-hs
+				break
+			}
+			r.why = fmt.Sprintf("x/crypto/ssh, %s: %v", client, err)
+			time.Sleep(10 * time.Millisecond)
+		}
+		if r.login != 0 {
+			if _, all, err := goLogin(cid, signer, client); err == nil {
+				r.again = all
+			}
+		}
+	}
+	for attempt := 1; client == "openssh" && time.Now().Before(deadline); attempt++ {
 		args := ssh
 		if trace {
 			args = slices.Clone(ssh)
@@ -275,8 +297,8 @@ func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRu
 					}
 					return 0
 				}
-				r.banner = at("Remote protocol version")
-				r.session = at("Exit status") - at("Authenticated to")
+				r.banner = at("Authenticated to")
+				r.session = at("Exit status") - r.banner
 			}
 		} else {
 			b, err = c.CombinedOutput()
@@ -288,7 +310,7 @@ func firstSSH(t *testing.T, out string, v variant, proxy, key string) firstSSHRu
 		r.why = fmt.Sprintf("ssh: %v: %s", err, strings.TrimSpace(string(b)))
 		time.Sleep(10 * time.Millisecond)
 	}
-	if r.login != 0 {
+	if r.login != 0 && client == "openssh" {
 		t1 := time.Now()
 		if exec.Command("ssh", ssh...).Run() == nil {
 			r.again = time.Since(t1)
@@ -322,3 +344,54 @@ func vsockAccepts(cid, port uint32) bool {
 	_ = unix.SetsockoptTimeval(fd, unix.AF_VSOCK, unix.SO_VM_SOCKETS_CONNECT_TIMEOUT, &tv)
 	return unix.Connect(fd, &unix.SockaddrVM{CID: cid, Port: port}) == nil
 }
+
+// goLogin is `true` run over SSH as spin on cid's port 22 by x/crypto/ssh's client offering
+// only the key exchange kex: what a Go consumer's login costs, from the connect to
+// authenticated (handshake) and to the command's exit (all).
+func goLogin(cid uint32, signer xssh.Signer, kex string) (handshake, all time.Duration, err error) {
+	t0 := time.Now()
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return 0, 0, fmt.Errorf("opening a vsock socket: %w", err)
+	}
+	if err := unix.Connect(fd, &unix.SockaddrVM{CID: cid, Port: 22}); err != nil {
+		_ = unix.Close(fd)
+		return 0, 0, fmt.Errorf("connecting to %d:22: %w", cid, err)
+	}
+	conn := vsockConn{os.NewFile(uintptr(fd), "vsock")}
+	defer conn.Close()
+	cfg := &xssh.ClientConfig{
+		User:            "spin",
+		Auth:            []xssh.AuthMethod{xssh.PublicKeys(signer)},
+		HostKeyCallback: xssh.InsecureIgnoreHostKey(),
+		Config:          xssh.Config{KeyExchanges: []string{kex}},
+	}
+	c, chans, reqs, err := xssh.NewClientConn(conn, "vsock", cfg)
+	if err != nil {
+		return 0, 0, fmt.Errorf("the handshake: %w", err)
+	}
+	handshake = time.Since(t0)
+	client := xssh.NewClient(c, chans, reqs)
+	defer client.Close()
+	s, err := client.NewSession()
+	if err != nil {
+		return 0, 0, fmt.Errorf("opening a session: %w", err)
+	}
+	defer s.Close()
+	if err := s.Run("true"); err != nil {
+		return 0, 0, fmt.Errorf("running true: %w", err)
+	}
+	return handshake, time.Since(t0), nil
+}
+
+// vsockConn is a connected vsock socket as the net.Conn x/crypto/ssh takes: net.FileConn
+// knows no AF_VSOCK address, and nothing here asks for one.
+type vsockConn struct{ *os.File }
+
+type vsockAddr struct{}
+
+func (vsockAddr) Network() string { return "vsock" }
+func (vsockAddr) String() string  { return "vsock" }
+
+func (vsockConn) LocalAddr() net.Addr  { return vsockAddr{} }
+func (vsockConn) RemoteAddr() net.Addr { return vsockAddr{} }
