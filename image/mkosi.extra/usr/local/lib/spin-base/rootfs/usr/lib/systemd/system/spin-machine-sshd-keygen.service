@@ -26,7 +26,8 @@ Description=Generate SSH host keys for this VM
 #   after spin-machine-sshd-keygen.service/start after basic.target/start
 #
 # Socket activation still works: the socket starts ssh.service, and ssh.service waits for
-# this.
+# this. The per-connection sshd@.service that systemd-ssh-generator's vsock and AF_UNIX
+# sockets start waits for it through a drop-in of its own (sshd@.service.d/keygen.conf).
 Before=ssh.service sshd.service
 ConditionPathExists=/usr/bin/ssh-keygen
 

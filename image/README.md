@@ -73,7 +73,9 @@ from outside:
   not run before `sshd` is asked to validate a configuration with no keys, and
   `ssh.service` fails five times and gives up. `spin-machine-sshd-keygen.service` generates
   them instead: every boot here *is* a first boot, since the root filesystem is a fresh
-  overlay, so the keys live exactly as long as the VM does.
+  overlay, so the keys live exactly as long as the VM does. Every sshd waits for it,
+  including the per-connection `sshd@.service` that `systemd-ssh-generator` starts for vsock
+  and `ssh .host`: without that, those connections found no host keys and were dropped.
 - **Two thirds of the boot was systemd asking the console questions.** The kernel execs
   `/sbin/init` at 59 ms and systemd's first log line arrived at 852, with nothing running in
   between. It was a terminfo query and a terminal reset, 334 ms of timeout each, waiting for
