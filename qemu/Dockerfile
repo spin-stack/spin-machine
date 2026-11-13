@@ -380,6 +380,28 @@ RUN for b in /opt/qemu/bin/qemu-system-x86_64 /opt/qemu/bin/qemu-img \
     done && \
     echo "OK: every binary is statically linked"
 
+# Hardened, asserted for the same reason. No flag above asks for any of this: static-pie, full
+# RELRO, a non-executable stack and stack canaries come from QEMU's meson defaults and Alpine's
+# gcc (15.2 on 2026-11-13), so a bump of either could drop one without a line here changing.
+# QEMU runs a guest's device emulation on the host, which is where these earn their place.
+#
+# PIE is the ELF type (DYN for a static-pie, EXEC without); RELRO is full only with BIND_NOW,
+# since a lazily bound GOT stays writable; the canaries are counted as reads of the TLS guard
+# (%fs:0x28) in the code, because the binaries are stripped and __stack_chk_fail is no longer
+# a symbol to look for. 7111 of them in qemu-system-x86_64 as built 2026-11-13.
+RUN for b in /opt/qemu/bin/qemu-system-x86_64 /opt/qemu/bin/qemu-img \
+             /opt/qemu-tcg/bin/qemu-system-x86_64; do \
+        readelf -hW "$b" | grep -q 'Type:.*DYN' || { echo "ERROR: $b is not position-independent"; exit 1; }; \
+        readelf -lW "$b" | grep -q GNU_RELRO || { echo "ERROR: $b has no RELRO segment"; exit 1; }; \
+        readelf -dW "$b" | grep -q 'FLAGS.*BIND_NOW' || { echo "ERROR: $b is lazily bound; its RELRO is partial"; exit 1; }; \
+        stack=$(readelf -lW "$b" | grep GNU_STACK) || { echo "ERROR: $b has no GNU_STACK segment, so its stack is executable"; exit 1; }; \
+        case "$stack" in *RWE*) echo "ERROR: $b has an executable stack"; exit 1 ;; esac; \
+        canaries=$(objdump -d --no-show-raw-insn "$b" | grep -c '%fs:0x28') || true; \
+        [ "${canaries:-0}" -gt 0 ] || { echo "ERROR: $b has no stack canaries"; exit 1; }; \
+        echo "$b: static-pie, full RELRO, NX stack, $canaries canary reads"; \
+    done && \
+    echo "OK: every binary is hardened"
+
 # qboot, the BIOS this machine boots with. QEMU's SeaBIOS is built for every guest a PC can run; this machine boots one Linux kernel
 # through PVH and nothing else, and qboot is a firmware for exactly that. Measured on the lab
 # runner, 20 boots interleaved (2026-09-29): 121.9 -> 114.8 ms p50 to a diagnostic init, and
