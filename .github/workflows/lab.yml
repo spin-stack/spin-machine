@@ -62,6 +62,14 @@ on:
         options:
           - beside
           - instead
+      host:
+        description: "Where it runs: bench (nested KVM, the default) or bench-metal (bare metal, the same CPU), spin-stack/ci's two bench fleets"
+        required: true
+        type: choice
+        default: bench
+        options:
+          - bench
+          - bench-metal
       vars:
         description: "KEY=VALUE; KEY=VALUE for the target, e.g. REPS=20; TOP=40"
         required: false
@@ -81,7 +89,8 @@ env:
 
 jobs:
   lab:
-    runs-on: runs-on/fleet=bench/env=production
+    # A number compares only with one taken on the same kind of host, so the host is named.
+    runs-on: runs-on/fleet=${{ inputs.host }}/env=production
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}
