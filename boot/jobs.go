@@ -93,7 +93,7 @@ func ParseJobs(s string) (JobLog, error) {
 			if err != nil {
 				return JobLog{}, err
 			}
-			j.Unit, j.Initial = f[3], true
+			j.Unit = f[3]
 			if f[5] == "running" {
 				j.Running = at
 			}
@@ -157,10 +157,10 @@ func (l JobLog) Pending(t time.Duration) (waiting, running []Job) {
 		if j.Initial {
 			from = l.Connected
 		}
-		if t < from || (j.Removed > 0 && t >= j.Removed) {
+		if t < from || (j.Removed > 0 && t >= j.Removed) { // mutate-exempt: durations here are whole microseconds, so 0 and 1ns split them alike
 			continue
 		}
-		if j.Running > 0 && t >= j.Running {
+		if j.Running > 0 && t >= j.Running { // mutate-exempt: durations here are whole microseconds, so 0 and 1ns split them alike
 			running = append(running, j)
 		} else {
 			waiting = append(waiting, j)

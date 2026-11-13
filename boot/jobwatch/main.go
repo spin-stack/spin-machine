@@ -36,6 +36,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// main is the binary a guest runs, and a guest is what holds it.
+//
+// mutate-lane: ./boot.TestBootJobs, which boots a guest with jobwatch in it and reads its record.
 func main() {
 	if len(os.Args) != 4 {
 		fmt.Fprintln(os.Stderr, "usage: jobwatch <console> <linger> <after-unit>")
@@ -59,12 +62,17 @@ func main() {
 }
 
 // now is CLOCK_MONOTONIC in microseconds, which is what systemd's *TimestampMonotonic are.
+//
+// mutate-lane: ./boot.TestBootJobs, whose Lag holds these stamps to systemd's own.
 func now() int64 {
 	var ts unix.Timespec
 	_ = unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts)
 	return ts.Nano() / 1000
 }
 
+// watch is the conversation with PID 1 over its private socket, which only a booted guest has.
+//
+// mutate-lane: ./boot.TestBootJobs, which parses what this recorded with boot.ParseJobs.
 func watch(linger time.Duration, after string) ([]string, error) {
 	var rec []string
 	add := func(format string, a ...any) { rec = append(rec, fmt.Sprintf("%d ", now())+fmt.Sprintf(format, a...)) }
@@ -169,7 +177,7 @@ func unescape(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
 		if s[i] == '_' && i+2 < len(s) {
-			if n, err := strconv.ParseUint(s[i+1:i+3], 16, 8); err == nil {
+			if n, err := strconv.ParseUint(s[i+1:i+3], 16, 8); err == nil { // mutate-exempt: two hex digits are at most 0xff, which every bit size from 8 up holds
 				b.WriteByte(byte(n))
 				i += 2
 				continue

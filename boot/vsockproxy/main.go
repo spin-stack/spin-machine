@@ -19,6 +19,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// main is ssh's ProxyCommand, and only ssh running against a guest calls it.
+//
+// mutate-lane: ./boot.TestFirstSSH, whose every login goes through it.
 func main() {
 	if len(os.Args) != 3 {
 		fmt.Fprintln(os.Stderr, "usage: vsockproxy <cid> <port>")
