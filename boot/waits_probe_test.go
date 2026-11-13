@@ -44,6 +44,8 @@ import (
 //	TOP=<n>            rows per table (default 15)
 //	GAP=<ms>           the shortest idle interval printed (default 1)
 //	RAW=<dir>          also write each boot's dump there, which is how testdata is made
+//	FLAGS=<flags>      spin-machine boot flags after the rest: --vsock-cid 3 gives the boot
+//	                   systemd-ssh-generator's sshd-vsock.socket, for TARGET=sshd-vsock.socket
 func TestBootWaits(t *testing.T) {
 	if os.Getenv("SPIN_BOOT_WAITS") == "" {
 		t.Skip("set SPIN_BOOT_WAITS=1: boots a VM and needs sudo to write into its overlay")
@@ -171,8 +173,9 @@ func bootWaits(t *testing.T, out string, v variant, target, end string) waitsBoo
 		"-F", "qcow2", "-b", filepath.Join(out, "image", "rootfs.qcow2"), overlay)
 	editOverlay(t, overlay, v)
 
-	cmd := machineCommand(t, out, v, "--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
-		"--console", "file:/dev/stdout", "--append", "init=/sbin/init")
+	// FLAGS, as the other probes take it: spin-machine boot flags after the rest.
+	cmd := machineCommand(t, out, v, append([]string{"--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
+		"--console", "file:/dev/stdout", "--append", "init=/sbin/init"}, strings.Fields(os.Getenv("FLAGS"))...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	r, w, err := os.Pipe()
 	if err != nil {
