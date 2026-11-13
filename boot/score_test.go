@@ -65,7 +65,9 @@ func TestScore(t *testing.T) {
 	if b := os.Getenv("SPIN_MACHINE_OUTPUT_B"); b != "" {
 		rows = append(rows, row{"this tree, B", tree, b})
 	}
-	type samples struct{ cold, save, up, running, restored []time.Duration }
+	type samples struct {
+		cold, coldAccept, save, up, running, restoredAccept, restored []time.Duration
+	}
 	got := map[string]*samples{}
 	for range reps {
 		for _, r := range rows {
@@ -75,8 +77,9 @@ func TestScore(t *testing.T) {
 				s = &samples{}
 				got[r.label] = s
 			}
-			s.cold, s.save = append(s.cold, res.cold), append(s.save, res.save)
-			s.up, s.running, s.restored = append(s.up, res.up), append(s.running, res.running), append(s.restored, res.restored)
+			s.cold, s.coldAccept, s.save = append(s.cold, res.cold), append(s.coldAccept, res.coldAccept), append(s.save, res.save)
+			s.up, s.running = append(s.up, res.up), append(s.running, res.running)
+			s.restoredAccept, s.restored = append(s.restoredAccept, res.restoredAccept), append(s.restored, res.restored)
 		}
 	}
 
@@ -87,18 +90,20 @@ func TestScore(t *testing.T) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\np50/p95 ms over %d of each, interleaved, %s vCPUs, %s MiB; each from the moment before QEMU is exec'd\n\n",
 		reps, v.cpus, v.memory)
-	fmt.Fprintf(&b, "  %-14s %13s   %13s   %13s %13s %13s\n", "", "COLD: LOGIN", "SAVE", "RESTORE: UP", "RUNNING", "LOGIN")
+	fmt.Fprintf(&b, "  %-14s %13s %13s   %13s   %13s %13s %13s %13s\n", "",
+		"COLD: ACCEPT", "LOGIN", "SAVE", "RESTORE: UP", "RUNNING", "ACCEPT", "LOGIN")
+	pair := func(ds []time.Duration) string { return fmt.Sprintf("%6s/%-6s", ms(ds, .5), ms(ds, .95)) }
 	for _, r := range rows {
 		s := got[r.label]
-		fmt.Fprintf(&b, "  %-14s %6s/%-6s   %6s/%-6s   %6s/%-6s %6s/%-6s %6s/%-6s\n", r.label,
-			ms(s.cold, .5), ms(s.cold, .95), ms(s.save, .5), ms(s.save, .95), ms(s.up, .5), ms(s.up, .95),
-			ms(s.running, .5), ms(s.running, .95), ms(s.restored, .5), ms(s.restored, .95))
+		fmt.Fprintf(&b, "  %-14s %s %s   %s   %s %s %s %s\n", r.label,
+			pair(s.coldAccept), pair(s.cold), pair(s.save), pair(s.up), pair(s.running), pair(s.restoredAccept), pair(s.restored))
 	}
 	t.Log(b.String())
 }
 
 type scoreRun struct {
 	cold, save, up, running, restored time.Duration
+	coldAccept, restoredAccept       time.Duration // when sshd first accepted on vsock
 }
 
 // scoreOnce boots v with cli over release, logs in, saves it, and restores it.
@@ -138,6 +143,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	// connect waits out vsock's two-second default against a guest not yet listening, which made
 	// a cold login seconds; and probing again between logins starts a per-connection sshd each
 	// time, which can trip the socket's start limit (both 2026-11-13).
+	var accepted time.Time
 	login := func(deadline time.Time) bool {
 		for !vsockAccepts(cid, 22) {
 			if time.Now().After(deadline) {
@@ -145,6 +151,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 			}
 			time.Sleep(2 * time.Millisecond)
 		}
+		accepted = time.Now()
 		for time.Now().Before(deadline) {
 			if exec.Command("ssh", sshArgs(proxy, key, cid)...).Run() == nil {
 				return true
@@ -160,7 +167,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	if !login(t0.Add(60 * time.Second)) {
 		t.Fatal("the cold boot was never logged into")
 	}
-	r.cold = time.Since(t0)
+	r.cold, r.coldAccept = time.Since(t0), accepted.Sub(t0)
 
 	t0 = time.Now()
 	mustRun(t, cli, "save", "--qmp", filepath.Join(dir, "a.qmp"), "--to", state)
@@ -188,7 +195,7 @@ func scoreOnce(t *testing.T, cli, release string, v variant, proxy, key string) 
 	if !login(t0.Add(60 * time.Second)) {
 		t.Fatal("the restored guest was never logged into")
 	}
-	r.restored = time.Since(t0)
+	r.restored, r.restoredAccept = time.Since(t0), accepted.Sub(t0)
 	return r
 }
 
