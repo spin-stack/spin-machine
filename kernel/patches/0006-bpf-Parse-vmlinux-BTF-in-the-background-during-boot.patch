@@ -1,0 +1,61 @@
+From: Manuel de Brito Fontes <aledbf@gmail.com>
+Date: Fri, 13 Nov 2026 17:30:00 -0300
+Subject: [PATCH 6/6] bpf: Parse vmlinux BTF in the background during boot
+
+vmlinux BTF is parsed lazily, by the first caller of
+bpf_get_btf_vmlinux(). During boot that is an initcall on the boot CPU:
+inet_init, through xfrm_init and register_xfrm_state_bpf(), and the
+parse is all of its time - 11.2 of inet_init's 11.8 ms under
+function_graph, nested under KVM on an AWS c8i.4xlarge.
+
+Start the parse from a core_initcall with async_schedule(), once the
+secondary CPUs are up, so it runs beside the subsys and fs initcalls
+instead of inside one. Its first caller still takes btf_vmlinux_lock
+and waits for whatever of the parse is left.
+
+Local patch for this machine. Not upstream.
+
+Assisted-by: LLM
+---
+ kernel/bpf/verifier.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+--- a/kernel/bpf/verifier.c
++++ b/kernel/bpf/verifier.c
+@@ -33,6 +33,7 @@
+ #include <net/xdp.h>
+ #include <linux/trace_events.h>
+ #include <linux/kallsyms.h>
++#include <linux/async.h>
+ 
+ #include "diagnostics.h"
+ #include "disasm.h"
+@@ -20712,6 +20713,26 @@
+ }
+ 
+ /*
++ * Parse vmlinux BTF in the background as soon as the secondary CPUs are up,
++ * rather than on the boot CPU inside whichever initcall first asks for it
++ * (inet_init, through register_xfrm_state_bpf()). The first caller of
++ * bpf_get_btf_vmlinux() still takes btf_vmlinux_lock and so waits for the
++ * parse if it is not done yet; nothing changes for it but when.
++ */
++static void __init btf_vmlinux_parse_async(void *data, async_cookie_t cookie)
++{
++	bpf_get_btf_vmlinux();
++}
++
++static int __init btf_vmlinux_parse_early(void)
++{
++	if (IS_ENABLED(CONFIG_DEBUG_INFO_BTF))
++		async_schedule(btf_vmlinux_parse_async, NULL);
++	return 0;
++}
++core_initcall(btf_vmlinux_parse_early);
++
++/*
+  * The add_fd_from_fd_array() is executed only if fd_array_cnt is non-zero. In
+  * this case expect that every file descriptor in the array is either a map or
+  * a BTF. Everything else is considered to be trash.
+-- 
+2.51.0
