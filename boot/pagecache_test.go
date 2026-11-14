@@ -4,12 +4,14 @@ package boot_test
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -376,6 +378,13 @@ func cacheBoot(t *testing.T, out string, v cacheVariant, fileMB int, probe cache
 			t.Fatal(err)
 		}
 		s.overlayAlloc = float64(ost.Blocks*512) / (1 << 20)
+		if i == 0 {
+			own, err := ownMemory(pid, 2048)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run.notes = append(run.notes, own)
+		}
 		seen++
 	}
 	if seen != len(run.steps) {
@@ -500,6 +509,80 @@ func guestRAM(pid, sizeMB int) (resident, huge float64, err error) {
 		return 0, 0, fmt.Errorf("/proc/%d/smaps has no mapping of %d MB", pid, sizeMB)
 	}
 	return resident, huge, nil
+}
+
+// ownMemory is what an idle machine costs its host beside the guest's RAM, as one line: QEMU's
+// resident memory outside the RAM mapping, by what is mapped, largest first, and the two things
+// the kernel holds for the machine that no mapping shows - QEMU's own page tables (VmPTE) and
+// KVM's second-level ones (SecPageTables, which is the whole host's: the lab runs one machine at
+// a time). It is the number a comparison with another VMM's overhead needs (#259), and what it is
+// made of is where to look before shrinking it.
+func ownMemory(pid, sizeMB int) (string, error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/smaps", pid))
+	if err != nil {
+		return "", err
+	}
+	const anonymous = "anonymous"
+	byName := map[string]float64{}
+	var name string
+	var guest, skippedRAM bool
+	for l := range strings.Lines(string(raw)) {
+		f := strings.Fields(l)
+		switch {
+		case len(f) == 0:
+		case strings.Contains(f[0], "-") && !strings.HasSuffix(f[0], ":"):
+			name, guest = anonymous, false
+			if len(f) > 5 {
+				name = filepath.Base(strings.Join(f[5:], " "))
+			}
+		case f[0] == "Size:" && len(f) > 1:
+			// The same mapping guestRAM takes: the first anonymous one of the machine's size.
+			guest = !skippedRAM && name == anonymous && num(f[1]) == float64(sizeMB)*1024
+			skippedRAM = skippedRAM || guest
+		case f[0] == "Rss:" && len(f) > 1 && !guest:
+			byName[name] += kb(f[1])
+		}
+	}
+	if !skippedRAM {
+		return "", fmt.Errorf("/proc/%d/smaps has no mapping of %d MB", pid, sizeMB)
+	}
+	names := make([]string, 0, len(byName))
+	total := 0.0
+	for n, mb := range byName {
+		names = append(names, n)
+		total += mb
+	}
+	slices.SortFunc(names, func(a, b string) int { return cmp.Compare(byName[b], byName[a]) })
+	var b strings.Builder
+	fmt.Fprintf(&b, "QEMU's own memory, idle: %.1f MB resident outside the guest's RAM", total)
+	for _, n := range names[:min(len(names), 8)] {
+		fmt.Fprintf(&b, "; %s %.1f", n, byName[n])
+	}
+	pte, err := statusKB(fmt.Sprintf("/proc/%d/status", pid), "VmPTE:")
+	if err != nil {
+		return "", err
+	}
+	sec, err := statusKB("/proc/meminfo", "SecPageTables:")
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(&b, ". In the kernel: %.1f MB of QEMU's page tables, %.1f MB of KVM's on the whole host", pte/1024, sec/1024)
+	return b.String(), nil
+}
+
+// statusKB is the value, in kB, of the line of p that starts with key: /proc/<pid>/status and
+// /proc/meminfo are both "Key:   value kB".
+func statusKB(p, key string) (float64, error) {
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return 0, err
+	}
+	for l := range strings.Lines(string(raw)) {
+		if v, ok := strings.CutPrefix(l, key); ok && len(strings.Fields(v)) > 0 {
+			return num(strings.Fields(v)[0]), nil
+		}
+	}
+	return 0, fmt.Errorf("%s has no %s", p, key)
 }
 
 // cpuMS is the CPU pid has used, user and system, in ms: utime and stime of /proc/<pid>/stat,
