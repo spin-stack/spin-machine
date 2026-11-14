@@ -6,12 +6,15 @@ import (
 	"bytes"
 	"cmp"
 	"crypto/ed25519"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +25,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/spin-stack/spin-machine/boot"
+	"github.com/spin-stack/spin-machine/machine"
 )
 
 // When a workspace can first be logged into, from the host, over SSH - the thing a workspace
@@ -124,6 +128,32 @@ grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 `
 	rows := []variant{row("as released", ""), asBuilt}
+	if os.Getenv("SPIN_SSH_ROWS") == "1207" {
+		rows = pausedRows(asBuilt)
+	}
+	if os.Getenv("SPIN_SSH_ROWS") == "shape" {
+		// What the machine a runner starts pays over the one this probe boots: its ceilings
+		// (internal/runner/vmm's defaultMaxCPUs and defaultMaxMemory) and its one boot vCPU.
+		shape := func(label, cpus string, flags ...string) variant {
+			v := asBuilt
+			v.label, v.cpus, v.flags = label, cpus, append([]string{"--hotplug-disks", "4"}, flags...)
+			return v
+		}
+		rows = []variant{
+			shape("2 cpu", "2"),
+			shape("2 cpu, max 16", "2", "--max-cpus", "16"),
+			shape("2 cpu, max 8G", "2", "--max-memory", "8192"),
+			shape("2 cpu, both", "2", "--max-cpus", "16", "--max-memory", "8192"),
+			shape("1 cpu, both", "1", "--max-cpus", "16", "--max-memory", "8192"),
+			shape("4 cpu, both", "4", "--max-cpus", "16", "--max-memory", "8192"),
+		}
+		plugged := func(label string, n int) variant {
+			v := shape(label, "1", "--max-cpus", "16", "--max-memory", "8192")
+			v.paused, v.plug = true, n
+			return v
+		}
+		rows = append(rows, plugged("1 cpu +1 paused", 1), plugged("1 cpu +3 paused", 3))
+	}
 
 	type samples struct{ listen, login, accepted, again, prompt []time.Duration }
 	got := map[string]*samples{}
@@ -168,6 +198,28 @@ grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 			ms(g.prompt, .5), ms(g.prompt, .95), failed[v.label], classical[v.label])
 	}
 	t.Log(b.String())
+}
+
+// pausedRows asks spin-stack/spin#1207's questions of one image, base's: what the hotplug
+// controller costs a boot, what the root on it costs or saves against a virtio-blk, and what a
+// machine kept paused before its first instruction saves - with its disk on the command line,
+// which is the most it could, and with the disk added to it before the `cont`, which is what a
+// runner would do.
+func pausedRows(base variant) []variant {
+	with := func(label string, paused, attach bool, flags ...string) variant {
+		v := base
+		v.label, v.paused, v.attach, v.flags = label, paused, attach, flags
+		return v
+	}
+	scsi := []string{"--hotplug-disks", "4", "--disk-scsi", "--root", "/dev/sda"}
+	return []variant{
+		with("blk", false, false),
+		with("blk+ctrl", false, false, "--hotplug-disks", "4"),
+		with("scsi", false, false, scsi...),
+		with("blk+ctrl paused", true, false, "--hotplug-disks", "4"),
+		with("scsi paused", true, false, scsi...),
+		with("scsi attached", true, true, scsi...),
+	}
 }
 
 // sshRow makes a key to log in with and returns it with a function that makes a row of the
@@ -224,10 +276,26 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 	// Context ids are the host's: two machines with one fail to start, so this one's is drawn
 	// from a range nothing else here uses.
 	cid := uint32(100000 + rand.IntN(1<<20))
+	disk, cmdline := overlay, "init=/sbin/init"
+	if v.attach {
+		// No disk is no root= either (spin-machine's --root follows --disk).
+		disk, cmdline = "-", cmdline+" root=/dev/sda rw"
+	}
 	args := append([]string{"boot", "--release", out,
-		"--disk", overlay, "--memory", v.memory, "--cpus", v.cpus,
+		"--disk", disk, "--memory", v.memory, "--cpus", v.cpus,
 		"--vsock-cid", fmt.Sprint(cid),
-		"--console", "file:/dev/stdout", "--append", "init=/sbin/init"}, v.flags...)
+		"--console", "file:/dev/stdout", "--append", cmdline}, v.flags...)
+	var monitor string
+	if v.paused {
+		// Its own short directory: a socket's path has 108 bytes.
+		dir, err := os.MkdirTemp("", "q")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(dir)
+		monitor = filepath.Join(dir, "q")
+		args = append(args, "--paused", "--qmp", monitor)
+	}
 	cmd := exec.Command(filepath.Join(out, "bin", "spin-machine"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
@@ -246,6 +314,48 @@ func firstSSH(t *testing.T, out string, v variant, signer xssh.Signer) firstSSHR
 		}
 		_ = cmd.Wait()
 	}()
+	if v.paused {
+		q := dial(t, monitor, func() string { return "" })
+		// A command answered is the board built; the greeting comes before it.
+		q.do(t, "query-status", nil)
+		if v.plug == 0 {
+			t0 = time.Now()
+		}
+		var slots []struct {
+			Type  string         `json:"type"`
+			Props map[string]any `json:"props"`
+			Path  string         `json:"qom-path"`
+		}
+		if err := json.Unmarshal(q.do(t, "query-hotpluggable-cpus", nil), &slots); err != nil {
+			t.Fatal(err)
+		}
+		// QEMU lists the slots highest first, and a machine's cores are contiguous from 0.
+		slices.Reverse(slots)
+		for i, plugged := 0, 0; i < len(slots) && plugged < v.plug; i++ {
+			if slots[i].Path != "" {
+				continue
+			}
+			add := map[string]any{"driver": slots[i].Type, "id": fmt.Sprintf("cpu%d", i)}
+			maps.Copy(add, slots[i].Props)
+			q.do(t, "device_add", add)
+			plugged++
+		}
+		if v.attach {
+			// The chain node by node, as a runner names it and as -drive's aio reaches the
+			// base: a backing file opened from the header's name reads through the thread pool.
+			file := func(name string, ro bool) map[string]any {
+				return map[string]any{"driver": "file", "filename": name, "aio": "io_uring", "drop-cache": false, "read-only": ro}
+			}
+			q.do(t, "blockdev-add", map[string]any{
+				"node-name": "blk0", "driver": "qcow2", "discard": "unmap", "file": file(overlay, false),
+				"backing": map[string]any{"driver": "qcow2", "read-only": true,
+					"file": file(filepath.Join(out, "image", "rootfs.qcow2"), true), "backing": nil},
+			})
+			q.do(t, "device_add", machine.Spec{HotplugDisks: 4}.BootDisk(0, "root", "blk0", ""))
+		}
+		q.do(t, "cont", nil)
+		q.close()
+	}
 
 	var mu sync.Mutex
 	var r firstSSHRun

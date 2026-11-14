@@ -182,6 +182,8 @@ type machineFlags struct {
 	readonly          bool
 	serial            string
 	directOverBacking bool
+	scsi              bool
+	paused            bool
 
 	memoryMB     int
 	maxMemMB     int
@@ -216,6 +218,9 @@ func (o *machineFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.serial, "disk-serial", "", "serial the guest can resolve the disk by")
 	fs.BoolVar(&o.directOverBacking, "disk-direct-over-backing", false,
 		"open the disk O_DIRECT and its backing chain through the host page cache (the disk must have a backing file)")
+
+	fs.BoolVar(&o.scsi, "disk-scsi", false, "the disk on the hotplug controller instead of a virtio-blk; its root is /dev/sda")
+	fs.BoolVar(&o.paused, "paused", false, "start with the machine built and no guest instruction run (-S); cont over --qmp")
 
 	fs.IntVar(&o.memoryMB, "memory", 2048, "guest memory in MiB")
 	fs.IntVar(&o.maxMemMB, "max-memory", 0, "ceiling this VM may grow to and shrink back from, in MiB, through virtio-mem (0: fixed memory)")
@@ -283,6 +288,8 @@ func (o *machineFlags) spec() (machine.Spec, error) {
 		MaxMB:  o.maxMemMB,
 	}
 	s.HotplugDisks = o.hotplugDisks
+	s.SCSIDisks = o.scsi
+	s.Paused = o.paused
 	s.VsockCID = o.vsockCID
 	if o.qmp != "" {
 		s.Monitors = []machine.Monitor{{Socket: o.qmp}}

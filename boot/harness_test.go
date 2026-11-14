@@ -36,6 +36,13 @@ type variant struct {
 	// of a machine with another fingerprint, which spin-machine deliberately has no flag for.
 	// Only bootWaits honours it; see machineCommand.
 	without []string
+	// paused starts the machine with -S and times it from `cont`: what a machine kept waiting
+	// would cost a workspace. attach also leaves the disk off the command line and adds it,
+	// inside the timing, before the `cont`. Only firstSSH honours them.
+	paused, attach bool
+	// plug is how many vCPUs firstSSH adds to the paused machine before its `cont`, timed from
+	// the exec: a machine of the canonical shape whose kernel boots with its workspace's cores.
+	plug int
 }
 
 // A drop-in on the instance beats one on the template, which is where the image's own TERM

@@ -587,6 +587,21 @@ type Spec struct {
 	// was stopped at, with the memory, the devices and the clock it had. Which is
 	// why the CPU model matters more here than anywhere else — see Shape.
 	Incoming string
+
+	// SCSIDisks puts Disks on the hotplug controller, as scsi-hd at the targets after the
+	// hotplug positions, instead of a virtio-blk on the root complex each: the one bus of
+	// this machine a disk can be added to after QEMU has built it (spin-stack/spin#1207).
+	SCSIDisks bool
+
+	// Paused is -S: the machine built and loaded, and no guest instruction run until `cont`.
+	Paused bool
+}
+
+// BootDisk is the device_add arguments for boot disk i of a machine with SCSIDisks, over the
+// block node named node: what Args writes for it, for a caller that adds it to a paused
+// machine instead.
+func (s Spec) BootDisk(i int, id, node, serial string) map[string]any {
+	return HotplugDisk(s.HotplugDisks+i, id, node, serial)
 }
 
 // Shape is the five arguments that decide what machine a guest sees: the chipset
@@ -977,6 +992,9 @@ func (s Spec) Args() ([]string, error) {
 	args = s.appendMonitors(args)
 	args = s.appendFDSets(args)
 	args = s.appendIncoming(args)
+	if s.Paused {
+		args = append(args, "-S")
+	}
 	return args, nil
 }
 
@@ -1081,7 +1099,7 @@ func (s Spec) appendDevices(args []string) []string {
 
 	// The controller disks this machine is given while it runs are added to. See
 	// Spec.HotplugDisks: the root complex takes no device_add, and a SCSI bus does.
-	if s.HotplugDisks > 0 {
+	if s.HotplugDisks > 0 || s.SCSIDisks {
 		args = append(args, "-device", fmt.Sprintf("virtio-scsi-pci,id=%s,%s,addr=0x%x",
 			hotplugController, virtioModern, slotHotplug))
 	}
@@ -1102,6 +1120,9 @@ func (s Spec) appendDisks(args []string) ([]string, error) {
 		}
 		dev := fmt.Sprintf("virtio-blk-pci,drive=blk%d,%s,addr=0x%x",
 			i, virtioModern, slotDiskBase+i)
+		if s.SCSIDisks {
+			dev = fmt.Sprintf("scsi-hd,drive=blk%d,bus=%s,scsi-id=%d,lun=0", i, hotplugBus, s.HotplugDisks+i)
+		}
 		if d.Serial != "" {
 			dev += ",serial=" + qemuOpt(d.Serial)
 		}
