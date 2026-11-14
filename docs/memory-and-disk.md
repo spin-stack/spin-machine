@@ -66,8 +66,12 @@ spin's guest supervisor runs `memory.reclaim` (spin #214, `spin-reclaim.service`
 
 ### What stays after the guest frees it
 
-After the guest drops its cache, QEMU stays ~200 MB above where it booted. QEMU's own memory
-is a constant ~50 MB (RSS minus the guest's RAM mapping); the rest is guest RAM the guest freed
+After the guest drops its cache, QEMU stays ~200 MB above where it booted. What QEMU has
+resident outside the guest's RAM mapping is a constant ~49 MB, and most of it is not QEMU's:
+34.7 MB is the kernel image it maps, a file whose pages every machine on the host shares, 7.4 MB
+is its own binary, shared the same way, and 6.9 MB is anonymous memory, which is what one more
+machine adds (run 43564203014, on the bench fleet, 2026-11-14; the probe's note at its idle
+step). The rest is guest RAM the guest freed
 and free page reporting has not handed back. Reporting returns free blocks of
 `page_reporting_order` and up - 9, 2 MiB, by default - and what `memory.reclaim` frees is
 scattered (runs 36879800428, 36881456066, 36931619739; p50 of 3).
