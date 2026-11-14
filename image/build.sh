@@ -398,6 +398,10 @@ stat_in_image /etc/tmpfiles.d/systemd-nologin.conf | grep -q '/dev/null' || {
         grep -q -- '--subsystem-match=input' || {
     echo "ERROR: udev's coldplug is not filtered, or lost input (the power button logind shuts down on)" >&2
     exit 1; }
+"$bin/debugfs" -R "cat /etc/systemd/system/systemd-udev-trigger.service.d/10-coldplug.conf" /work/base.raw 2>/dev/null |
+        grep -q -- '--subsystem-match=cpu' || {
+    echo "ERROR: udev's coldplug lost cpu; a core attached before systemd starts stays offline" >&2
+    exit 1; }
 if stat_in_image /etc/systemd/system/systemd-logind.service | grep -q '/dev/null'; then
     echo "ERROR: systemd-logind.service is masked - it never starts, no login gets a" \
          "session, and spin's manager never starts either" >&2

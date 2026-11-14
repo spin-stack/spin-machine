@@ -132,6 +132,15 @@ tasks:
     cmds:
       - SPIN_LOCKDOWN_TEST=1 go test ./boot/ -run '^TestTheGuestKernelIsLockedDown$' -count=1 -v -timeout 5m
 
+  hotadd:
+    desc: >-
+      Check a core attached while an init of the consumer's is PID 1, before systemd and its
+      udev start, is online once they have, in a disposable guest. Needs a built release; uses
+      KVM when available, otherwise TCG.
+    deps: [':tools']
+    cmds:
+      - SPIN_HOTADD_TEST=1 go test ./boot/ -run '^TestACoreAttachedBeforeSystemdStartsComesOnline$' -count=1 -v -timeout 5m
+
   initcalls:
     desc: >-
       Where the kernel's own boot goes, initcall by initcall, as a p50 over REPS boots.

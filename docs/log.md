@@ -341,6 +341,8 @@ Measured and not shipped:
 
 **11-13 · boot/qemu · branch `first-login-report` (this change).** v20261113.03's report read +11-18% on every row: the report times the serial console's prompt, and the getty drop-in removed in #250 left it Type=idle, waiting for the lane's units. The first login it does not time went 478/500 (v20261113.02, lab 43524334205) -> 381/410 ms (v20261113.03, lab 43524721490), two runs and not interleaved. The report now logs into the release over SSH too (`first_login`), and compare writes it first. The QEMU build asserts static-pie, full RELRO, an NX stack and stack canaries, which come from QEMU's and Alpine's defaults and no flag here. Measured and left out: one sshd for every connection (the vsock socket with Accept=no, an `sshd -D` from the first dispatch), first login 382/393 against 381/410 and a second 40 against 48 ms (lab 43524721490).
 
+**11-13 · image · udev's coldplug keeps cpu (this change).** The coldplug filtered in `630fa2c` left out cpu, and a core attached before systemd starts - spin gives a workspace its cores while its own init is PID 1 - is onlined by that replay reaching `40-spin-hotadd.rules` and by nothing else: with v20261113.03 every workspace came up with one core whatever it was sized to (spin's kvm run 43527839765, four tests "still waiting for the guest to have its floor's two cores"). `task boot:hotadd` attaches a core before systemd and reads `online` after: `0` on v20261113.03's image, `0-1` with cpu in the filter. What cpu costs the first login was not measured; it is one device per core.
+
 ---
 
 ## 3. Rework cycles

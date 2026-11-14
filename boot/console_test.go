@@ -20,6 +20,13 @@ import (
 // Under TCG where there is no /dev/kvm: what it checks is behaviour, not time.
 func checkOnConsole(t *testing.T, rel *machine.Release, root *rawRoot, ok, failed string) string {
 	t.Helper()
+	return checkGuest(t, rel, root, ok, failed, func(*machine.Spec) {}, func(string) {})
+}
+
+// checkGuest is checkOnConsole for a check the host takes part in: shape changes the machine
+// before it starts, and said is given the console so far each time the guest has written to it.
+func checkGuest(t *testing.T, rel *machine.Release, root *rawRoot, ok, failed string, shape func(*machine.Spec), said func(console string)) string {
+	t.Helper()
 	spec := rel.Spec()
 	spec.BootCPUs = 2
 	spec.Memory.SizeMB = 1024
@@ -29,6 +36,7 @@ func checkOnConsole(t *testing.T, rel *machine.Release, root *rawRoot, ok, faile
 	c.Root = "/dev/vda"
 	c.Init = "/sbin/init"
 	spec.Cmdline = c
+	shape(&spec)
 	if _, err := os.Stat("/dev/kvm"); err != nil {
 		tcg, err := rel.QEMUTCG()
 		if err != nil {
@@ -68,6 +76,7 @@ func checkOnConsole(t *testing.T, rel *machine.Release, root *rawRoot, ok, faile
 		if err != nil || strings.Contains(console.String(), failed) {
 			t.Fatalf("guest check failed: %v\n%s\n%s", err, &console, &stderr)
 		}
+		said(console.String())
 	}
 }
 
