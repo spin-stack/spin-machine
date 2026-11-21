@@ -130,6 +130,94 @@ end, said := m.End()             // the last SHUTDOWN QEMU sent: End{Guest, Reas
   virtio-mem and its backend. A machine started with no ceiling above its memory has no virtio-mem,
   and its `Ceiling` is its `Base`.
 
+## Pressure
+
+A runner hosts many machines. The probe says which of them is short of CPU, memory or IO, and
+which QMP commands are slow, as it happens. `Usage` then says which machine causes it. The machine
+owns both ends: a sender in the guest and the listener on the host. spin keeps what spans machines:
+the host's own PSI, ranking, attribution and what to do about it.
+
+```go
+l, err := machine.ListenPressure()  // once per host, as root: vsock port 1032
+defer l.Close()
+p, err := machine.Start(ctx, spec, machine.StartOptions{
+	Pressure: l.Watch(func(e machine.Pressure) { /* must not block */ }),
+	Cmd:      func(c *exec.Cmd) { /* QEMU in a cgroup of its own */ },
+})
+u, err := p.Usage(ctx)              // counters; two Usages say what was used between them
+```
+
+`machine.Pressure` is one of four types:
+
+| Type | Says | Seen by |
+|---|---|---|
+| `Stall{Seen: Guest, Resource}` | the guest's tasks waited for a vCPU, for memory it does not have, or for its disks: at least 150 ms in 1 s, by the guest kernel's PSI | the guest, as `spin-machine-pressure.service` |
+| `Stall{Seen: Host, Resource}` | QEMU's threads waited for the host's CPU, memory or IO, by the PSI of QEMU's cgroup | the host |
+| `OOMKill{Kills}` | the guest's OOM killer killed that many processes since the last report | the guest |
+| `SlowCommand{Command, Took, Baseline}` | a QMP command on Start's monitor took at least 100 ms and 4 times what it took before | the host, in the monitor's one client |
+| `GuestLost{Err}` | the guest's sender's connection ended, and the guest is blind until it dials again | the host |
+
+Each Stall carries `Total`, the resource's stall since the guest booted or the cgroup was made.
+Two Stalls of the same vantage and resource say how much stall fell between them.
+
+**A Stall says a machine suffers. `Usage` says who causes it.** A guest stall on CPU with no host
+stall is a guest short of the vCPUs it was given. A host stall on CPU is the host taking its vCPUs:
+the guest sees none of that time. Its own PSI sees only the time its tasks waited for a vCPU it was
+running. Both were seen on one guest of one vCPU (task boot:pressure, laptop, 2026-11-21). Three
+loops in the guest brought guest CPU stalls each second and no host ones. One loop, with two host
+hogs on the vCPU's core, brought host CPU stalls each second. The guest's CPU total did not move
+then. A load rarely stalls one resource alone: two readers of the disk on that one vCPU brought
+guest IO stalls, and guest CPU and host CPU stalls with them. Who causes a host stall is in every machine's `Usage`: QEMU's cgroup's `cpu.stat`,
+`memory.stat` (dirty and writeback pages), `io.stat`, each disk's `query-blockstats`, and the
+balloon's count of the guest's OOM kills and allocation stalls. Its `Stalled` fields are the
+cgroup's PSI totals. A host's IO is someone else's IO only when the disks are on a disk. A disk
+on tmpfs is memory to the host (#394).
+
+**What each vantage cannot see.**
+- **The guest's PSI is the guest's word.** A workspace's root can stop the sender or write what
+  it likes to port 1032. The host's kernel names the CID of every connection, so a guest can lie
+  only about itself. A host Stall and `Usage` are the host's own measurement.
+- **A fast OOM can kill before any trigger fires.** Two 1000 MiB hogs did (2026-11-21). So the
+  sender watches the guest's OOM kills as well, through `memory.events` of each top-level cgroup,
+  which the kernel notifies on every kill. The kill count travels as a running total. A count sent
+  again, or a kill made while the connection was down, is counted once, in the hello of the next
+  connection.
+- **A machine loading or saving a state answers no command until it is done.** The watch follows
+  the migration's events and times nothing while one runs, so a restore does not alarm. A command
+  asked for the first time has no baseline to be slower than, so it is never slow.
+- **vsock's own round trip is not measured** (#393). Under pressure, a heartbeat from a sender at
+  the guest's lowest priority would measure the guest's scheduler.
+
+**Where each part lives.** The sender is `cmd/spin-machine-pressure`, built static by the image's
+build (`image/build.sh` checks it is in the image as built). Its unit, after multi-user.target, is
+`spin-machine-pressure.service`, at Nice 19, on the idle scheduler and IO class, and out of the OOM
+killer's way. It wakes only when the kernel says something changed. It holds no identity: the host
+is always CID 2. The host side is `machine/pressure.go` and `machine/usage.go`. Start refuses a
+watch for a Spec with no vsock, for a QEMU in its caller's own cgroup (one cgroup for every machine
+attributes nothing), and when the cgroup's triggers cannot be armed: a window under 2 s is root's.
+
+**The line is an external contract** between a guest of one release and the host of the next
+(`internal/pressure`): newline-terminated ASCII, at most 128 bytes, microseconds, totals since the
+guest booted. The host refuses a version it does not know, and the guest then dials again.
+
+```
+spin-machine-pressure 1 oom=3       hello: version, the guest's OOM kills so far
+stall memory 150000 1000000 8123    a trigger fired: resource, threshold, window, some total
+oom 4                               the guest's OOM kills so far
+```
+
+**What spin does to adopt it.** It makes one `ListenPressure` at the runner's start and passes
+`Watch` to each `Start`, with each QEMU in its cgroup through `Cmd`, as it already does. Its pressure
+handler then takes `Stall{Seen: Guest, Resource: MemoryPressure}` where its runner took the guest
+supervisor's `POST /v2/memory-pressure` on port 1027. The supervisor's notice, and the runner's
+handler for it, are then deleted: the trigger they arm is the same, 150 ms in 1 s.
+
+**Next, not here.** An actuator for each signal: a per-disk IO limit through the throttle group
+every disk place already sits under (#395), and CPU and memory through `SetCPUs` and `SetMemory`,
+with the signal, actuator and owner table (#396). Not yet explained: the 175-950 ms QMP stalls
+under small synced writes on a contended host disk (#391), and QMP's round trip during a load
+(#392).
+
 ## What is load-bearing and invisible from outside
 
 - **Every device on the command line sits at a fixed slot on bus 0.** A fixed slot makes

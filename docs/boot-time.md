@@ -165,6 +165,7 @@ them for boot time.
 | MOTD and `pam_motd` off; `mlkem768x25519-sha256` alone | configure-system.sh | −12 on the first login; 104 → 40 a login against sntrup761 | ladder, mechanism: a root login runs the same PAM and kex | #240, lab 43479854381 |
 | timedated, firstboot, machine-id-commit masked; volatile journald; the timeouts; docker and containerd by socket; `nsswitch` | optimize-systemd.sh | function: time from the host, no first-boot prompt, no identity | - | - |
 | `10-seats.conf`, the getty's TERM, `/tmp`'s size | image drop-ins | function | - | - |
+| The pressure probe's sender, after multi-user.target, at the lowest priority | spin-machine-pressure.service | function (docs/machine.md, "Pressure"); adding it: first login +0.5 [−2.6, +6.7], restored +0.2 [−3.0, +2.7] | measured | labs 44921602512, 44921841077 |
 
 **What only the lane uses.** spin's path earns nothing from `sshd-vsock.socket.d/10-lane.conf`,
 `sshd@.service.d/10-lane.conf`, `sshd@.service.d/keygen.conf` or the masked
