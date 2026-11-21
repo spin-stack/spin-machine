@@ -78,7 +78,7 @@ jobs:
 
       - name: Does the change reach e2fsprogs or the image
         id: image
-        run: spin-machine-dev changed --base "$BASE" --pins e2fsprogs-builder,e2fsprogs,ubuntu,systemd-source,mkosi,task,git-lfs,buildkit image e2fsprogs go.mod cmd/spin-machine-dev internal/build .github/workflows/parts.yml
+        run: spin-machine-dev changed --base "$BASE" --pins e2fsprogs-builder,e2fsprogs,ubuntu,systemd-source,mkosi,task,git-lfs,buildkit image e2fsprogs cmd/spin-machine-pressure internal/pressure go.mod go.sum cmd/spin-machine-dev internal/build .github/workflows/parts.yml
 
   qemu:
     needs: changed

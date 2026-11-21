@@ -5,6 +5,7 @@ package build
 import (
 	"context"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -151,4 +152,38 @@ func FileSHA256(path string) (string, error) {
 		return "", fmt.Errorf("hashing %s: %w", path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// PressurePath is where the image's build finds the pressure probe's guest half, under o.Out. A
+// release ships none of guest/: the binary is in the image.
+const PressurePath = "guest/spin-machine-pressure"
+
+// buildPressure builds the pressure probe's guest half into o.Out for image/build.sh, which
+// installs it, and refuses one that asks for a dynamic loader: the guest's libc is not the one it
+// would have been linked against.
+func buildPressure(ctx context.Context, o Options) error {
+	out := filepath.Join(o.Out, PressurePath)
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return fmt.Errorf("making %s: %w", filepath.Dir(out), err)
+	}
+	if err := runEnv(ctx, o, []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64"}, "go", "build", "-trimpath",
+		"-ldflags", "-s -w", "-o", out, "./cmd/spin-machine-pressure"); err != nil {
+		return err
+	}
+	return static(out)
+}
+
+// static is whether the ELF at path asks for no interpreter.
+func static(path string) error {
+	f, err := elf.Open(path)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_INTERP {
+			return fmt.Errorf("%s is linked dynamically", path)
+		}
+	}
+	return nil
 }

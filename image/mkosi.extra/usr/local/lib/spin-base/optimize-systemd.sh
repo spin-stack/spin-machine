@@ -188,6 +188,11 @@ ln -sf /lib/systemd/system/ssh.socket /etc/systemd/system/sockets.target.wants/s
 mkdir -p /etc/systemd/system/sysinit.target.wants
 ln -sf /usr/lib/systemd/system/spin-machine-sshd-keygen.service \
     /etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.service
+# The pressure probe's guest half, after the boot's work: its unit says why, and its [Install]
+# says multi-user.target, which this is the enable of. image/build.sh installs the binary.
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /usr/lib/systemd/system/spin-machine-pressure.service \
+    /etc/systemd/system/multi-user.target.wants/spin-machine-pressure.service
 
 # logind stays in the boot transaction, as the package wants it
 # (/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service), so that the first

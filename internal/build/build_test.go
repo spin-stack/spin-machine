@@ -5,6 +5,8 @@ package build
 import (
 	"bytes"
 	"context"
+	"debug/elf"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -335,6 +337,7 @@ func TestEachPartIsBuiltAsItsDockerfileWantsIt(t *testing.T) {
 	v := pins(t)
 	root, out := t.TempDir(), t.TempDir()
 	log := fakeDocker(t, "")
+	goLog := fakeGo(t, staticELF(t))
 	o := Options{Root: root, Out: out, Pins: v, Jobs: 3, Registry: true, Export: true, SystemdExperiment: "exp"}
 	for _, f := range []string{"bin/qemu-img", "qemu/x", "sbom/qemu.apk", "kernel/old.patch", "bin/debugfs", "e2fsprogs/x", "systemd/old.deb", "bin/keep"} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(out, f)), 0o755); err != nil {
@@ -359,6 +362,9 @@ func TestEachPartIsBuiltAsItsDockerfileWantsIt(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".cache", "mkosi")); err != nil {
 		t.Error("the image's build made no mkosi cache")
+	}
+	if got, _ := os.ReadFile(goLog); string(got) != "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 build -trimpath -ldflags -s -w -o "+filepath.Join(out, PressurePath)+" ./cmd/spin-machine-pressure\n" {
+		t.Errorf("the image's sender was built with %q", got)
 	}
 	got := calls(t, log)
 	series, _ := KernelSeries(v)
@@ -459,5 +465,71 @@ func TestEmptiedRefusesWhatItCannotRemove(t *testing.T) {
 		if err := emptied(locked, "d"); err == nil {
 			t.Error("what could not be removed was not said")
 		}
+	}
+}
+
+// fakeGo is a go on PATH that logs each call, with its environment's build switches, and copies
+// built to the -o it is given.
+func fakeGo(t *testing.T, built string) string {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	script(t, filepath.Join(dir, "go"), `echo "CGO_ENABLED=$CGO_ENABLED GOOS=$GOOS GOARCH=$GOARCH $*" >> `+log+`
+prev=""; for a; do [ "$prev" = -o ] && cp `+built+` "$a"; prev=$a; done; exit 0`)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return log
+}
+
+// staticELF is an ELF whose one program header loads it, as a static binary's do, and none asks
+// for an interpreter.
+func staticELF(t *testing.T) string {
+	t.Helper()
+	return writeELF(t, []elf.Prog64{{Type: uint32(elf.PT_LOAD)}})
+}
+
+// writeELF is an x86-64 ELF executable with progs as its program headers.
+func writeELF(t *testing.T, progs []elf.Prog64) string {
+	t.Helper()
+	var b bytes.Buffer
+	h := elf.Header64{Type: uint16(elf.ET_EXEC), Machine: uint16(elf.EM_X86_64), Version: uint32(elf.EV_CURRENT),
+		Phoff: 64, Ehsize: 64, Phentsize: 56, Phnum: uint16(len(progs))}
+	copy(h.Ident[:], elf.ELFMAG)
+	h.Ident[elf.EI_CLASS], h.Ident[elf.EI_DATA], h.Ident[elf.EI_VERSION] = byte(elf.ELFCLASS64), byte(elf.ELFDATA2LSB), byte(elf.EV_CURRENT)
+	_ = binary.Write(&b, binary.LittleEndian, h)
+	for _, p := range progs {
+		_ = binary.Write(&b, binary.LittleEndian, p)
+	}
+	path := filepath.Join(t.TempDir(), "elf")
+	if err := os.WriteFile(path, b.Bytes(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The image's sender is refused when it asks for a dynamic loader, or is no ELF at all.
+func TestTheImagesSenderIsStatic(t *testing.T) {
+	if err := static(staticELF(t)); err != nil {
+		t.Errorf("a static ELF: %v", err)
+	}
+	dynamic := writeELF(t, []elf.Prog64{{Type: uint32(elf.PT_LOAD)}, {Type: uint32(elf.PT_INTERP)}})
+	if err := static(dynamic); err == nil || !strings.Contains(err.Error(), "is linked dynamically") {
+		t.Errorf("a dynamic ELF: %v", err)
+	}
+	if err := static(filepath.Join(t.TempDir(), "none")); err == nil || !strings.Contains(err.Error(), "reading") {
+		t.Errorf("no ELF: %v", err)
+	}
+	fakeGo(t, dynamic)
+	out := t.TempDir()
+	if err := buildPressure(context.Background(), Options{Root: t.TempDir(), Out: out}); err == nil {
+		t.Error("a dynamic sender was built for the image")
+	}
+	if err := buildPressure(context.Background(), Options{Out: filepath.Join(dynamic, "x")}); err == nil {
+		t.Error("an output under a file gave no error")
+	}
+	dir := t.TempDir()
+	script(t, filepath.Join(dir, "go"), "exit 1")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := buildPressure(context.Background(), Options{Root: t.TempDir(), Out: out}); err == nil {
+		t.Error("a sender that did not build gave no error")
 	}
 }

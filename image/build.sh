@@ -59,6 +59,11 @@ mkosi --force --package-directory=/debs build
 tree=/work/out/rootfs
 test -d "$tree" || { echo "ERROR: mkosi produced no tree at $tree" >&2; exit 1; }
 
+# The pressure probe's guest half (cmd/spin-machine-pressure), which `spin-machine-dev build image`
+# compiles from this checkout into /out/guest before this runs: a Go program of this repository,
+# not a package of the archive's.
+install -D -m 0755 /out/guest/spin-machine-pressure "$tree/usr/libexec/spin-machine-pressure"
+
 # Identity, done here rather than through mkosi's RemoveFiles because the two files below are not
 # "remove it": /etc/machine-id has to exist and be empty. Empty is what systemd reads as
 # "not provisioned yet", so each VM generates its own on its writable overlay; absent makes
@@ -435,6 +440,21 @@ stat_in_image /etc/systemd/system/sysinit.target.wants/spin-machine-sshd-keygen.
 "$bin/debugfs" -R "cat /usr/lib/systemd/system/spin-machine-sshd-keygen.service" /work/base.raw 2>/dev/null |
         grep -qx 'DefaultDependencies=no' || {
     echo "ERROR: spin-machine-sshd-keygen.service has default dependencies; it starts after sysinit.target" >&2
+    exit 1; }
+# The pressure probe's guest half: the binary as it was built (static, which the build checked),
+# and its unit wanted by multi-user.target, after the first login's path.
+"$bin/debugfs" -R "dump -p /usr/libexec/spin-machine-pressure /work/pressure.bin" /work/base.raw 2>/dev/null
+cmp -s /work/pressure.bin /out/guest/spin-machine-pressure && test -x /work/pressure.bin || {
+    echo "ERROR: /usr/libexec/spin-machine-pressure is not in the image as built" >&2
+    exit 1; }
+rm -f /work/pressure.bin
+stat_in_image /etc/systemd/system/multi-user.target.wants/spin-machine-pressure.service |
+        grep -qF '/usr/lib/systemd/system/spin-machine-pressure.service' || {
+    echo "ERROR: spin-machine-pressure.service is not wanted by multi-user.target" >&2
+    exit 1; }
+"$bin/debugfs" -R "cat /usr/lib/systemd/system/spin-machine-pressure.service" /work/base.raw 2>/dev/null |
+        grep -qx 'After=multi-user.target' || {
+    echo "ERROR: spin-machine-pressure.service is not ordered after multi-user.target, the first login's path" >&2
     exit 1; }
 # The first SSH login's lane (configure-system.sh and the units' 10-lane.conf), read back from
 # the finished filesystem: each piece alone gains little and leaves the login waiting on the

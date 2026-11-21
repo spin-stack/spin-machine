@@ -89,8 +89,9 @@ var Parts = []Part{
 		make: makeE2fsprogs, check: VerifyE2fsprogs},
 	{Name: "systemd", Paths: []string{"image/systemd"}, Pins: strings.Fields("ubuntu systemd-source"),
 		make: makeSystemd, check: verifySystemd},
-	// The image is made with the e2fsprogs above and installs the systemd above.
-	{Name: "image", Needs: []string{"e2fsprogs", "systemd"}, Paths: []string{"image"},
+	// The image is made with the e2fsprogs above and installs the systemd above, and the pressure
+	// probe's guest half, compiled from this tree.
+	{Name: "image", Needs: []string{"e2fsprogs", "systemd"}, Paths: []string{"image", "cmd/spin-machine-pressure", "internal/pressure", "go.mod", "go.sum"},
 		Pins: strings.Fields("ubuntu mkosi task git-lfs buildkit"), make: makeImage, check: verifyImage},
 }
 
@@ -478,6 +479,9 @@ func makeSystemd(ctx context.Context, o Options, p Part) error {
 func makeImage(ctx context.Context, o Options, p Part) error {
 	args, err := partArgs(o, p)
 	if err != nil {
+		return err
+	}
+	if err := buildPressure(ctx, o); err != nil {
 		return err
 	}
 	if err := docker(ctx, o, buildx(o, "image", "image/Dockerfile", "", args, "--tag", imageBuilder, "--load")...); err != nil {

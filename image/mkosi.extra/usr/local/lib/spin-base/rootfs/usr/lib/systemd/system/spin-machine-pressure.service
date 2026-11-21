@@ -1,0 +1,27 @@
+# The guest's half of the pressure probe: PSI triggers on the guest's CPU, memory and IO, and its
+# OOM kills, each written to the host over vsock as it happens (cmd/spin-machine-pressure, and
+# docs/machine.md, "Pressure", for what the host makes of them).
+#
+# After multi-user.target, and so after the first login's path: nothing a login waits for waits for
+# this, and the boot's work is done before it starts. At the guest's lowest priority, since it
+# reports on a guest whose CPU may be what is short: Nice=19 and the idle scheduling and IO
+# classes. As root, because a trigger with a window under 2 s is root's alone. On a restore it
+# is already running, with its triggers armed, and dials the host again by itself.
+[Unit]
+Description=Report the guest's pressure to the host
+After=multi-user.target
+ConditionPathExists=/proc/pressure/cpu
+
+[Service]
+ExecStart=/usr/libexec/spin-machine-pressure
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+# Out of the OOM killer's way, which otherwise took it in the very OOM it was there to report
+# (task boot:pressure, 2026-11-21). It holds a few MiB.
+OOMScoreAdjust=-900
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

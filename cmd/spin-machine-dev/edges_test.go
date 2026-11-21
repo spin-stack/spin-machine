@@ -67,7 +67,8 @@ func everything(t *testing.T, dir string) string {
 	put(t, filepath.Join(fixture, "systemd/systemd_1_amd64.deb"), "", 0o644)
 	_ = os.Remove(filepath.Join(fixture, "bin/spin-machine"))
 	for _, f := range []string{"LICENSE", "NOTICE", "qemu/qboot/COPYING", "qemu/qboot/a.patch", "qemu/patches/0001-a.patch",
-		"qemu/Dockerfile", "kernel/config", "e2fsprogs/Dockerfile", "image/systemd/Dockerfile", "image/Dockerfile"} {
+		"qemu/Dockerfile", "kernel/config", "e2fsprogs/Dockerfile", "image/systemd/Dockerfile", "image/Dockerfile",
+		"cmd/spin-machine-pressure/main.go", "internal/pressure/pressure.go", "go.mod", "go.sum"} {
 		put(t, filepath.Join(dir, f), f, 0o644)
 	}
 	return fixture
@@ -82,8 +83,12 @@ func TestAReleaseIsBuiltAndPacked(t *testing.T) {
 	docker := `dest=""; prev=""; for a; do case "$a" in type=local,dest=*) dest=${a#type=local,dest=};; esac
   [ "$prev" = -v ] && case "$a" in *:/out) dest=${a%:/out};; esac; prev=$a; done
 case "$dest" in */systemd) cp -r ` + fixture + `/systemd/. "$dest"/;; ?*) cp -r ` + fixture + `/. "$dest"/;; esac; exit 0`
-	// No go: a release ships no spin-machine and needs none to say what it is.
-	fakes(t, map[string]string{"docker": docker, "go": "exit 1"})
+	// A go that builds the image's sender and nothing else: a release ships no spin-machine and
+	// needs none to say what it is.
+	sender := filepath.Join(t.TempDir(), "sender")
+	put(t, sender, string(staticELF()), 0o755)
+	fakes(t, map[string]string{"docker": docker,
+		"go": `prev=""; for a; do [ "$prev" = -o ] && out=$a; prev=$a; done; [ "$prev" = ./cmd/spin-machine-pressure ] && cp ` + sender + ` "$out"`})
 	stdout, stderr, status := verb(t, "release", "--version", "v20261119.11", "--json")
 	if status != 0 {
 		t.Fatalf("exit %d: %s", status, stderr)
@@ -281,4 +286,14 @@ func TestTheLabKeepsItsStateUnderOut(t *testing.T) {
 	if got := outOf("/repo"); got != "/abs/out" {
 		t.Errorf("outOf with an absolute --out = %q, want /abs/out", got)
 	}
+}
+
+// staticELF is an x86-64 ELF executable with no program headers, so none asks for an interpreter.
+func staticELF() []byte {
+	var b bytes.Buffer
+	h := elf.Header64{Type: uint16(elf.ET_EXEC), Machine: uint16(elf.EM_X86_64), Version: uint32(elf.EV_CURRENT), Ehsize: 64, Phentsize: 56}
+	copy(h.Ident[:], elf.ELFMAG)
+	h.Ident[elf.EI_CLASS], h.Ident[elf.EI_DATA], h.Ident[elf.EI_VERSION] = byte(elf.ELFCLASS64), byte(elf.ELFDATA2LSB), byte(elf.EV_CURRENT)
+	_ = binary.Write(&b, binary.LittleEndian, h)
+	return b.Bytes()
 }
