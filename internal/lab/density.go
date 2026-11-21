@@ -56,32 +56,11 @@ func (density) Measure(_ context.Context, m *Measurement) error {
 	if err != nil || n < 0 {
 		return fmt.Errorf("a crowd of %q workspaces is not a number of them", m.Row)
 	}
-	// Ended here, before the next measurement starts, and not by m.Cleanup, which runs when the
-	// whole experiment has: a first run of this probe left every crowd up, and the rows measured a
-	// host carrying hundreds of machines (lab 44665519945, 2026-11-20).
-	var crowd []*Machine
-	defer func() {
-		for _, mc := range crowd {
-			mc.Stop()
-		}
-	}()
 	t0 := time.Now()
-	for i := range n {
-		mc, cid, _, err := m.bootLoggedIn(fmt.Sprintf("crowd%d.qcow2", i))
-		if mc != nil {
-			crowd = append(crowd, mc)
-		}
-		if err != nil {
-			return err
-		}
-		if m.Options["load"] == "cpu" {
-			// One busy loop a vCPU, left running in the background: nohup, so the session's end
-			// does not take it.
-			busy := `for c in $(seq "$(nproc)"); do nohup sh -c 'while :; do :; done' >/dev/null 2>&1 & done`
-			if _, _, err := m.Key.Run(cid, xssh.KeyExchangeMLKEM768X25519, busy); err != nil {
-				return Miss("crowd workspace %d took no load: %v", i, err)
-			}
-		}
+	stop, err := m.bootCrowd(n, m.Options["load"])
+	defer stop()
+	if err != nil {
+		return err
 	}
 	m.RecordMs("crowd_up", time.Since(t0))
 	time.Sleep(time.Duration(m.Options.Int("settle")) * time.Second)
@@ -96,6 +75,39 @@ func (density) Measure(_ context.Context, m *Measurement) error {
 	m.RecordMs("first_login", login)
 	m.Logf("crowd %d (%s): first login %v", n, m.Options["load"], login.Round(time.Millisecond))
 	return nil
+}
+
+// bootCrowd boots n of the tree's workspaces, each logged into and, with load cpu, keeping its
+// vCPUs busy, and returns what ends them, with any error for the ones that started. The caller ends
+// them before its measurement returns, and not by m.Cleanup, which runs when the whole experiment
+// has: a first run of density left every crowd up, and the rows measured a host carrying hundreds
+// of machines (lab 44665519945, 2026-11-20).
+// mutate-lane: TestEveryProbeMeasuresATree
+func (m *Measurement) bootCrowd(n int, load string) (func(), error) {
+	var crowd []*Machine
+	stop := func() {
+		for _, mc := range crowd {
+			mc.Stop()
+		}
+	}
+	for i := range n {
+		mc, cid, _, err := m.bootLoggedIn(fmt.Sprintf("crowd%d.qcow2", i))
+		if mc != nil {
+			crowd = append(crowd, mc)
+		}
+		if err != nil {
+			return stop, err
+		}
+		if load == "cpu" {
+			// One busy loop a vCPU, left running in the background: nohup, so the session's end
+			// does not take it.
+			busy := `for c in $(seq "$(nproc)"); do nohup sh -c 'while :; do :; done' >/dev/null 2>&1 & done`
+			if _, _, err := m.Key.Run(cid, xssh.KeyExchangeMLKEM768X25519, busy); err != nil {
+				return stop, Miss("crowd workspace %d took no load: %v", i, err)
+			}
+		}
+	}
+	return stop, nil
 }
 
 // bootLoggedIn boots one more of the tree's workspaces, sized as spin sizes one (Plug), and returns

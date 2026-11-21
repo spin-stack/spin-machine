@@ -594,7 +594,7 @@ func TestAStatesDataIsReadAndASocketWaitedFor(t *testing.T) {
 }
 
 func TestTheProbesAreTheGoalsAndTheKernels(t *testing.T) {
-	if got := ProbeNames(); !slices.Equal(got, []string{"density", "initcalls", "prestart", "restore-first", "restore-together", "ssh-first", "transport"}) {
+	if got := ProbeNames(); !slices.Equal(got, []string{"density", "initcalls", "prestart", "restore-first", "restore-together", "run-delay", "ssh-first", "transport"}) {
 		t.Errorf("probes %v", got)
 	}
 	for _, name := range ProbeNames() {

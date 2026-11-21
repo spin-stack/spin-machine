@@ -449,6 +449,7 @@ var Probes = map[string]Probe{
 	"prestart":         prestart{},
 	"restore-first":    restoreFirst{},
 	"restore-together": restoreTogether{},
+	"run-delay":        runDelay{},
 	"ssh-first":        sshFirst{},
 	"transport":        transport{},
 }
