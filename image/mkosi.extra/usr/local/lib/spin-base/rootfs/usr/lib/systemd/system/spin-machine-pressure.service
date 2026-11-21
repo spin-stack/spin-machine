@@ -13,6 +13,10 @@ After=multi-user.target
 ConditionPathExists=/proc/pressure/cpu
 
 [Service]
+# Started once no job is left to run, the first login's included, or after 5 s: ordered after
+# multi-user.target alone, it started beside the first login, which lost 3.3 ms between sshd
+# accepting and the login [+2.1, +4.9] (lab 44924252325, 40 boots).
+Type=idle
 ExecStart=/usr/libexec/spin-machine-pressure
 Nice=19
 CPUSchedulingPolicy=idle
