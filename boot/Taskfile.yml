@@ -72,6 +72,19 @@ tasks:
     cmds:
       - SPIN_LOGIND_TEST=1 go test ./boot/ -run '^TestLogindSessions$' -count=1 -v -timeout 5m
 
+  pressure:
+    desc: >-
+      The pressure probe on a real guest: this checkout's sender in a disposable root, a guest of
+      one vCPU put under each pressure in turn (its CPU short, the host's hogs on its vCPU's core,
+      its disk, its memory, an OOM), and each phase checked for the Pressure that names it and
+      Usage for counters that moved. Runs as root through sudo, for the host's triggers and the
+      cgroup QEMU runs in. Needs a built release, /dev/kvm, /dev/vhost-vsock (task vsock) and
+      sudo. SPIN_PRESSURE_CORE= the host core the vCPU and the hogs share (default 3).
+    cmds:
+      - mkdir -p {{.OUTPUT_ABS}}/guest
+      - CGO_ENABLED=0 go build -trimpath -o {{.OUTPUT_ABS}}/guest/spin-machine-pressure ./cmd/spin-machine-pressure
+      - SPIN_PRESSURE_TEST=1 SPIN_PRESSURE_SENDER={{.OUTPUT_ABS}}/guest/spin-machine-pressure go test ./machine/ -exec 'sudo -n --preserve-env=SPIN_PRESSURE_TEST,SPIN_PRESSURE_SENDER,SPIN_PRESSURE_CORE,SPIN_MACHINE_OUTPUT' -run '^TestThePressureProbeReportsEachPressure$' -count=1 -v -timeout 5m
+
   lockdown:
     desc: >-
       Check the guest kernel runs lockdown at confidentiality and the BPF LSM, has no

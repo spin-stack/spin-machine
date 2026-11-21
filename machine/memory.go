@@ -137,8 +137,10 @@ const unreported = math.MaxUint64
 type balloonStats struct {
 	Updated int64 `json:"last-update"`
 	Stats   struct {
-		Total     uint64 `json:"stat-total-memory"`
-		Available uint64 `json:"stat-available-memory"`
+		Total       uint64 `json:"stat-total-memory"`
+		Available   uint64 `json:"stat-available-memory"`
+		OOMKills    uint64 `json:"stat-oom-kills"`
+		AllocStalls uint64 `json:"stat-alloc-stalls"`
 	} `json:"stats"`
 }
 
@@ -147,21 +149,30 @@ type balloonStats struct {
 // command line the interval would be a timer in every boot from its first second, on the goal's
 // clock. So that call, and any before the guest's first report, is ErrNoGuestStats.
 func (m *QEMU) GuestMemory(ctx context.Context) (GuestMemory, error) {
-	if !m.polling.Load() {
-		if _, err := qmp.Do(ctx, m.c, qomSet, qomSetArgs{Path: balloonPath, Property: "guest-stats-polling-interval", Value: statsInterval}); err != nil {
-			return GuestMemory{}, fmt.Errorf("asking the guest to report its memory: %w", err)
-		}
-		m.polling.Store(true)
-	}
-	st, err := readProperty[balloonStats](ctx, m, balloonPath, "guest-stats")
+	st, err := m.guestStats(ctx)
 	if err != nil {
-		return GuestMemory{}, fmt.Errorf("reading the guest's report of its memory: %w", err)
-	}
-	if st.Updated == 0 {
-		return GuestMemory{}, ErrNoGuestStats
+		return GuestMemory{}, err
 	}
 	if st.Stats.Total == unreported || st.Stats.Available == unreported {
 		return GuestMemory{}, errors.New("the guest's report of its memory has no total or no available memory")
 	}
 	return GuestMemory{Total: int(st.Stats.Total / mib), Available: int(st.Stats.Available / mib), At: time.Unix(st.Updated, 0)}, nil
+}
+
+// guestStats is the balloon's last report, turning the reports on at the first call.
+func (m *QEMU) guestStats(ctx context.Context) (balloonStats, error) {
+	if !m.polling.Load() {
+		if _, err := qmp.Do(ctx, m.c, qomSet, qomSetArgs{Path: balloonPath, Property: "guest-stats-polling-interval", Value: statsInterval}); err != nil {
+			return balloonStats{}, fmt.Errorf("asking the guest to report its memory: %w", err)
+		}
+		m.polling.Store(true)
+	}
+	st, err := readProperty[balloonStats](ctx, m, balloonPath, "guest-stats")
+	if err != nil {
+		return balloonStats{}, fmt.Errorf("reading the guest's report of its memory: %w", err)
+	}
+	if st.Updated == 0 {
+		return balloonStats{}, ErrNoGuestStats
+	}
+	return st, nil
 }

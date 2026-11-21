@@ -5,6 +5,7 @@ package machine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,16 @@ type StartOptions struct {
 	// Observer is the monitor's, as qmp.New takes it: events from the greeting on.
 	Observer qmp.Observer
 
+	// Pressure, when set, is this machine's watch on the listener of the guests' pressure
+	// (PressureListener.Watch): the machine's probe reports to it what its guest says over vsock,
+	// what the PSI triggers on QEMU's cgroup say, and every QMP command on Start's monitor that is
+	// slow (docs/machine.md, "Pressure"). QEMU's cgroup is read as it starts, so Cmd puts QEMU in
+	// its own (SysProcAttr.UseCgroupFD), not a move after Start. Start refuses the watch for a Spec
+	// with no vsock, for a QEMU in its caller's own cgroup, where the host's pressure would be every
+	// machine's at once, and where the host's triggers cannot be armed, as by a caller that is not
+	// root. A cgroup that several machines share passes, and its Stalls are all of theirs.
+	Pressure *PressureWatch
+
 	// Cmd shapes the process before it starts: its credentials, root, namespaces and cgroup
 	// (SysProcAttr), its environment, more arguments. It leaves Stdin, Stdout, Stderr and
 	// ExtraFiles as Start set them. Start opens every descriptor before Cmd runs and starts the
@@ -60,6 +72,12 @@ type Process struct {
 	console *panicWatch
 	// sockets are the monitors' paths Start bound, removed once QEMU has exited.
 	sockets []string
+	// cgroup is the cgroup QEMU runs in, when it is not its caller's: what Usage reads.
+	cgroup string
+	// watch and host are the machine's probe, when StartOptions.Pressure set one: removed and
+	// closed once QEMU has exited.
+	watch *PressureWatch
+	host  *hostTriggers
 
 	// attached is the monitor once the handshake is over, or nil when it failed: the exit
 	// reads the last SHUTDOWN off it.
@@ -155,7 +173,18 @@ func Start(ctx context.Context, s Spec, o StartOptions) (*Process, error) {
 	if err != nil {
 		return fail(err)
 	}
+	observer := o.Observer
+	if o.Pressure != nil {
+		if s.VsockCID == 0 {
+			return fail(errors.New("watching a machine's pressure: its Spec has no vsock for its guest to report on"))
+		}
+		if err := o.Pressure.register(uint32(s.VsockCID)); err != nil {
+			return fail(fmt.Errorf("watching a machine's pressure: %w", err))
+		}
+		observer = o.Pressure.observe(observer, s.Restore)
+	}
 	p := &Process{
+		watch:    o.Pressure,
 		stderr:   &tail{w: o.Stderr},
 		sockets:  h.sockets,
 		attached: make(chan *QEMU, 1),
@@ -169,9 +198,18 @@ func Start(ctx context.Context, s Spec, o StartOptions) (*Process, error) {
 		o.Cmd(p.cmd)
 	}
 	if err := p.cmd.Start(); err != nil {
+		if p.watch != nil {
+			p.watch.unregister()
+		}
 		return fail(fmt.Errorf("starting %s: %w", s.QEMU, err))
 	}
 	h.close()
+	// Before the reaper starts, which closes what is armed here once QEMU exits.
+	cgroupErr := p.findCgroup()
+	var armErr error
+	if p.watch != nil {
+		armErr = p.armHost(cgroupErr)
+	}
 	var read chan struct{}
 	if console != nil {
 		p.console = &panicWatch{w: o.Console}
@@ -183,6 +221,11 @@ func Start(ctx context.Context, s Spec, o StartOptions) (*Process, error) {
 		}()
 	}
 	go p.wait(read)
+	if armErr != nil {
+		p.attached <- nil
+		_ = own.Close()
+		return nil, fmt.Errorf("watching the pressure of %s: %w; QEMU %s", s.QEMU, armErr, p.Kill())
+	}
 
 	hctx, cancel := context.WithTimeout(ctx, greetingWait)
 	defer cancel()
@@ -193,7 +236,7 @@ func Start(ctx context.Context, s Spec, o StartOptions) (*Process, error) {
 		case <-hctx.Done():
 		}
 	}()
-	c, err := qmp.New(hctx, qmp.Unix(own), o.Observer)
+	c, err := qmp.New(hctx, qmp.Unix(own), observer)
 	if err != nil {
 		p.attached <- nil
 		if hctx.Err() == nil {
@@ -219,6 +262,9 @@ func Start(ctx context.Context, s Spec, o StartOptions) (*Process, error) {
 // reads it (read), and the last SHUTDOWN on its monitor.
 func (p *Process) wait(read <-chan struct{}) {
 	_ = p.cmd.Wait()
+	if p.watch != nil {
+		p.watch.unregister()
+	}
 	if read != nil {
 		<-read
 	}
@@ -239,7 +285,43 @@ func (p *Process) wait(read <-chan struct{}) {
 	for _, s := range p.sockets {
 		_ = os.Remove(s)
 	}
+	if p.host != nil {
+		p.host.close()
+	}
 	close(p.exited)
+}
+
+// findCgroup sets the cgroup QEMU runs in, when it is not its caller's own: a cgroup QEMU shares
+// with its caller, and with every machine the caller started, says nothing of this one.
+// mutate-lane: TestThePressureProbeReportsEachPressure
+func (p *Process) findCgroup() error {
+	qemu, err := cgroupOf(strconv.Itoa(p.cmd.Process.Pid))
+	if err != nil {
+		return err
+	}
+	self, err := cgroupOf("self")
+	if err != nil {
+		return err
+	}
+	if qemu == self {
+		return fmt.Errorf("QEMU is in its caller's cgroup %s, which every machine it started shares", qemu)
+	}
+	p.cgroup = qemu
+	return nil
+}
+
+// armHost arms the triggers on QEMU's cgroup, found or not (cgroupErr).
+// mutate-lane: TestThePressureProbeReportsEachPressure
+func (p *Process) armHost(cgroupErr error) error {
+	if cgroupErr != nil {
+		return cgroupErr
+	}
+	h, err := armHost(p.cgroup, p.watch)
+	if err != nil {
+		return err
+	}
+	p.host = h
+	return nil
 }
 
 // Pid is QEMU's process id.

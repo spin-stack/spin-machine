@@ -39,7 +39,9 @@
 //     Cmdline, and Restore when a checkpoint will be resumed.
 //  3. Start starts QEMU from the Spec, with the caller's TAPs (StartOptions.Files) and its
 //     process shaped by StartOptions.Cmd, and returns the Process once QEMU has made the machine
-//     and holds it. A second monitor is reached with Dial.
+//     and holds it. A second monitor is reached with Dial. StartOptions.Pressure, a watch on the
+//     host's one PressureListener, has the machine report its pressure as it happens, and
+//     Process.Usage says what it used (docs/machine.md, "Pressure").
 //  5. QEMU.Boot binds the disks and starts the guest cold. Or, for a checkpoint: the caller holds
 //     its host's Target, read once (QEMU.Target) from a machine started held in the shape it
 //     resumes into; CanResume checks the Saved record against it to choose where the checkpoint
