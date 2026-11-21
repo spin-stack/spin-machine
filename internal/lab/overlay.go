@@ -185,11 +185,14 @@ func run(name string, args ...string) error {
 	return nil
 }
 
-// namedEdit is the edit a tree asks for by name, read from this checkout when the tree is made.
-func namedEdit(name, checkout string) (Edit, error) {
+// namedEdit is the edit a tree asks for by name, read from this checkout when the tree is made,
+// for the tree at dir.
+func namedEdit(name, checkout, dir string) (Edit, error) {
 	switch name {
 	case "lane":
 		return laneEdit(checkout)
+	case "pressure":
+		return pressureEdit(checkout, dir)
 	case "floor":
 		return floorEdit, nil
 	case "nolinger":
@@ -205,7 +208,7 @@ func namedEdit(name, checkout string) (Edit, error) {
 	case "carry-coldplug":
 		return carryColdplugEdit, nil
 	}
-	return Edit{}, fmt.Errorf("no edit named %q; the edits are: lane, floor, nolinger, forwarder-early, carry-masks, carry-generators, carry-logging, carry-coldplug", name)
+	return Edit{}, fmt.Errorf("no edit named %q; the edits are: lane, pressure, floor, nolinger, forwarder-early, carry-masks, carry-generators, carry-logging, carry-coldplug", name)
 }
 
 // The carry-* edits take back, from a release's overlay, what the image does to systemd for boot
@@ -363,6 +366,30 @@ grep -q 'pam_systemd.so.*class=user-early-light' "$MNT/etc/pam.d/common-session"
 		e.Files["/etc/systemd/system/"+d] = string(b)
 	}
 	return e, nil
+}
+
+// pressureEdit is the pressure probe's guest half as this checkout builds it into the image, put
+// into a published release's overlays: the sender built into the tree at dir, its unit, and the
+// link that enables it. A release that has it already is refused, rather than measured twice.
+func pressureEdit(checkout, dir string) (Edit, error) {
+	bin := filepath.Join(dir, "guest", "spin-machine-pressure")
+	cmd := exec.Command("go", "build", "-trimpath", "-o", bin, "./cmd/spin-machine-pressure")
+	cmd.Dir, cmd.Env = checkout, append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return Edit{}, fmt.Errorf("building this checkout's pressure sender: %w: %s", err, out)
+	}
+	const unit = "/usr/lib/systemd/system/spin-machine-pressure.service"
+	b, err := os.ReadFile(filepath.Join(checkout, "image", "mkosi.extra", "usr", "local", "lib", "spin-base", "rootfs", unit))
+	if err != nil {
+		return Edit{}, fmt.Errorf("reading the pressure sender's unit from this checkout: %w", err)
+	}
+	return Edit{
+		Files: map[string]string{unit: string(b)},
+		Links: map[string]string{"/etc/systemd/system/multi-user.target.wants/spin-machine-pressure.service": unit},
+		Setup: `test ! -e "$MNT/usr/libexec/spin-machine-pressure"
+install -D -m 0755 ` + bin + ` "$MNT/usr/libexec/spin-machine-pressure"
+`,
+	}, nil
 }
 
 // systemdPackages is the edit that replaces the overlay's systemd with the packages in debs: each

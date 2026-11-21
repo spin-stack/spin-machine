@@ -180,6 +180,8 @@ laid out as one (`--from _output`). It replaces what its flags ask for:
   release's overlays.
 - `--edit floor`: no systemd before sshd. It is a bound, used with
   `--append init=/usr/local/sbin/spin-floor`.
+- `--edit pressure`: the pressure probe's guest sender, its unit and its enable, as this checkout
+  builds them into the image, put into a published release's overlays.
 - `--edit nolinger`: spin not lingering, as this checkout builds the image.
 - `--edit forwarder-early`: `login=spin`'s forwarder, which stands for spin's supervisor, without
   systemd's default dependencies.

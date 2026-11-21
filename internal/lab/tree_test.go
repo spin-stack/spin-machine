@@ -270,13 +270,13 @@ func TestTheLaneEditIsThisCheckoutsLane(t *testing.T) {
 
 // The edits an unknown name is told about are the ones a tree can ask for, each one an edit.
 func TestEveryEditTheErrorNamesIsOne(t *testing.T) {
-	_, err := namedEdit("nope", checkoutRoot(t))
+	_, err := namedEdit("nope", checkoutRoot(t), t.TempDir())
 	_, list, ok := strings.Cut(fmt.Sprint(err), "the edits are: ")
 	if !ok {
 		t.Fatalf("an unknown edit: %v", err)
 	}
 	for name := range strings.SplitSeq(list, ", ") {
-		e, err := namedEdit(name, checkoutRoot(t))
+		e, err := namedEdit(name, checkoutRoot(t), t.TempDir())
 		if err != nil || len(e.Files)+len(e.Links) == 0 && e.Setup == "" {
 			t.Errorf("edit %s: %+v, %v", name, e, err)
 		}

@@ -240,7 +240,7 @@ func MakeTree(dir string, spec TreeSpec, src Sources) (*Tree, error) {
 		return nil, fmt.Errorf("--spin-machine is here, release, or left out, not %q", spec.SpinMachine)
 	}
 	for _, name := range spec.Edits {
-		e, err := namedEdit(name, src.Checkout)
+		e, err := namedEdit(name, src.Checkout, dir)
 		if err != nil {
 			return nil, err
 		}
